@@ -1,0 +1,4 @@
+# is_even extension
+comment = 'Calculates if a value is even.'
+default_version = '0.1.0'
+superuser = false
