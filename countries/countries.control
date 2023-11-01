@@ -1,0 +1,4 @@
+# countries extension
+comment = 'The countries of the world.'
+default_version = '0.1.0'
+superuser = false
