@@ -4,7 +4,9 @@ REPO_DIR=$(shell pwd)
 
 help:
 	@echo "\nSCRIPTS\n"
-	@echo "make tle.install  	# install all extensions"
+	@echo "make reset  					# reset supabase database"
+	@echo "make tle.install  			# install all extensions locally"
+	@echo "make dbdev.publish.XXX  		# publish XXX extension"
 
 reset:
 	supabase db reset
@@ -19,6 +21,10 @@ tle.install.%:
 	@echo "\n\nInstalling $*"
 	dbdev install --connection postgres://postgres:postgres@localhost:54322/postgres --path $(REPO_DIR)/$*
 	PGPASSWORD=postgres psql -U postgres -d postgres -h localhost -p 54322 -c "CREATE EXTENSION $*;" 
+
+tle.update.%:
+	@echo "\n\Updating $*"
+	dbdev install --connection postgres://postgres:postgres@localhost:54322/postgres --path $(REPO_DIR)/$*
 
 dbdev.publish.%:
 	@echo "\n\nPublishing $* \n"

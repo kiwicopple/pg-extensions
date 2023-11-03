@@ -1,22 +1,32 @@
-# pg_idkit
+# `pg_idkit`
 
-A pure PL/pgSQL port of the popular [Rust version](https://github.com/VADOSWARE/pg_idkit).
+A pure PL/pgSQL port of the popular [Rust version](https://github.com/VADOSWARE/pg_idkit)
+
+The goal is to have no additional extension requirements (eg: no pgcrypto) to maintain portability.
 
 ## Installation
 
-`dbdev install kiwicopple-pg_idkit --connection <CONNECTION>`
+```bash
+dbdev install kiwicopple-pg_idkit --connection <CONNECTION_STRING>
+```
 
 or
 
-`select * from dbdev('kiwicopple-pg_idkit')`
+```sql
+select * from dbdev('kiwicopple-pg_idkit')
+```
 
 then:
 
-`create extension pg_idkit;`
+```sql
+create extension pg_idkit;
+```
 
 or to install in a separate schema (recommended):
 
-`create extension pg_idkit with schema extensions;`
+```sql
+create extension pg_idkit with schema extensions;
+```
 
 ## Usage
 
@@ -24,3 +34,10 @@ Function signatures follows a similar pattern to the built-in
 
 - `gen_random_uuid_v6()` - generate a random UUID v6
 - `gen_random_uuid_v7()` - generate a random UUID v7
+- `gen_random_ksuid_second()` - generate a random KSUID with second-level precision
+- `gen_random_ksuid_microsecond()` - generate a random KSUID with microsecond-level precision
+
+
+## Credit
+
+- [`fabiolimace`](https://github.com/fabiolimace). Most of the work of this repo can be attributed to Fabio's gists on GitHub.
