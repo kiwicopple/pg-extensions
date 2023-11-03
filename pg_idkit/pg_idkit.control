@@ -1,0 +1,4 @@
+# pg_idkit extension
+comment = 'Useful ID generators.'
+default_version = '0.0.1'
+superuser = false

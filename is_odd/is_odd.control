@@ -1,0 +1,4 @@
+# is_odd extension
+comment = 'Calculates if a value is odd.'
+default_version = '0.0.1'
+superuser = false
