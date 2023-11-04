@@ -6,6 +6,7 @@ The goal is to have no additional extension requirements (eg: no pgcrypto) to ma
 
 - Source: https://github.com/kiwicopple/pg-extensions/tree/main/pg_idkit
 - Docs: https://github.com/kiwicopple/pg-extensions/tree/main/pg_idkit
+- DbDev: https://database.dev/kiwicopple/pg_idkit
 
 ## Installation
 
