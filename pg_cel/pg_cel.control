@@ -1,0 +1,4 @@
+# pg_cel extension
+comment = 'CEL (Common Expression Language) compatible authorization functions for PostgreSQL with RLS support.'
+default_version = '0.0.1'
+superuser = false
