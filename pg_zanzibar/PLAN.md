@@ -25,11 +25,17 @@ pg_zanzibar/
 
 ## Schema Design
 
+All tables and functions will live in a dedicated `zanzibar` schema for clean namespacing:
+
+```sql
+CREATE SCHEMA IF NOT EXISTS zanzibar;
+```
+
 ### Core Tables
 
-#### 1. `zanzibar_tuples` - Relationship Storage
+#### 1. `zanzibar.tuples` - Relationship Storage
 ```sql
-CREATE TABLE zanzibar_tuples (
+CREATE TABLE zanzibar.tuples (
     id BIGSERIAL PRIMARY KEY,
 
     -- Object (resource being accessed)
@@ -52,9 +58,9 @@ CREATE TABLE zanzibar_tuples (
 );
 ```
 
-#### 2. `zanzibar_relation_configs` - Relation Inheritance Rules
+#### 2. `zanzibar.relation_configs` - Relation Inheritance Rules
 ```sql
-CREATE TABLE zanzibar_relation_configs (
+CREATE TABLE zanzibar.relation_configs (
     id BIGSERIAL PRIMARY KEY,
 
     -- The object type this config applies to
@@ -79,16 +85,16 @@ CREATE TABLE zanzibar_relation_configs (
 
 ```sql
 -- Fast lookups by object
-CREATE INDEX idx_tuples_object ON zanzibar_tuples (object_type, object_id);
+CREATE INDEX idx_tuples_object ON zanzibar.tuples (object_type, object_id);
 
 -- Fast lookups by subject (for reverse queries)
-CREATE INDEX idx_tuples_subject ON zanzibar_tuples (subject_type, subject_id);
+CREATE INDEX idx_tuples_subject ON zanzibar.tuples (subject_type, subject_id);
 
 -- Fast relation checks
-CREATE INDEX idx_tuples_check ON zanzibar_tuples (object_type, object_id, relation, subject_type, subject_id);
+CREATE INDEX idx_tuples_check ON zanzibar.tuples (object_type, object_id, relation, subject_type, subject_id);
 
 -- Fast userset expansion
-CREATE INDEX idx_tuples_userset ON zanzibar_tuples (subject_type, subject_id, subject_relation)
+CREATE INDEX idx_tuples_userset ON zanzibar.tuples (subject_type, subject_id, subject_relation)
     WHERE subject_relation IS NOT NULL;
 ```
 
@@ -96,11 +102,11 @@ CREATE INDEX idx_tuples_userset ON zanzibar_tuples (subject_type, subject_id, su
 
 ### 1. Check Functions (for RLS policies)
 
-#### `zanzibar_check` - Primary Permission Check
+#### `zanzibar.check` - Primary Permission Check
 ```sql
 -- Check if a subject has a specific relation to an object
 -- Returns TRUE if the relationship exists (directly or through inheritance)
-CREATE FUNCTION zanzibar_check(
+CREATE FUNCTION zanzibar.check(
     p_object_type TEXT,
     p_object_id TEXT,
     p_relation TEXT,
@@ -113,10 +119,10 @@ STABLE            -- Can be used in indexes
 AS $$ ... $$;
 ```
 
-#### `zanzibar_check_any` - Check Multiple Relations
+#### `zanzibar.check_any` - Check Multiple Relations
 ```sql
 -- Check if subject has ANY of the specified relations
-CREATE FUNCTION zanzibar_check_any(
+CREATE FUNCTION zanzibar.check_any(
     p_object_type TEXT,
     p_object_id TEXT,
     p_relations TEXT[],
@@ -129,11 +135,11 @@ STABLE
 AS $$ ... $$;
 ```
 
-#### `zanzibar_check_with_context` - Check Using Session Context
+#### `zanzibar.check_with_context` - Check Using Session Context
 ```sql
 -- Check using current session's user context (set via set_config)
 -- Useful for RLS policies where you want to use session-level auth
-CREATE FUNCTION zanzibar_check_with_context(
+CREATE FUNCTION zanzibar.check_with_context(
     p_object_type TEXT,
     p_object_id TEXT,
     p_relation TEXT
@@ -146,9 +152,9 @@ AS $$ ... $$;
 
 ### 2. Tuple Management Functions
 
-#### `zanzibar_add_tuple` - Add Relationship
+#### `zanzibar.add_tuple` - Add Relationship
 ```sql
-CREATE FUNCTION zanzibar_add_tuple(
+CREATE FUNCTION zanzibar.add_tuple(
     p_object_type TEXT,
     p_object_id TEXT,
     p_relation TEXT,
@@ -161,9 +167,9 @@ SECURITY DEFINER
 AS $$ ... $$;
 ```
 
-#### `zanzibar_remove_tuple` - Remove Relationship
+#### `zanzibar.remove_tuple` - Remove Relationship
 ```sql
-CREATE FUNCTION zanzibar_remove_tuple(
+CREATE FUNCTION zanzibar.remove_tuple(
     p_object_type TEXT,
     p_object_id TEXT,
     p_relation TEXT,
@@ -178,10 +184,10 @@ AS $$ ... $$;
 
 ### 3. Query Functions
 
-#### `zanzibar_list_objects` - List Accessible Objects
+#### `zanzibar.list_objects` - List Accessible Objects
 ```sql
 -- List all objects of a type that a subject can access with a given relation
-CREATE FUNCTION zanzibar_list_objects(
+CREATE FUNCTION zanzibar.list_objects(
     p_object_type TEXT,
     p_relation TEXT,
     p_subject_type TEXT,
@@ -193,10 +199,10 @@ STABLE
 AS $$ ... $$;
 ```
 
-#### `zanzibar_list_subjects` - List Subjects with Access
+#### `zanzibar.list_subjects` - List Subjects with Access
 ```sql
 -- List all subjects that have a given relation to an object
-CREATE FUNCTION zanzibar_list_subjects(
+CREATE FUNCTION zanzibar.list_subjects(
     p_object_type TEXT,
     p_object_id TEXT,
     p_relation TEXT
@@ -209,10 +215,10 @@ AS $$ ... $$;
 
 ### 4. Utility Functions
 
-#### `zanzibar_set_user_context` - Set Session User
+#### `zanzibar.set_user_context` - Set Session User
 ```sql
 -- Set the current user context for RLS checks
-CREATE FUNCTION zanzibar_set_user_context(
+CREATE FUNCTION zanzibar.set_user_context(
     p_subject_type TEXT,
     p_subject_id TEXT
 ) RETURNS VOID
@@ -220,10 +226,10 @@ LANGUAGE plpgsql
 AS $$ ... $$;
 ```
 
-#### `zanzibar_get_user_context` - Get Session User
+#### `zanzibar.get_user_context` - Get Session User
 ```sql
 -- Get the current user context
-CREATE FUNCTION zanzibar_get_user_context()
+CREATE FUNCTION zanzibar.get_user_context()
 RETURNS TABLE (subject_type TEXT, subject_id TEXT)
 LANGUAGE plpgsql
 STABLE
@@ -247,19 +253,19 @@ ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 CREATE POLICY documents_select ON documents
     FOR SELECT
     USING (
-        zanzibar_check_with_context('document', id::TEXT, 'viewer')
+        zanzibar.check_with_context('document', id::TEXT, 'viewer')
     );
 
 CREATE POLICY documents_update ON documents
     FOR UPDATE
     USING (
-        zanzibar_check_with_context('document', id::TEXT, 'editor')
+        zanzibar.check_with_context('document', id::TEXT, 'editor')
     );
 
 CREATE POLICY documents_delete ON documents
     FOR DELETE
     USING (
-        zanzibar_check_with_context('document', id::TEXT, 'owner')
+        zanzibar.check_with_context('document', id::TEXT, 'owner')
     );
 ```
 
@@ -269,7 +275,7 @@ CREATE POLICY documents_delete ON documents
 CREATE POLICY documents_viewer ON documents
     FOR SELECT
     USING (
-        zanzibar_check(
+        zanzibar.check(
             'document',
             id::TEXT,
             'viewer',
@@ -283,23 +289,23 @@ CREATE POLICY documents_viewer ON documents
 
 ### Phase 1: Core Foundation
 1. Create extension control file
-2. Create `zanzibar_tuples` table
-3. Implement `zanzibar_add_tuple` and `zanzibar_remove_tuple`
-4. Implement basic `zanzibar_check` (direct relationships only)
+2. Create `zanzibar` schema and `zanzibar.tuples` table
+3. Implement `zanzibar.add_tuple` and `zanzibar.remove_tuple`
+4. Implement basic `zanzibar.check` (direct relationships only)
 
 ### Phase 2: Inheritance Support
-1. Create `zanzibar_relation_configs` table
-2. Enhance `zanzibar_check` to support relation inheritance
+1. Create `zanzibar.relation_configs` table
+2. Enhance `zanzibar.check` to support relation inheritance
 3. Implement userset expansion (group membership)
 
 ### Phase 3: Query Functions
-1. Implement `zanzibar_list_objects`
-2. Implement `zanzibar_list_subjects`
-3. Implement `zanzibar_check_any`
+1. Implement `zanzibar.list_objects`
+2. Implement `zanzibar.list_subjects`
+3. Implement `zanzibar.check_any`
 
 ### Phase 4: RLS Integration
-1. Implement `zanzibar_set_user_context` and `zanzibar_get_user_context`
-2. Implement `zanzibar_check_with_context`
+1. Implement `zanzibar.set_user_context` and `zanzibar.get_user_context`
+2. Implement `zanzibar.check_with_context`
 3. Add helper functions for common patterns
 
 ### Phase 5: Performance & Polish
@@ -312,7 +318,7 @@ CREATE POLICY documents_viewer ON documents
 
 ### 1. SECURITY DEFINER Functions
 All check functions must use `SECURITY DEFINER` to:
-- Allow RLS policies to query the zanzibar_tuples table
+- Allow RLS policies to query the `zanzibar.tuples` table
 - Prevent users from directly modifying authorization data
 - Work correctly when invoked from RLS policy context
 
@@ -350,7 +356,7 @@ Like other extensions in this repo:
 
 ```sql
 -- Maximum recursion depth for userset expansion
-CREATE FUNCTION zanzibar_max_depth() RETURNS INT
+CREATE FUNCTION zanzibar.max_depth() RETURNS INT
 LANGUAGE SQL IMMUTABLE AS $$ SELECT 10 $$;
 ```
 
