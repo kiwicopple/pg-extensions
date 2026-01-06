@@ -36,6 +36,7 @@ The Reactive extension enables real-time data synchronization for Supabase appli
 | Document | Description |
 |----------|-------------|
 | [Getting Started](./getting-started.md) | Quick start guide |
+| [Architecture: Routing](./architecture-routing.md) | **How changes route to users** |
 | [SQL Extension](./sql-extension.md) | Database setup and configuration |
 | [Permissions](./permissions.md) | RBAC and access control |
 | [Client Library](./client-library.md) | TypeScript/React integration |
