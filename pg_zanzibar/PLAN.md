@@ -352,6 +352,102 @@ Like other extensions in this repo:
 - No pgcrypto or other extension requirements
 - Maximum portability across PostgreSQL environments
 
+## Distributed Deployment & Consistency (Future)
+
+### The Problem
+
+Google's Zanzibar uses "zookies" (Zanzibar cookies) - opaque tokens that encode a snapshot timestamp to ensure causal consistency. This matters in distributed deployments:
+
+1. User writes a permission tuple to the primary
+2. User immediately checks permission (request may hit a replica)
+3. Replica hasn't received the write yet → check incorrectly fails
+
+### Options
+
+| Approach | Description | Tradeoff |
+|----------|-------------|----------|
+| **Single-primary only** | All reads/writes go to primary | Simple, works for most use cases. No consistency issues. |
+| **Zookie support (LSN-based)** | Use PostgreSQL's WAL LSN as consistency token | Enables read replicas while maintaining consistency |
+| **Require primary for checks** | Force all `check()` calls to primary | Consistent but higher primary load |
+
+### Recommended Approach
+
+**Phase 1 (v0.0.1):** Single-primary assumption. Document the limitation.
+
+**Phase 2 (Future):** Add optional zookie support using PostgreSQL's LSN:
+
+```sql
+-- Write returns a zookie (LSN-based token)
+SELECT * FROM zanzibar.add_tuple_with_token(...);
+-- Returns: (tuple_id, zookie)
+
+-- Check with zookie ensures consistency
+SELECT zanzibar.check(
+    'document', '123', 'viewer', 'user', 'alice',
+    p_zookie := '0/1A2B3C4D'  -- Optional: ensures read-your-writes
+);
+```
+
+#### Implementation Details
+
+```sql
+-- Get current WAL position (for writes)
+SELECT pg_current_wal_lsn();  -- Returns something like '0/1A2B3C4D'
+
+-- On replica: wait for LSN before reading (or return stale warning)
+SELECT pg_last_wal_replay_lsn();  -- What the replica has applied
+
+-- Check if replica is caught up to a specific LSN
+SELECT pg_last_wal_replay_lsn() >= '0/1A2B3C4D'::pg_lsn;
+```
+
+#### Zookie Functions (Future)
+
+```sql
+-- Generate zookie after write
+CREATE FUNCTION zanzibar.current_zookie() RETURNS TEXT
+LANGUAGE SQL STABLE AS $$
+    SELECT pg_current_wal_lsn()::TEXT;
+$$;
+
+-- Check with optional zookie
+CREATE FUNCTION zanzibar.check(
+    p_object_type TEXT,
+    p_object_id TEXT,
+    p_relation TEXT,
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_zookie TEXT DEFAULT NULL  -- Optional consistency token
+) RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+AS $$
+DECLARE
+    v_is_caught_up BOOLEAN;
+BEGIN
+    -- If zookie provided and we're on a replica, check if caught up
+    IF p_zookie IS NOT NULL AND pg_is_in_recovery() THEN
+        SELECT pg_last_wal_replay_lsn() >= p_zookie::pg_lsn INTO v_is_caught_up;
+        IF NOT v_is_caught_up THEN
+            -- Option 1: Raise warning and continue (eventual consistency)
+            -- Option 2: Raise exception (strict consistency)
+            RAISE WARNING 'Replica not yet caught up to zookie %', p_zookie;
+        END IF;
+    END IF;
+
+    -- Perform the actual check...
+    RETURN /* ... */;
+END;
+$$;
+```
+
+### Limitations to Document
+
+1. **v0.0.1**: Designed for single-primary PostgreSQL deployments
+2. **Read replicas**: May see stale permissions briefly (replication lag)
+3. **Multi-region**: Not suitable for globally distributed authorization (use SpiceDB/OpenFGA instead)
+
 ## Configuration Constants
 
 ```sql
