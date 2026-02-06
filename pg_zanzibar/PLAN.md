@@ -213,6 +213,21 @@ STABLE
 AS $$ ... $$;
 ```
 
+#### `zanzibar.list_object_ids` - RLS-Optimized List (⭐ Recommended for RLS)
+```sql
+-- Returns array of object IDs the current user can access
+-- Uses auth.uid() or session context internally - no parameters needed for user
+-- Designed for fast RLS policies: id = ANY((SELECT zanzibar.list_object_ids(...)))
+CREATE FUNCTION zanzibar.list_object_ids(
+    p_object_type TEXT,
+    p_relation TEXT
+) RETURNS TEXT[]
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+AS $$ ... $$;
+```
+
 ### 4. Utility Functions
 
 #### `zanzibar.set_user_context` - Set Session User
@@ -238,7 +253,77 @@ AS $$ ... $$;
 
 ## RLS Integration Examples
 
-### Example 1: Simple Document Access
+### ⚠️ CRITICAL: RLS Performance Considerations
+
+**The Problem**: When using a per-row check function in RLS policies, the function executes **for every row** in the table:
+
+```sql
+-- ❌ SLOW: Function runs once PER ROW (N function calls for N rows)
+CREATE POLICY documents_select ON documents
+    FOR SELECT
+    USING (
+        zanzibar.check('document', id::TEXT, 'viewer', 'user', auth.uid()::TEXT)
+    );
+```
+
+If your table has 1 million rows, that's 1 million function calls—even with indexes, this is slow.
+
+**The Solution**: Return a list of accessible IDs once, then compare:
+
+```sql
+-- ✅ FAST: Function runs ONCE, returns all valid IDs
+CREATE POLICY documents_select ON documents
+    FOR SELECT
+    USING (
+        id::TEXT = ANY((SELECT zanzibar.list_object_ids('document', 'viewer')))
+    );
+```
+
+**Key Points**:
+1. Use `zanzibar.list_object_ids()` which returns all object IDs the current user can access
+2. The `(SELECT ...)` wrapper is **critical** for performance—it forces the subquery to evaluate once
+3. The function should use `auth.uid()` internally (Supabase) or session context, not accept it as a parameter
+
+Credit: [Gary Austin's custom-properties repo](https://github.com/GaryAustin1/custom-properties)
+
+### Optimized Functions for RLS
+
+#### `zanzibar.list_object_ids` - Fast RLS Helper
+```sql
+-- Returns all object IDs the current user can access for a given relation
+-- Uses auth.uid() internally for Supabase compatibility
+CREATE FUNCTION zanzibar.list_object_ids(
+    p_object_type TEXT,
+    p_relation TEXT
+) RETURNS TEXT[]
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+AS $$
+DECLARE
+    v_user_id TEXT;
+    v_result TEXT[];
+BEGIN
+    -- Get current user from Supabase auth or session context
+    v_user_id := COALESCE(
+        auth.uid()::TEXT,
+        current_setting('zanzibar.subject_id', true)
+    );
+
+    -- Return array of all accessible object IDs
+    SELECT ARRAY_AGG(DISTINCT object_id) INTO v_result
+    FROM zanzibar.tuples
+    WHERE object_type = p_object_type
+      AND relation = p_relation
+      AND subject_type = 'user'
+      AND subject_id = v_user_id;
+
+    RETURN COALESCE(v_result, ARRAY[]::TEXT[]);
+END;
+$$;
+```
+
+### Example 1: Optimized Document Access (Recommended)
 ```sql
 -- Documents table
 CREATE TABLE documents (
@@ -247,42 +332,63 @@ CREATE TABLE documents (
     content TEXT
 );
 
--- RLS Policy using Zanzibar
+-- RLS Policy using Zanzibar (FAST - function runs once)
 ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY documents_select ON documents
+    FOR SELECT
+    USING (
+        id::TEXT = ANY((SELECT zanzibar.list_object_ids('document', 'viewer')))
+    );
+
+CREATE POLICY documents_update ON documents
+    FOR UPDATE
+    USING (
+        id::TEXT = ANY((SELECT zanzibar.list_object_ids('document', 'editor')))
+    );
+
+CREATE POLICY documents_delete ON documents
+    FOR DELETE
+    USING (
+        id::TEXT = ANY((SELECT zanzibar.list_object_ids('document', 'owner')))
+    );
+```
+
+### Example 2: Per-Row Check (Use Sparingly)
+```sql
+-- ⚠️ Only use this pattern when:
+-- 1. Tables have < 1000 rows, OR
+-- 2. Query has a WHERE clause that limits rows first, OR
+-- 3. Checking a single specific row (e.g., UPDATE/DELETE by ID)
 
 CREATE POLICY documents_select ON documents
     FOR SELECT
     USING (
         zanzibar.check_with_context('document', id::TEXT, 'viewer')
     );
+```
+
+### Example 3: Single-Row Operations (Per-Row OK)
+```sql
+-- For UPDATE/DELETE by specific ID, per-row check is fine
+-- because only one row is being checked
 
 CREATE POLICY documents_update ON documents
     FOR UPDATE
     USING (
-        zanzibar.check_with_context('document', id::TEXT, 'editor')
-    );
-
-CREATE POLICY documents_delete ON documents
-    FOR DELETE
-    USING (
-        zanzibar.check_with_context('document', id::TEXT, 'owner')
-    );
-```
-
-### Example 2: Using auth.uid() (Supabase Compatible)
-```sql
--- For Supabase projects, integrate with auth.uid()
-CREATE POLICY documents_viewer ON documents
-    FOR SELECT
-    USING (
         zanzibar.check(
             'document',
             id::TEXT,
-            'viewer',
+            'editor',
             'user',
             auth.uid()::TEXT
         )
     );
+
+-- The slow path only happens if someone does:
+--   UPDATE documents SET title = 'x';  -- checks ALL rows
+-- But this is fast:
+--   UPDATE documents SET title = 'x' WHERE id = '123';  -- checks 1 row
 ```
 
 ## Implementation Phases
@@ -302,11 +408,13 @@ CREATE POLICY documents_viewer ON documents
 1. Implement `zanzibar.list_objects`
 2. Implement `zanzibar.list_subjects`
 3. Implement `zanzibar.check_any`
+4. Implement `zanzibar.list_object_ids` (RLS-optimized, returns array)
 
 ### Phase 4: RLS Integration
 1. Implement `zanzibar.set_user_context` and `zanzibar.get_user_context`
 2. Implement `zanzibar.check_with_context`
-3. Add helper functions for common patterns
+3. Document RLS performance patterns (per-row vs list-based)
+4. Provide example policies using optimized `list_object_ids` pattern
 
 ### Phase 5: Performance & Polish
 1. Add comprehensive indexes
