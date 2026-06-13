@@ -14,17 +14,19 @@ reset:
 .PHONY: tle.install
 tle.install: \
 	tle.install.pg_idkit \
-	tle.install.is_even
+	tle.install.is_even \
+	tle.install.supa_privacy \
+	tle.install.supa_profile
 	@echo "\n\nDone!"
 
 tle.install.%:
 	@echo "\n\nInstalling $*"
-	dbdev install --connection postgres://postgres:postgres@localhost:54322/postgres --path $(REPO_DIR)/$*
+	dbdev install --connection postgres://postgres:postgres@localhost:54322/postgres path --directory $(REPO_DIR)/$*
 	PGPASSWORD=postgres psql -U postgres -d postgres -h localhost -p 54322 -c "CREATE EXTENSION $*;" 
 
 tle.update.%:
 	@echo "\n\Updating $*"
-	dbdev install --connection postgres://postgres:postgres@localhost:54322/postgres --path $(REPO_DIR)/$*
+	dbdev install --connection postgres://postgres:postgres@localhost:54322/postgres path --directory $(REPO_DIR)/$*
 
 dbdev.publish.%:
 	@echo "\n\nPublishing $* \n"

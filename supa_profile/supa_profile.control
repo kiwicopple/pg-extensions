@@ -1,0 +1,5 @@
+# supa_profile extension for PostgreSQL
+comment = 'Database table and column statistical profiler'
+default_version = '1.0.0'
+relocatable = true
+superuser = false

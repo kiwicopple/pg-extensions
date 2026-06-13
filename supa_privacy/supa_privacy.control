@@ -1,0 +1,5 @@
+# supa_privacy extension for PostgreSQL
+comment = 'Formatting-preserving anonymisation and data masking'
+default_version = '1.0.1'
+relocatable = true
+superuser = false
