@@ -85,7 +85,7 @@ JSON, because PL/pgSQL can validate `jsonb` without a parser. An OpenFGA-style D
 - **parent inheritance isn't all-or-nothing:** if `X.P` contains `parent->P`, every parent type of `X` must define `P`, and if that parent type has parents of its own, its `P` must contain `parent->P` too;
 - `type:*` is allowed on a relation that feeds a userset (it would make every user a group member, which can't be materialized);
 - the model would make an existing expiring grant feed a userset;
-- it names the preset-owned types `app` or `tenant` (see section 8).
+- it defines or redefines the preset-owned types `app` or `tenant` (see section 8). Naming one as a parent (`"parent": ["tenant"]`) is allowed.
 
 The all-or-nothing rule is what makes the compiled form exact. Without it, "`P` on any ancestor" could over-grant. For example, if `folder.view` didn't inherit but `document.view` did, a document's grandparent org would wrongly count. With the rule, the permission checked at every hop up the chain is the same `P`, so one flat set of `(type, relation)` pairs describes every ancestor.
 
@@ -254,7 +254,7 @@ PLAN.md §4's warning about `((select f())::uuid[])` (a per-row cast) applies on
 
 ## 8. Blessed path: the `rbac` preset
 
-The preset API from PLAN.md §6 is a set of functions that edit the active model and recompile it. The developer never sees the JSON. Two preset-owned types hold the roles: `app` (one object, the nil uuid, for app-wide roles) and `tenant` (one object per scope). `apply_model()` refuses definitions that mention `app` or `tenant`, and carries them over from the active model. So graduating to per-object sharing is one `apply_model()` call with only the app's own types, and the roles are untouched. `user` is added if the developer's model omits it.
+The preset API from PLAN.md §6 is a set of functions that edit the active model and recompile it. The developer never sees the JSON. Two preset-owned types hold the roles: `app` (one object, the nil uuid, for app-wide roles) and `tenant` (one object per scope). `apply_model()` refuses definitions that define or redefine `app` or `tenant` (it checks the top-level type keys), and carries them over from the active model. A type can still name `tenant` as a parent: `"parent": ["tenant"]` on `folder`, with `set_parent('folder', f, 'tenant', acme)`, lets `parent->documents.read` reach the roles assigned on `acme`, so preset roles flow down to per-object resources. The usual all-or-nothing parent rule applies: `tenant` must define the permission, which it does once `create_role` has put it in a role. `test/spec/c/55_tenant_parent.sql` covers this. So graduating to per-object sharing is one `apply_model()` call with only the app's own types, and the roles are untouched. `user` is added if the developer's model omits it.
 
 | Preset call | What happens |
 | --- | --- |
@@ -377,7 +377,7 @@ The large-scale comparison with Design A is a later, serial step.
 | `current_subject()` | `current_subject_id()` (uuid) and `current_subject_type()` | Shared identity contract (`01_identity`). |
 | `can`, `accessible`, `who_can` raise on unknown names | Return false or empty | Same rule as the preset (PLAN.md §6); resolves open question 6. Writes still validate. |
 | Preset takes `uuid` IDs | `text` IDs as in PLAN.md §6, plus `uuid` overloads for `has_permission` and `has_role` | The shared specs and the bench seed need the text signatures (section 8). |
-| Preset edits "the active model" | `app` and `tenant` are reserved; `apply_model()` carries them over | Otherwise graduating with a model that omits them would drop every role. |
+| Preset edits "the active model" | `app` and `tenant` are reserved (can be parents, not defined); `apply_model()` carries them over | Otherwise graduating with a model that omits them would drop every role. |
 | `accessible()` returns `setof uuid` | Returns `uuid[]`, used as `= any ((select f())::uuid[])` | Measured fastest (section 7). |
 | Parent link as a tuple (`document:readme#org@org:acme`), syntax `org->view_documents` | Dedicated `parents` table (one parent per object), `"parent": [...]` + `parent->P` inside `P` only, all-or-nothing up the hierarchy | Single parent makes a move one upsert and the closure a chain. The same-name rule keeps the flat compiled form exact (section 3). |
 | Recursive parents reuse the memberships machinery | Separate `ancestors` table, for container types only | Leaf objects never get closure rows, so moving a folder doesn't fan out to documents. |

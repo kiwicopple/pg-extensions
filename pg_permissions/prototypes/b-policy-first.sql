@@ -535,9 +535,13 @@ $$;
 -- live in the parents table as group membership (user in team in org), so
 -- {"user": <author>} read as a parent would make the author's teams and orgs
 -- the row's anchors. Null values name no parent.
+-- ROWS 1 is load-bearing: the default estimate for a function scan is 1000
+-- rows, which makes the planner hash-join all of ancestors in _matches instead
+-- of probing its primary key (can() went from 1.3 ms to 17-22 ms).
 create function permissions._parent_keys(p_type text, p_resource jsonb)
 returns table (parent_type text, parent_id text)
 language sql stable
+rows 1
 set search_path = ''
 as $$
     select j.key, j.value

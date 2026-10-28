@@ -1016,6 +1016,9 @@ $$;
 
 -- The developer's model. Types `app` and `tenant` belong to the rbac preset
 -- and are carried over from the active model; `user` is added if missing.
+-- Defining or redefining them is refused (the check is on the top-level type
+-- keys only), but naming one as a parent is supported: "parent": ["tenant"]
+-- lets an object's permissions inherit the preset roles of its scope.
 -- Returns the plan; executed unless dry_run. Removing relations or types that
 -- still have grants needs force.
 create function permissions.apply_model(p_definition jsonb, p_dry_run boolean default false, p_force boolean default false)
@@ -1031,7 +1034,7 @@ begin
         raise exception 'model must be an object with a "types" object' using errcode = '22023';
     end if;
     if v_types ? 'app' or v_types ? 'tenant' then
-        raise exception 'types app and tenant are managed by the rbac preset (create_role, drop_role)' using errcode = '22023';
+        raise exception 'types app and tenant are managed by the rbac preset (create_role, drop_role); they can be named as parents but not defined' using errcode = '22023';
     end if;
     if not v_types ? 'user' then
         v_types := v_types || '{"user": {"principal": true}}';
