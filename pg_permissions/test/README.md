@@ -85,6 +85,7 @@ Rules that keep shared tests engine-independent (per-design files in `spec/<desi
 - Use the fixture UUIDs as untyped literals (`:'alice'`), so they work with `text` and `uuid` implementations.
 - Compare unordered results with `set_eq`.
 - Test client behaviour with `set role authenticated`, not as the superuser (superusers bypass RLS).
+- A spec that needs the implementation file itself (`03_tle_install.sql` installs it into its own scratch databases as a non-superuser) reads the psql variable `:impl_path`, which the runner sets with `-v impl_path=...` to the absolute path of `--impl`. Use `\i :impl_path` (unquoted).
 
 ## TDD workflow
 
@@ -103,9 +104,28 @@ On 2026-10-28 the suite was checked against 8 deliberately broken copies of Prot
 See `bench/run.sh --help`. In short:
 
 ```bash
-./bench/run.sh --impl prototypes/a-tuple-core.sql                  # small: 10k docs, ~1.5 min
+./bench/run.sh --impl prototypes/a-tuple-core.sql                  # small: 10k docs, ~2.5 min
+./bench/run.sh --impl prototypes/a-tuple-core.sql --scale medium   # 100k docs, 5k users
 ./bench/run.sh --impl prototypes/a-tuple-core.sql --scale large    # 1M docs, 10k users
+./bench/run.sh --impl ... --shape deep                             # teams nested 9 deep
+./bench/run.sh --impl ... --shape wide                             # 50 teams per user, 50 shares per team
+./bench/run.sh --impl ... --only parents,nest_check                # rerun some workloads
 ./bench/run.sh --impl ... --check                                  # exit 1 if any p95 is over budget
 ```
 
-It seeds tenant-scoped RBAC through the preset API (any engine), then, if `bench/designs/<design>/` exists, that design's per-document sharing with nested teams in its native API (`seed_sharing.sql`, `workloads/share_*.sql`, `workloads/write_share.sql`; skipped otherwise). The design is inferred from the `--impl` file name like in `test/run.sh`, or set with `--design a|b|c|none`. It runs each workload in `bench/workloads/` (and the design's `workloads/`) with pgbench as `authenticated` under RLS, reports p50/p95/tps against `bench/budgets.tsv`, prints a visible-row sanity check so a broken seed can't produce fast-but-empty numbers, and saves a markdown report with query plans to `bench/results/` (git-ignored). Reference runs worth keeping are copied to `bench/baselines/`, which is committed.
+A run has four phases. Each loads a seed, times it, runs `VACUUM FULL ANALYZE` on the non-empty tables, records the size and row count of every table in schema `permissions`, and checksums what sample users see. Then it runs the phase's workloads:
+
+| Phase | Seed | Workloads |
+| --- | --- | --- |
+| rbac | `seed_rbac.sql`: tenant-scoped roles through the preset API (any engine) | `rbac_*`, `write_assign_role` |
+| sharing | `designs/<design>/seed_sharing.sql`: per-document sharing with nested teams, native API | `share_list_objects`, `share_select_page`, `write_share` |
+| parents | `designs/<design>/seed_parents.sql`: about 10 folders per org, documents in folders, org roles inherited through the folder chain, every 5th user a folder viewer; replaces the select policy with a parent-aware one (no `org_id` branch) | `parents_select_page`, `parents_select_count` |
+| nesting | `designs/<design>/seed_nest.sql`, loaded after `write_nest_team`: a 1,000-member team nested in the deepest team for good | `write_nest_team` (rolled back), `nest_check` (a check that needs the nesting) |
+
+The design is inferred from the `--impl` file name like in `test/run.sh`, or set with `--design a|b|c|none`. Phases 2 to 4 are skipped when the design has no files for them. Workloads in `bench/workloads/` are shared; the rest are in the design's `workloads/`. Each runs with pgbench as `authenticated` under RLS. Writes roll back, so a faster engine doesn't end up with more rows in later phases.
+
+**Same data for every engine.** `bench/seed_shape.sql` generates the teams, memberships, shares, folders and folder viewers as integer tables in schema `bench`. Each design's seed reads them and writes the same facts through its own API. `--shape` changes them: `default` (one team per user, 5 shares per team, 4-ary team tree), `deep` (teams in chains 9 deep, users in the leaf teams, so `write_nest_team` reaches depth 10, the most B and C accept), `wide` (4x the teams, each user in 50, 50 shares per team).
+
+**Equivalence check.** After each seed, the report lists for sample users how many documents RLS lets them see and an md5 of the sorted ids, so a broken seed can't produce fast-but-empty numbers. Complete runs save these to `bench/results/equivalence-<scale>-<shape>-<design>.tsv` and compare them with the other designs' latest files: the same data and correct engines give identical checksums, and a mismatch names the policy and users.
+
+The report also shows p50/p95/tps against `bench/budgets.tsv` (workloads without a budget never fail `--check`; `--shape deep|wide` look up keys like `medium-wide`, which have none yet), seed times, storage per table and query plans. It's saved as markdown to `bench/results/` (git-ignored). Reference runs worth keeping are copied to `bench/baselines/`, which is committed.

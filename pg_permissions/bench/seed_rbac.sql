@@ -7,6 +7,9 @@
 --   user u   -> md5('user' || u)::uuid
 --   org o    -> md5('org'  || o)::uuid,  o in 0 .. orgs-1
 --   doc n    -> md5('doc'  || n)::uuid,  in org (n % orgs)
+--   documents.folder_id -> md5('folder' || f)::uuid, f = n % orgs + orgs * ((n / orgs) % 10):
+--   one of the org's 10 folders (bench/seed_shape.sql). Unused until the
+--   parents phase; it's here so every phase runs on the same table.
 
 \set ON_ERROR_STOP 1
 
@@ -15,16 +18,19 @@ select permissions.create_role('editor', '{documents.edit}', '{viewer}');
 select permissions.create_role('admin',  '{documents.delete,users.manage}', '{editor}');
 
 create table public.documents (
-    id     uuid primary key,
-    org_id uuid not null,
-    title  text not null
+    id        uuid primary key,
+    org_id    uuid not null,
+    folder_id uuid not null,
+    title     text not null
 );
 
-insert into public.documents (id, org_id, title)
-select md5('doc' || n)::uuid, md5('org' || (n % :orgs))::uuid, 'document ' || n
+insert into public.documents (id, org_id, folder_id, title)
+select md5('doc' || n)::uuid, md5('org' || (n % :orgs))::uuid,
+       md5('folder' || (n % :orgs + :orgs * ((n / :orgs) % 10)))::uuid, 'document ' || n
 from generate_series(1, :docs) n;
 
 create index on public.documents (org_id);
+create index on public.documents (folder_id);
 
 -- each user: a role in their home org (viewer, editor or admin by u % 3), and viewer in a second org
 select permissions.assign_role(md5('user' || u)::uuid::text,

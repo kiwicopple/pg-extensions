@@ -1,27 +1,39 @@
 -- Benchmark seed, part 3 (Design A): parent inheritance (PLAN.md §10 G10).
--- PROVISIONAL: uses Design A's zanzibar-level API. Load after seed_rbac.sql and
--- seed_sharing.sql. NOT loaded by bench/run.sh yet: it replaces the two-branch
--- select policy, so the share_* workloads would measure something else after it.
+-- Uses Design A's zanzibar-level API. bench/run.sh loads it after the share_*
+-- workloads, because it replaces the documents select policy.
 --
--- psql variables: docs, orgs
+-- Data comes from the shape tables (bench/seed_shape.sql), identical for every
+-- design:
+--   folder f -> md5('folder' || f)::uuid, about 10 per org, parent = the org's
+--               `tenant` object (where the rbac preset stores scoped roles)
+--   document -> parent = its folder (documents.folder_id)
+--   every 5th user is a viewer of one folder
 --
--- Every document gets one parent tuple pointing at its org's `tenant` object,
--- the object the rbac preset already stores scoped roles on. `document#viewer`
--- then inherits the preset's `documents.read` permission from the parent, so
--- the select policy needs a single fast-path branch:
---   org roles (rbac preset) + team shares (seed_sharing.sql), one list_objects().
+-- Inheritance: tenant#documents.read (every scoped viewer/editor/admin role)
+-- -> folder#viewer -> document#viewer, so the select policy is A's single
+-- fast-path branch: org roles, folder viewers and team/direct shares all come
+-- out of one list_objects() call, which walks to every visible document.
 --
--- Storage: one tuple per document (10k at small, 1M at large), mirroring
--- documents.org_id. A real app would attach permissions.sync_parent() to the
--- table instead of seeding once.
+-- Storage: one parent tuple per document (10k at small, 1M at large),
+-- mirroring documents.folder_id. A real app would attach
+-- permissions.sync_parent() to the table instead of seeding once.
 
 \set ON_ERROR_STOP 1
 
+select permissions.define_type('folder');
+select permissions.define_relation('folder', 'parent');
+select permissions.define_relation('folder', 'viewer', from_parent => '{documents.read}');
 select permissions.define_relation('document', 'parent');
-select permissions.define_relation('document', 'viewer', '{editor}', from_parent => '{documents.read}');
+select permissions.define_relation('document', 'viewer', '{editor}', from_parent => '{viewer}');
 
-select permissions.set_parent('document', md5('doc' || n)::uuid::text, 'tenant', md5('org' || (n % :orgs))::uuid::text)
-from generate_series(1, :docs) n;
+select permissions.set_parent('folder', md5('folder' || f)::uuid::text, 'tenant', md5('org' || org)::uuid::text)
+from bench.folders;
+
+select permissions.grant('folder', md5('folder' || f)::uuid::text, 'viewer', 'user', md5('user' || u)::uuid::text)
+from bench.folder_viewers;
+
+select permissions.set_parent('document', id::text, 'folder', folder_id::text)
+from public.documents;
 
 drop policy documents_select on public.documents;
 create policy documents_select on public.documents for select to authenticated using (

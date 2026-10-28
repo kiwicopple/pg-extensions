@@ -2,7 +2,8 @@
 -- Same data shape as bench/designs/a/seed_sharing.sql; bench/run.sh skips the
 -- sharing workloads if this file fails to load.
 --
--- psql variables: docs, users, teams
+-- Data comes from the shape tables (bench/seed_shape.sql), identical for every
+-- design. With the default shape:
 --
 --   team k  -> md5('team' || k)::uuid, k in 1 .. teams
 --   user u is a member of team (u % teams) + 1          (parents edge user -> team)
@@ -11,6 +12,10 @@
 --
 -- Membership is written before nesting, as in A, so the closure triggers do
 -- the expensive direction (nesting a team that already has members).
+--
+-- Plus a fixture for write_nest_team and nest_check only (no document grants,
+-- so it doesn't change what the share_* workloads see):
+--   team md5('nest-src')::uuid with 1,000 members md5('nest-user' || i)::uuid
 
 \set ON_ERROR_STOP 1
 
@@ -20,20 +25,24 @@ select permissions.permit('doc viewers view', '{select}', 'document', roles => '
 select permissions.permit('doc editors edit', '{update}', 'document', roles => '{editor}');
 
 select permissions.add_parent('user', md5('user' || u)::uuid::text,
-                              'team', md5('team' || ((u % :teams) + 1))::uuid::text)
-from generate_series(1, :users) u;
+                              'team', md5('team' || team)::uuid::text)
+from bench.team_members;
 
-select permissions.add_parent('team', md5('team' || k)::uuid::text,
-                              'team', md5('team' || (k / 4))::uuid::text)
-from generate_series(4, :teams) k;
+select permissions.add_parent('team', md5('team' || child)::uuid::text,
+                              'team', md5('team' || parent)::uuid::text)
+from bench.team_parents;
 
-select permissions.grant_role('team', md5('team' || k)::uuid::text, 'viewer',
-                              'document', md5('doc' || ((k * 9973 + i * 7919) % :docs + 1))::uuid::text)
-from generate_series(1, :teams) k, generate_series(1, 5) i;
+select permissions.grant_role('team', md5('team' || team)::uuid::text, 'viewer',
+                              'document', md5('doc' || doc)::uuid::text)
+from bench.team_grants;
 
 select permissions.grant_role('user', md5('user' || u)::uuid::text, 'editor',
-                              'document', md5('doc' || ((u * 104729 + i * 15485863) % :docs + 1))::uuid::text)
-from generate_series(1, :users) u, generate_series(1, 2) i;
+                              'document', md5('doc' || doc)::uuid::text)
+from bench.user_grants;
+
+-- write_nest_team / nest_check fixture
+select permissions.add_parent('user', md5('nest-user' || i)::uuid::text, 'team', md5('nest-src')::uuid::text)
+from generate_series(1, 1000) i;
 
 -- Same two-branch policies as A (org roles or shares), written by hand.
 -- permissions.apply_rls would add a forbid side; see designs/b-policy-first.md.

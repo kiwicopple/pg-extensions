@@ -5,6 +5,8 @@
 # Apple Silicon laptop, 4 clients). Tight enough to catch a real regression
 # (the per-row cast bug in PLAN.md section 4 was 5x), loose enough for
 # machine-to-machine noise. Medium scale has no budgets yet.
+# Stress shapes (--shape deep|wide) use scale-shape keys, e.g. medium-wide;
+# none are set yet. Workloads without a row have no budget.
 #
 # scale	workload	p95_ms
 small	rbac_check	1

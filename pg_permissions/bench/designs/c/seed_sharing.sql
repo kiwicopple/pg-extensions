@@ -3,14 +3,15 @@
 -- as bench/designs/a/seed_sharing.sql. bench/run.sh skips the sharing
 -- workloads if this file fails to load.
 --
--- psql variables: docs, users, teams
+-- Data comes from the shape tables (bench/seed_shape.sql), identical for every
+-- design. With the default shape:
 --
 --   team k  -> md5('team' || k)::uuid, k in 1 .. teams
 --   user u is a member of team (u % teams) + 1
---   team k > 1 is nested in team k / 4 (a 4-ary tree, so 500 teams is ~5 levels deep)
+--   team k > 3 is nested in team k / 4 (a 4-ary tree, so 500 teams is ~5 levels deep)
 --   each team can view 5 documents; each user can edit 2 documents directly
 --
--- Plus a fixture for write_nest_team only (no document grants, so it doesn't
+-- Plus a fixture for write_nest_team and nest_check only (no document grants, so it doesn't
 -- change what the share_* workloads see):
 --   team md5('nest-src')::uuid with 1,000 members md5('nest-user' || i)::uuid
 
@@ -28,21 +29,21 @@ select count(*) from permissions.apply_model($json$
 }
 $json$);
 
-select count(permissions.grant('team', md5('team' || ((u % :teams) + 1))::uuid, 'member',
+select count(permissions.grant('team', md5('team' || team)::uuid, 'member',
                                'user', md5('user' || u)::uuid))
-from generate_series(1, :users) u;
+from bench.team_members;
 
-select count(permissions.grant('team', md5('team' || (k / 4))::uuid, 'member',
-                               'team', md5('team' || k)::uuid, 'member'))
-from generate_series(4, :teams) k;
+select count(permissions.grant('team', md5('team' || parent)::uuid, 'member',
+                               'team', md5('team' || child)::uuid, 'member'))
+from bench.team_parents;
 
-select count(permissions.grant('document', md5('doc' || ((k * 9973 + i * 7919) % :docs + 1))::uuid, 'viewer',
-                               'team', md5('team' || k)::uuid, 'member'))
-from generate_series(1, :teams) k, generate_series(1, 5) i;
+select count(permissions.grant('document', md5('doc' || doc)::uuid, 'viewer',
+                               'team', md5('team' || team)::uuid, 'member'))
+from bench.team_grants;
 
-select count(permissions.grant('document', md5('doc' || ((u * 104729 + i * 15485863) % :docs + 1))::uuid, 'editor',
+select count(permissions.grant('document', md5('doc' || doc)::uuid, 'editor',
                                'user', md5('user' || u)::uuid))
-from generate_series(1, :users) u, generate_series(1, 2) i;
+from bench.user_grants;
 
 -- write_nest_team fixture
 select count(permissions.grant('team', md5('nest-src')::uuid, 'member', 'user', md5('nest-user' || i)::uuid))
