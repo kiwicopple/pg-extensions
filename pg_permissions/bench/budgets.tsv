@@ -4,9 +4,20 @@
 # Set on 2026-10-28 at roughly 2-3x Design A's measured p95 (Postgres 16,
 # Apple Silicon laptop, 4 clients). Tight enough to catch a real regression
 # (the per-row cast bug in PLAN.md section 4 was 5x), loose enough for
-# machine-to-machine noise. Medium scale has no budgets yet.
-# Stress shapes (--shape deep|wide) use scale-shape keys, e.g. medium-wide;
-# none are set yet. Workloads without a row have no budget.
+# machine-to-machine noise.
+#
+# Added on 2026-10-29 (rows after the session-1 block below): the parents,
+# nesting and medium-scale budgets, from the serial phase-2 runs in
+# bench/baselines/<design>-<scale>-<shape>.md (quiet machine, 10 s per
+# workload). Same rule as session 1, applied per workload: 3x the p95 of the
+# reference, rounded up to a whole ms, at least 1 ms. The reference is the
+# fastest of the three engines on that workload (session 1 had only A), so a
+# budget says "an engine has shown this is achievable on this data". Engines
+# that miss a budget are listed in bench/baselines/COMPARISON.md; budgets were
+# not loosened to fit them. The session-1 rows are unchanged.
+#
+# Stress shapes (--shape deep|wide) use scale-shape keys, e.g. medium-wide.
+# Workloads without a row have no budget.
 #
 # scale	workload	p95_ms
 small	rbac_check	1
@@ -25,3 +36,62 @@ large	write_assign_role	1
 large	share_list_objects	2
 large	share_select_page	6
 large	write_share	1
+# small: new on 2026-10-29
+small	parents_proj_select_page	2
+small	parents_proj_select_count	2
+small	parents_select_page	4
+small	parents_select_count	4
+small	write_nest_team	1
+small	nest_check	1
+# large: new on 2026-10-29
+large	parents_proj_select_page	4
+large	parents_proj_select_count	9
+large	parents_select_page	32
+large	parents_select_count	70
+large	write_nest_team	1
+large	nest_check	2
+# medium: new on 2026-10-29
+medium	rbac_check	1
+medium	rbac_select_page	2
+medium	rbac_select_count	2
+medium	rbac_update_one	3
+medium	write_assign_role	1
+medium	share_list_objects	1
+medium	share_select_page	3
+medium	write_share	1
+medium	parents_proj_select_page	3
+medium	parents_proj_select_count	3
+medium	parents_select_page	16
+medium	parents_select_count	14
+medium	write_nest_team	1
+medium	nest_check	1
+# medium-deep: new on 2026-10-29
+medium-deep	rbac_check	1
+medium-deep	rbac_select_page	2
+medium-deep	rbac_select_count	2
+medium-deep	rbac_update_one	3
+medium-deep	write_assign_role	1
+medium-deep	share_list_objects	1
+medium-deep	share_select_page	3
+medium-deep	write_share	1
+medium-deep	parents_proj_select_page	4
+medium-deep	parents_proj_select_count	4
+medium-deep	parents_select_page	25
+medium-deep	parents_select_count	23
+medium-deep	write_nest_team	1
+medium-deep	nest_check	2
+# medium-wide: new on 2026-10-29
+medium-wide	rbac_check	1
+medium-wide	rbac_select_page	2
+medium-wide	rbac_select_count	2
+medium-wide	rbac_update_one	3
+medium-wide	write_assign_role	1
+medium-wide	share_list_objects	13
+medium-wide	share_select_page	42
+medium-wide	write_share	1
+medium-wide	parents_proj_select_page	51
+medium-wide	parents_proj_select_count	31
+medium-wide	parents_select_page	46
+medium-wide	parents_select_count	40
+medium-wide	write_nest_team	1
+medium-wide	nest_check	2

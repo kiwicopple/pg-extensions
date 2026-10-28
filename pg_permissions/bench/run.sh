@@ -218,16 +218,20 @@ SQL
 # write triggers pick plans that go quadratic when the next seed loads tens of
 # thousands of rows in one transaction (B's wide sharing seed: 225 s instead
 # of 3 s at small scale). Never-analyzed tables keep the planner's defaults,
-# which is also the state of a freshly installed extension.
+# which is also the state of a freshly installed extension. The plain VACUUM
+# after VACUUM FULL sets the visibility map, which VACUUM FULL leaves empty:
+# without it index-only scans fetch every heap page (rbac_select_count at
+# large went from 1 ms to 6 ms).
 vacuum_nonempty() {
     psql_db >/dev/null <<'SQL'
-select format('vacuum (full, analyze) %I.%I', n.nspname, c.relname)
-from pg_class c join pg_namespace n on n.oid = c.relnamespace
+select format(v, n.nspname, c.relname)
+from pg_class c join pg_namespace n on n.oid = c.relnamespace,
+     (values (1, 'vacuum (full, analyze) %I.%I'), (2, 'vacuum %I.%I')) cmd(step, v)
 where c.relkind = 'r' and n.nspname not in ('pg_catalog', 'information_schema')
   and n.nspname not like 'pg\_%'
   and (xpath('/row/e/text()', query_to_xml(format('select exists (select from %I.%I) as e', n.nspname, c.relname),
                                             false, true, '')))[1]::text = 'true'
-order by 1
+order by n.nspname, c.relname, step
 \gexec
 SQL
 }

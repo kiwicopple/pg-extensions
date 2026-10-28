@@ -204,7 +204,7 @@ Because the `rbac` preset API is the same for every engine, the blessed path can
 
 The test suite and benchmark harness now exist (`test/run.sh`, `bench/run.sh`, goals in [`GOALS.md`](./GOALS.md)). First results, from Prototype A at 1M documents, 10k users and teams nested about 5 levels deep:
 
-- **Design A's read-time walk is fast enough at this scale.** Every workload has p95 under 2.5 ms, including the two-branch sharing policy. The recursion B and C avoid costs well under a millisecond here. Full report: [`bench/baselines/a-tuple-core-large.md`](./bench/baselines/a-tuple-core-large.md).
+- **Design A's read-time walk is fast enough at this scale.** Every workload has p95 under 2.5 ms, including the two-branch sharing policy. The recursion B and C avoid costs well under a millisecond here. Full report: [`bench/baselines/a-large-default-session1.md`](./bench/baselines/a-large-default-session1.md).
 - **The biggest performance factor so far was how the RLS policy is written, not the engine** (§4: a per-row cast made pages 5× slower).
 
 Remaining steps:
