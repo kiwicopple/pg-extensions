@@ -232,3 +232,183 @@ Budgets (`bench/budgets.tsv`) were set at about 2–3× A's p95: tight enough to
 - 1M documents, 10k users, 100 orgs, 500 teams about 5 levels deep; RBAC seed in about 5 s, sharing seed in about 2 s.
 - Sharing page p50: 10.0 ms → 1.9 ms after changing one line of policy SQL.
 - Hashed-subquery trap: 2.2 ms → 88.8 ms for a count.
+
+---
+
+## Session 2: 2026-10-28 to 29, three full engines, measured side by side
+
+### 0. Setup and decisions
+
+- The session started with a check that Copple's new global CLAUDE.md had loaded. It puts the main conversation in **orchestrator mode**: an expensive model plans and reviews, and cheaper subagents explore and implement. Routing: `explorer` (Haiku) for search, `light-implementer` (Sonnet) for routine work, `heavy-implementer` (Opus) for hard work. Two of the three agent definitions were missing at first and showed up after Copple added them, which made a useful sanity check.
+- Copple's answers to the up-front questions:
+  - Keep the extension file empty: build prototypes only and choose later.
+  - In scope: a full Prototype C, a full Prototype B, stress benchmarks, and new goals (parents, public access, forbid, conditions, pg_tle install).
+  - **Per-design zanzibar-level spec files** rather than one shared API: each engine is tested in its native API, with the same scenarios and assertions.
+  - Commit per milestone and never push.
+
+### 1. M0: infrastructure (light-implementer, ~2 min)
+
+- `test/spec/{a,b,c}/` holds the per-design spec files and `bench/designs/{a,b,c}/` the per-design sharing benchmarks. The runner infers the design from the prototype's filename (`a-tuple-core.sql` gives `a`).
+- New goal scenarios G10–G14 were written into PLAN.md §10 **before** any engine work started, with exact assertion checklists, so three agents working in parallel would write comparable tests.
+
+### 2. M1: three engines in parallel (one heavy-implementer each)
+
+Each agent owned only its prototype, its spec directory, its bench directory and its design doc, so nothing collided. Large benchmarks were held back, because three agents running tests on one laptop make timings meaningless.
+
+**Design A** (about 17 minutes): 13/13 files, 147/147 assertions.
+- Parents are OpenFGA-style tuple-to-userset (`from_parent`). Public access is a `user:*` wildcard start node. Forbid is "but not" (`unless => '{blocked}'`) and prunes the walk. Conditions needed no engine change: `expires_at` plus RLS over the app's `status` column.
+- **The SQL function re-planning trap.** The bigger recursive query, written as a `language sql` function, made every check slower: `rbac_check` p50 went from 0.32 to 0.58 ms. Postgres 16 re-plans SQL function bodies on every call. Moving it to PL/pgSQL, which caches the plan, brought it back to 0.34 ms.
+- **A mutant survived first time.** Swapping `union` for `union all`, which removes cycle protection, still passed. A non-grantee's walk never reaches the cycle, so the checklist's cycle assertion proved nothing. The fix was cycle traversals under a 5 s `statement_timeout` before the assertion. In the end all 7 mutants were caught, and the fix was passed on to the B and C agents mid-flight.
+- **Honest cost:** a single-branch parents policy is O(visible documents): 7 µs per document, 18 ms vs 2.2 ms for the two-branch policy at small scale. That's extrapolated to about 150 ms at 20k visible documents, but **not yet measured**. Parent tuples cost about 450 bytes per row, about 430 MB at 1M documents (extrapolated).
+
+**Design B** (about 24 minutes): 13/13 files, 147/147 assertions. The stand-in is gone.
+- What was built:
+  - **Facts:** an `ancestors` closure maintained by triggers under one global advisory lock. Cycles and depth over 10 are rejected on write (`23514`), and `repeatable read` is refused for closure writes.
+  - **Policies:** permit/forbid. `via` requires a role on a parent. Conditions are a jsonb AST, split on write into a per-query half and a per-row half; the per-row half compiles to SQL for RLS.
+- **The stand-in's RBAC slowness was the implementation, not the design.** `principal = me OR principal IN (ancestors)` stopped Postgres using the primary key on `role_grants`, so it scanned about 334 grants per role. Going straight from subject to primary key took single-client `update_one` from 2.5 to 0.56 ms and `rbac_check` from 0.41 to 0.20 ms. **This is the third OR/cast-shaped RLS trap**, after the per-row cast and the hashed subquery.
+- **Another RLS trap:** `(select allows_all()) OR id = any(...)` blocks the BitmapOr over indexes and forces a seq scan. B now emits that arm only when an allow-all policy exists.
+- **Cross-engine agreement check:** fresh A and B databases gave an identical checksum over all 1,000 users' RLS results. Random fuzzing found 0 disagreements in 2,400 cases between `can_for` and the RLS projections.
+- **Parents are cheap in B:** the single-branch `folder_id` policy projects onto about 20 folder IDs instead of thousands of document IDs (0.43 ms ad hoc vs A's 7.3 ms). This is the biggest structural difference found so far.
+- **Honest weaknesses:**
+  - The table's RLS is generated once (`apply_rls`) and must be regenerated when policies change shape.
+  - **`can()` outside RLS needs the row passed in, and forbids that depend on missing attributes fail open.**
+  - The closure lock is global.
+  - Each generated policy runs 5–7 function calls per query.
+
+**Design C** (about 30 minutes): 14/14 files, 178/178 assertions, including a C-only `32_memberships` file for drift, `verify()`/`rebuild()` and isolation rules.
+- What was built:
+  - `apply_model()` compiles a JSON model (relations, implies, permissions, `parent`, `but_not`) into a flat `satisfies` table. It keeps stable IDs and version rows, and the dry run executes in a rolled-back subtransaction, so its plan is exact.
+  - Statement-level triggers with transition tables keep `memberships` up to date under a global advisory lock.
+  - Parent cycles are rejected on write.
+- **A real concurrency test:** two sessions raced on nesting writes. With the lock, `verify()` was clean afterwards. With the lock removed from a copy, `verify()` caught the missing membership. That's the drift risk the design doc predicted, now demonstrated.
+- **Where the brief was wrong:** the brief said C's preset would take `uuid`. It can't: the shared tests and the RBAC bench seed pass `text`, and text→uuid is an explicit-only cast. The preset keeps PLAN §6's text signatures with uuid underneath, plus `uuid` overloads for policies.
+- **RLS fast path, refined:** for a function that already returns `uuid[]`, `id = any ((select f())::uuid[])` is fastest, because the cast is a no-op. That's about 0.15 ms faster than the `array(select unnest(...))` rule. **The §4 rule is about avoiding a real per-row cast, not a magic incantation.**
+- **The write-side price, measured:** nesting a 1,000-member team takes about 14 ms with 1 client. With 4 clients it's about 61 ms each, and throughput stays flat at 65–70 tps, because the global lock serializes them.
+- Code size: C is about 1,860 lines, A about 620.
+
+### 3. M2: fixes, install test and a fair benchmark harness (three agents in parallel)
+
+**G14 install test** (light-implementer): all three prototypes install as a non-superuser database owner, with no C or `internal` functions. Function counts: A 27, B 55, C 63. pg_tle isn't in Postgres.app 16.4, so the pg_tle branch of the spec is written but **has never run**. It's an honest skip, and someone with pg_tle has to run it.
+
+**Correctness fixes** (heavy-implementer). Each new test was confirmed red before its fix.
+- **B failed open.** Called outside RLS without the row's folder or attribute, `can()` skipped forbids that depended on them and granted access. Now it raises `22023` and names the missing key. The agent rejected "treat the missing input as deny", because it turns a caller bug into silent denials and makes `who_can` return nobody.
+- **A worse B bug, found while fixing that one:** every jsonb key was read as a parent. `{"user": author}` made the author's teams and orgs into anchors for the row, so `can_for` said yes where RLS said no. It's fixed for principal-type keys. The real fix is declared parent types, which would change B's calling convention.
+- **Still open in B:** the list function (`ids_for`) can include a document that a forbid blocks through its folder column or a condition. RLS stays exact. This is documented, not fixed. **Policy-first's flexibility makes "the same answer everywhere" hard to guarantee.**
+- **C's `who_can` left out public grants.** A public grant now comes back as one null row, mirroring A's `('user','*')` row, rather than enumerating every user.
+- Suites after the fixes: A 14/14 files (156 assertions), B 15/15 (172), C 16/16 (195).
+
+**Benchmark harness** (heavy-implementer, about 40 minutes):
+- **Equivalent data by construction.** One integer data shape (`bench/seed_shape.sql`) feeds every engine's seed, so the seeds can't drift apart.
+- **Cross-engine checksums.** For each read policy, the md5 of the sorted visible IDs for sample users must match across A, B and C. In all three shapes (default, deep with 10-level nesting, wide with 50 teams per user) **all three engines returned identical results**.
+- **Fairness fixes the agent made on its own:**
+  - Write workloads now roll back, so committed rows don't pollute later checksums.
+  - `VACUUM FULL` replaces `VACUUM`, and empty tables are skipped.
+  - **The vacuum detail matters:** analyzing B's closure tables while empty, then bulk-loading, made its wide sharing seed take 225 s instead of 3 s. The planner believed the tables were empty and picked quadratic plans. C showed the same effect (77 s vs 26 s). That's a real risk for apps that bulk-load in one transaction.
+- **B's `can()` went from 1.3 to 17–22 ms after re-analyze.** The `_parent_keys()` function scan was estimated at 1,000 rows (actual 1), so the planner hash-joined a seq scan over 92k ancestor rows. **The fourth planner trap of the project.**
+- First small-scale numbers (p50 ms, noisy machine):
+
+  | Workload | A | B | C |
+  | --- | --- | --- | --- |
+  | `parents_select_page` | 20.9 | 0.79 | 1.18 |
+  | `write_nest_team` | 0.14 | 129 | 55 |
+  | `nest_check` (read after nesting) | 0.32 | 1.53 | 0.25 |
+
+  This is the read/write trade-off the designs predicted, now in numbers: **A writes in 0.14 ms and pays at read time; B and C pay 400–900× more on the nesting write.**
+- **Fairness question raised:** B's parents policy projects onto `folder_id` (about 20 folder IDs) while A and C enumerated every visible document. Is the comparison about engines or about policy shape? (Answer in the next step: benchmark both shapes on every engine.)
+
+**Two follow-up engine fixes** (light-implementer):
+- **B's planner trap:** `rows 1` on `_parent_keys` changed the plan from a seq scan plus hash join over 92k closure rows to an index-only scan. `can()` p50 after nesting (wide shape) went from **17.1 to 0.79 ms**: one line, 21×.
+- C now officially supports naming the preset `tenant` type as a parent, so folder access can reach preset roles, the graduation path. Redefining `tenant` or `app` is still refused. The benchmark had been relying on a loophole.
+
+**Separating engine cost from policy shape.** Every engine was benchmarked with both parents policies:
+- **projection:** `id = any(docs) or folder_id = any(folders)`, with no per-document parent links;
+- **single branch:** one call, with one parent link per document stored in the engine.
+
+All four workloads gave identical checksums across A, B and C in every shape. Small scale, p50 ms (default shape):
+
+| Workload | A | B | C |
+| --- | --- | --- | --- |
+| projection page | 2.1 | 0.79 | 0.48 |
+| single-branch page | 20.4 | 6.0 | 1.20 |
+
+- **The policy shape mattered more than the engine:** projection is about 10× faster for A, 7× for B and 2.5× for C. A's 20 ms "parents problem" was mostly the policy shape. With the same policy, A is 2.1 ms vs C's 0.48.
+- In the wide shape (50 teams per user) the sharing arm dominates: A 58 ms, B 36 ms, C 3.3 ms. **This is where materialization (C) pays off, and the first place an engine choice clearly wins on reads.**
+- B's single-branch form costs 1 parent row plus 2 closure rows per document (3M rows at 1M documents).
+
+### 4. The serial benchmark runs
+
+Run strictly one at a time on an idle laptop, 10 s per workload: large default, medium default, medium deep and medium wide, for each engine. About 33 minutes of runs, plus one restart.
+
+- **Another benchmark bug, caught by a budget.** The harness's `VACUUM FULL` left the visibility map empty, so index-only scans read every heap page. A's `rbac_select_count` came out at 6.2 ms instead of about 0.8 ms and went over its budget. The fix was a plain `VACUUM` after the `FULL`. Everything was rerun from scratch. **The budgets from session 1 earned their keep: a regression guard caught a harness bug, not an engine bug.**
+- **Cross-engine checksums matched in every run,** for all four read policies and all 8 sample users. Three engines with different storage and evaluation strategies gave the same answers for 1M documents.
+- **RBAC (the blessed path) is a tie.** All three engines were within about 0.2 ms of each other at every scale. Single-row writes were 0.14–0.20 ms everywhere. **For apps that stay on the `rbac` preset, the engine choice is invisible**, as predicted in session 1, and now measured.
+- Large default (1M documents), p50 ms:
+
+  | Workload | A | B | C |
+  | --- | --- | --- | --- |
+  | `share_select_page` | 2.02 | 1.21 | 0.95 |
+  | `parents_proj_select_page` | 3.20 | 1.44 | 1.01 |
+  | `parents_select_page` (single branch) | **509** | 197 | 9.6 |
+  | `write_nest_team` (4 clients) | **0.15** | 285 | 333 |
+  | `nest_check` | 0.70 | 2.60 | 0.26 |
+
+- **Single-branch parents scale linearly with visible documents in A and B** (A: 20.8 → 99.6 → 509 ms from small to medium to large). Session 1's extrapolation of about 150 ms was **3× too optimistic**. The projection policy barely grows: C went from 0.48 to 1.01 ms. **Projection should be the blessed RLS pattern for hierarchies, whatever the engine.**
+- **Wide shape (50 teams per user, medium):** `share_select_page` A 221 ms, B 70 ms, C 10.7 ms. This is the case materialization was designed for, and it wins by 20×.
+- **The write price of materialization:** nesting a 1,000-member team with 4 clients took 285 ms in B and 333 ms in C, against 0.15 ms in A, a factor of about 2,000. C's design doc quoted 14 ms, but that was single-client; the global lock serializes the clients.
+- **Storage for per-document parent links at 1M documents:** A +378 MB (44 s seed), B +736 MB (167 s, 3 rows per document), C +160 MB (16 s). The projection policy needs none of this.
+- **Budgets for everything,** with the rule "3× the fastest engine's p95". `--check` at small scale: A fails 4 (parents), B fails 4 (single-branch parents, nesting write, nest check), C fails 1 (nesting write). Nothing was loosened to fit an engine.
+
+### 5. M3: the decision guide
+
+- `DECISION.md` (light-implementer) is a scorecard against PLAN §7 in which **every cell cites a number, a test or a design-doc section**. It has "Choose A/B/C if…" sections, three hybrids marked untested, open questions for Copple, and a list of what hasn't been measured. **It deliberately picks no winner.** Copple wants to make that call.
+- One agent refreshed PLAN §8, the README and prototypes/README. A second fixed stale numbers in the design docs, including A's own "about 150 ms extrapolated", now replaced by the measured 509 ms.
+
+### How the orchestration worked (meta, for the post)
+
+- **Main conversation (Opus):** planning, briefs, reviewing reports, commits and this journal. It never read a prototype or ran a test. The only files it read were the plan, goals and journal (to brief), and the finished DECISION.md (to review).
+- **13 subagent runs:**
+  - 6 heavy-implementer: A, B and C in parallel, the correctness fixes, and the benchmark harness, which was resumed twice for parents variants and serial runs;
+  - 5 light-implementer: infrastructure, install test, planner/tenant fixes, decision guide, doc fixes.
+  - The explorer agent wasn't needed, because the journal and plan already held the context.
+- **What made the parallelism safe:** strict file ownership per agent; "don't commit, the orchestrator commits"; and "no large benchmarks while others run tests". The shared test runner was held back from edits while three agents were using it.
+- **Briefs that carried exact assertion checklists** produced comparable tests from agents that never saw each other's work. Findings were relayed mid-flight (A's cycle-test weakness was sent to B and C while they worked).
+- **Agents found real bugs outside their brief:** B's jsonb-key-as-parent bug, B's missing row estimate, C's reliance on a loophole, and the harness's own vacuum and visibility-map problems. They reported them instead of hiding them because the briefs said "report, don't paper over".
+
+### Decisions this session
+
+| Decision | Why |
+| --- | --- |
+| Per-design zanzibar-level spec files | Copple's call. Each engine is tested in its native API, with checklists kept identical by the brief |
+| Extension file stays empty | Copple will choose the engine later |
+| Benchmark both policy shapes on every engine | Separates engine cost from policy shape; that turned out to be the biggest effect |
+| Budgets = 3× the fastest engine's p95 | A multi-engine version of session 1's rule; nothing loosened to fit an engine |
+| B raises when a forbid's inputs are missing | Fail closed, with a clear error, rather than silent denials |
+| C reports public grants as a null row in `who_can` | Mirrors A's `('user','*')` without enumerating users |
+
+### Still open (end of session 2)
+
+- **Choose the engine** (DECISION.md's open questions): forbid on groups and engine-evaluated conditions in year one? uuid-only? a global write lock? `repeatable read` refusal?
+- B's list function isn't net of conditioned or folder-based forbids.
+- Run the pg_tle branch of `03_tle_install` somewhere pg_tle exists.
+- Not yet measured: single-client nesting writes at large, mixed read/write concurrency, fsync on, PG 15/17, a user who can see most of 1M documents.
+- The untested hybrid: A's API with C's materialized memberships.
+
+### Possible angles for the blog post (session 2 additions)
+
+- **"The policy shape mattered more than the engine."** For the same parents feature, a single-branch policy took 509 ms in A and a two-arm projection 3.2 ms (160×). The engines differed by 2–3× under the same policy.
+- **"Measure, don't extrapolate."** 150 ms was predicted and 509 ms measured.
+- **"A tie on the blessed path."** RBAC was within 0.2 ms across three very different engines. Most apps would never feel the choice.
+- **"Materialization is a trade, not a win."** C is 20× faster on wide reads; A is 2,000× faster on nesting a big team.
+- **"Planner traps, a catalogue":** a per-row cast, a hashed subquery, an OR killing the primary key, a function estimated at 1,000 rows, SQL functions re-planned on every call, and an empty visibility map after VACUUM FULL. None of them was about the authorization model.
+- **"Orchestrating 13 agents without collisions":** file ownership, a single committer, serial benchmarks, and relaying findings mid-flight.
+- **"Fail closed":** a fix for one fail-open bug uncovered a worse one in the same function.
+
+### Numbers worth quoting (session 2)
+
+- 3 engines: 618 / 1,557 / 1,871 lines; 27 / 56 / 63 functions. 46 spec-file runs in total, 532 assertions, all green.
+- 15 mutants across the new features, all caught; plus a real two-session race showing C's drift without its lock.
+- Identical visible-document checksums for A, B and C in every run (1M documents, 4 policies, 8 sample users).
+- RBAC: all engines within 0.2 ms. Sharing page at 1M documents: 2.02 / 1.21 / 0.95 ms.
+- Wide groups (medium): 221 / 70 / 10.7 ms. Nesting a 1,000-member team: 0.15 / 285 / 333 ms.
+- Single-branch parents at 1M documents: 509 / 197 / 9.6 ms; projection 3.2 / 1.4 / 1.0 ms.
+- One-line fixes: B `rows 1` 17.1 → 0.79 ms; B's stand-in OR rewrite 2.5 → 0.56 ms; A's SQL → PL/pgSQL 0.58 → 0.34 ms.

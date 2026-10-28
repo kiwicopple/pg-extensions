@@ -1,6 +1,6 @@
 # pg_permissions: Plan
 
-> Status: draft for discussion. The extension itself isn't implemented yet; prototypes of Designs A and B are in [`prototypes/`](./prototypes/).
+> Status: requirements and summary. The extension itself isn't implemented yet (`pg_permissions--0.0.1.sql` is empty). All three designs are built as prototypes in [`prototypes/`](./prototypes/), pass the test suite and have been benchmarked; the choice between them is open. See [`DECISION.md`](./DECISION.md).
 >
 > This document holds the goals and requirements every design must meet. The candidate designs are in [`designs/`](./designs/). The requirements are turned into executable goals in [`GOALS.md`](./GOALS.md) and [`test/`](./test/).
 
@@ -173,51 +173,43 @@ Every design must also show this scenario, written **only** with the preset API 
 | [B: Policy-first](./designs/b-policy-first.md) | Cedar-style `policies` table decides everything. Roles, groups and parents are plain data. Group and role closures are precomputed on write. |
 | [C: Compiled model](./designs/c-compiled-model.md) | A JSON model is compiled into lookup tables. Group membership is materialized by triggers. Typed, `uuid`-only IDs. |
 
+All three are built ([`prototypes/`](./prototypes/)) and pass every goal in [`GOALS.md`](./GOALS.md): A 14/14 spec files (156 assertions), B 15/15 (172), C 17/17 (204). They return identical visible-document sets for every read policy at every scale and shape benchmarked. The numbers below are from [`bench/baselines/COMPARISON.md`](./bench/baselines/COMPARISON.md) (serial runs, Postgres 16, one laptop, 4 clients, p50 at large unless noted).
+
 ### Comparison
 
 Each design's own "weaknesses" section has the details. This table summarizes them against §7.
 
 | Criterion | A: Tuple core | B: Policy-first | C: Compiled model |
 | --- | --- | --- | --- |
-| Model flexibility | RBAC and ReBAC natural. Forbid and conditions need a policy layer that isn't designed yet. | Widest: RBAC, ReBAC, conditions and forbid are all policy shapes. Policies are limited to shapes that can become SQL filters. | RBAC and ReBAC natural, with OpenFGA-like types. Forbid as an exclusion list. Resource conditions are left to RLS. |
-| Read cost | Recursive walk per check. Grows with group nesting. | Flat joins, no recursion. | Flat joins, no recursion. |
-| Write cost | 1 row per grant. Nothing to maintain. | 1 row per grant. Group nesting writes closure rows under a global lock. | 1 row per object grant. Group nesting writes membership rows under a global lock. `repeatable read` rejected for those writes. |
-| Org-wide access (reference scenario) | Two-arm RLS policy until parent inheritance. `list_subjects` misses org-derived viewers. | First-class (`via => 'org'`). `who_can` returns everyone. RLS must mirror each `via`. | Two-arm RLS policy until parent inheritance. `who_can` must be unioned by hand. |
-| Simplicity for app developers | One concept (tuples). Smallest extension. | Two concepts (facts and policies). | One model file plus grants. The extension's write path is the most complex of the three. |
-| Blessed path (`rbac` preset, §6) | Thin wrappers (about 50 lines). Roles defined twice (`app` and `tenant`). RBAC checks still use the recursive walk, though it's tiny. **Tested end to end**, including RLS and graduation. | Maps one to one: inheritance is `role_implies`, permissions are actions. Generated policies need a `managed_by` marker. Graduating introduces policies. Tested with a minimal stand-in evaluator. | RBAC is its cheapest path: one lookup, no triggers. Each `create_role` is a new model version. UUID only. Name rule had to allow dots. Tested with a hand-compiled catalog. |
-| Validation | Weak: relation names only. | Roles declared per type. | Strongest: typed subjects, unknown names raise. |
+| Model flexibility | RBAC, ReBAC, parents, `user:*` and expiry in the engine. Forbid only against a subject's own tuple. Conditions are RLS composition. | Widest: forbid (including group principals) and conditions are policy shapes, evaluated in the engine and compiled into RLS. Refuses policies that can't become SQL filters. | RBAC and ReBAC with OpenFGA-like types. Forbid is deny-overrides along the parent chain. Conditions are RLS composition. |
+| Read cost | Recursive walk per check. `share_select_page` 2.02 ms; 221 ms in the wide shape; 1.6x slower in the deep shape. | Flat joins. 1.21 ms; 70 ms wide; 2.3x slower deep. | Flat joins. 0.95 ms; 10.7 ms wide; flat deep. |
+| Write cost | One row per grant. `write_nest_team` 0.15 ms. | Group nesting writes closure rows under a global lock: 285 ms (4 clients). | Group nesting writes membership rows under a global lock: 333 ms (4 clients). |
+| Org-wide access via parents | Two-arm projection policy 3.20 ms; single-branch policy 509 ms. | 1.44 ms; 197 ms. | 1.01 ms; 9.6 ms. |
+| Simplicity | One concept (tuples). 618 lines, 27 functions. | Two concepts (facts and policies). 1,557 lines, 56 functions. | One model file plus grants. Most complex write path. 1,871 lines, 63 functions. |
+| Blessed path (`rbac` preset, §6) | Identical API and answers on all three; RBAC latency within about 0.2 ms across engines. Thin wrappers; roles defined twice (`app`, `tenant`). Graduation adds an `or` branch. | Maps one to one: inheritance is `role_implies`, permissions are actions. Generated policies carry `managed_by`. Graduating introduces policies. | One lookup, no triggers for RBAC. Each `create_role` is a new model version. Graduation is one `apply_model()` call. |
+| Validation | Weak: relation names only. | Roles declared per type. | Strongest: typed subjects, unknown names raise on write. |
 | IDs | `text`, array cast to `uuid[]` in RLS. | `text`, cast to `uuid[]` in RLS. | `uuid` only, no casts. Other key types need a mapping table. |
-| Drift risk | None: nothing is derived. | Closure tables can drift (triggers). | `memberships` can drift (`verify`/`rebuild` provided). |
+| Concurrency | No locks. | One advisory lock for closure writes; `repeatable read` refused for them. | One global advisory lock for memberships and container moves; `repeatable read` refused. |
+| Drift risk | None: nothing is derived. | Closure tables can drift (triggers); no `verify`. | `memberships` can drift (`verify`/`rebuild` provided). |
 | Familiarity | SpiceDB / OpenFGA. | Cedar. | OpenFGA. |
 
 ### What the three designs tell us
 
-- **B and C independently chose to precompute group membership at write time.** This points at A's main weakness: recursion on every read. It also means B and C share the hardest part to build (closure maintenance, concurrency, drift).
-- **The `rbac` preset works the same on all three engines.** The identical preset API (§6) ran on each design and gave the same answers to the RBAC scenario. For developers who stay on RBAC, which is most apps, the engine choice is invisible. The choice only matters for performance and for apps that graduate to per-object sharing.
-- **A and C have almost the same `zanzibar`-level API** (`grant`/`revoke`, check, list accessible IDs, list subjects). C is close to "A with a typed model and a materialized membership index". We could ship A's engine first, then add C's precomputation behind the same functions if benchmarks show the read-time walk is too slow. B's `zanzibar`-level API is different (policies plus role grants), so that part is a choice to make up front.
-- **All three handle org-wide access through the app's `org_id` column in RLS.** None of them copies 1M documents into the permission tables. B makes this first-class; A and C get there with parent inheritance in v0.0.2.
-- **The real decision is relationship-first (A/C) or policy-first (B).** Relationship-first is simpler and familiar to FGA users. Policy-first has a better home for forbid, conditions, CEL and Cedar, but costs a second concept and a coupling between policies and RLS.
+- **Precomputing group membership pays on reads and costs on writes.** B and C removed A's recursion. In the wide shape (50 teams per user) `share_select_page` is 221 ms for A, 70 ms for B and 10.7 ms for C. The price is writes: nesting a 1,000-member team takes 285 ms for B and 333 ms for C, against 0.15 ms for A, and both serialize on a global lock.
+- **The `rbac` preset works the same on all three engines.** The identical preset API (§6) gives the same answers to the RBAC scenario and the same latency within noise. For developers who stay on RBAC, which is most apps, the engine is invisible. The choice only matters for performance and for apps that graduate to per-object sharing.
+- **How the RLS policy is written matters as much as the engine.** The two-arm projection (`id = any(<shared with me>) or folder_id = any(<folders I can view>)`) costs about what plain sharing costs on every engine. The single-branch policy makes the engine materialize every visible document id: 509 ms for A and 197 ms for B at large, against 9.6 ms for C. The projection is still 9x cheaper for C. (§4 has the policy-form findings.)
+- **A and C have almost the same `zanzibar`-level API** (`grant`/`revoke`, check, list accessible IDs, list subjects). C is close to "A with a typed model and a materialized membership index". B's `zanzibar`-level API is different (policies plus role grants), so that part is a choice to make up front.
+- **The real decision is relationship-first (A/C) or policy-first (B)**, and for relationship-first, whether to pay write-time cost for read speed. Relationship-first is simpler and familiar to FGA users. Policy-first is the only one with forbid on groups and conditions in the engine, at the price of a second concept and a coupling between policies and RLS.
 
-### How to decide
+### Deciding
 
-Because the `rbac` preset API is the same for every engine, the blessed path can be built and documented now, before the engine is chosen.
-
-The test suite and benchmark harness now exist (`test/run.sh`, `bench/run.sh`, goals in [`GOALS.md`](./GOALS.md)). First results, from Prototype A at 1M documents, 10k users and teams nested about 5 levels deep:
-
-- **Design A's read-time walk is fast enough at this scale.** Every workload has p95 under 2.5 ms, including the two-branch sharing policy. The recursion B and C avoid costs well under a millisecond here. Full report: [`bench/baselines/a-large-default-session1.md`](./bench/baselines/a-large-default-session1.md).
-- **The biggest performance factor so far was how the RLS policy is written, not the engine** (§4: a per-row cast made pages 5× slower).
-
-Remaining steps:
-
-1. Build Design C's prototype (materialized memberships) and run the same benchmark, plus a write workload that nests a 1,000-member team, which is where A and C should differ most.
-2. Try deeper or wider group graphs (more teams per user, deeper nesting) to find where A's walk stops being cheap.
-3. Decide whether forbid and attribute conditions are needed in the first year. If yes, B's policy model should be the starting point. If no, use A/C.
+[`DECISION.md`](./DECISION.md) is the decision guide: a scorecard against §7, when each engine wins, untested hybrids, open questions and what hasn't been measured. The raw numbers are in [`bench/baselines/COMPARISON.md`](./bench/baselines/COMPARISON.md).
 
 ## 9. Open questions (all designs)
 
 1. **Schema name**: `permissions`, or something less likely to clash with app schemas? Also confirm how pg_tle / dbdev handles a fixed schema versus `with schema extensions`.
 2. **Who may grant?** Should the extension ship a convention for who can grant what, or leave it to the app?
-3. **Public access** (`user:*` in OpenFGA terms): in v0.0.1 or later?
+3. **Public access** (`user:*` in OpenFGA terms): in v0.0.1 or later? Built and tested on all three prototypes as G11 (§10).
 
 ## 10. v0.0.2 goal scenarios
 

@@ -2,7 +2,7 @@
 
 > One of three candidate designs. See [../PLAN.md](../PLAN.md) for the shared goals, requirements and evaluation criteria.
 >
-> **Status (2026-10-28):** built as [`prototypes/c-compiled-model.sql`](../prototypes/c-compiled-model.sql). It passes every shared spec file and its own `test/spec/c/` files (30, 31, 32, 40, 50–54): 16 files, 195 assertions. This document describes what was built. Section 13 lists where the build departed from the earlier draft, and why.
+> **Status (2026-10-28):** built as [`prototypes/c-compiled-model.sql`](../prototypes/c-compiled-model.sql). It passes every shared spec file and its own `test/spec/c/` files (30, 31, 32, 40, 50–55): 17 files, 204 assertions. This document describes what was built. Section 13 lists where the build departed from the earlier draft, and why.
 
 ## 1. Summary
 
@@ -333,9 +333,20 @@ Small-scale benchmark (`./bench/run.sh --impl prototypes/c-compiled-model.sql --
 | `share_select_page` | 0.52 | 0.63 | 5 |
 | `write_share` | 0.10 | 0.14 | 1 |
 
-The large-scale comparison with Design A is a later, serial step.
+Large-scale comparison (serial runs, 4 pgbench clients; full tables and checksums in [bench/baselines/COMPARISON.md](../bench/baselines/COMPARISON.md)). Per-user visible-document checksums match A and B at every scale. p50 ms at large (1M documents, 10k users):
 
-**Org-wide access through parents** makes `accessible()` return every document id under the org. For an admin of an org with 1M documents that's a 1M-element array per query, the same cost A or B pay for an equivalent single-branch policy. The two-arm policy (`org_id = any (scopes...) or id = any (accessible(...))`) avoids it and stays the recommended form for large tenants. This was not benchmarked.
+| Workload | A | B | C |
+| --- | --- | --- | --- |
+| `rbac_check` | 0.28 | 0.33 | 0.23 |
+| `share_select_page` | 2.02 | 1.21 | 0.95 |
+| `parents_proj_select_page` (two-arm projection) | 3.20 | 1.44 | 1.01 |
+| `parents_select_page` (single branch) | 509 | 197 | 9.57 |
+| `write_nest_team` (4 clients) | 0.15 | 285 | 333 |
+| `nest_check` | 0.70 | 2.60 | 0.26 |
+
+C has the fastest reads on every sharing and parents workload and is flat on `nest_check` (0.22-0.28 ms at every scale and shape). RBAC is a wash across engines. In the wide shape (medium, 50 teams per user) `share_select_page` is A 221, B 70, C 10.7 ms, but C's wide sharing seed took 183 s against 35 s for B and 10 s for A. C's per-document parents seed at large took 16 s and added about 160 MB (A 44 s / 378 MB, B 167 s / 736 MB).
+
+**Org-wide access through parents** makes `accessible()` return every document id under the org. For an admin of an org with 1M documents that's a 1M-element array per query, the same cost A or B pay for an equivalent single-branch policy. The two-arm policy (`org_id = any (scopes...) or id = any (accessible(...))`) avoids it and stays the recommended form for large tenants. Measured at large scale (about 20k visible documents per user): the single-branch `parents_select_page` is 9.57 ms p50 for C, against 1.01 ms for the two-arm projection (about 9×). A pays 509 ms and B 197 ms for the same single-branch shape, so C's materialized `accessible()` degrades far less, but the projection is still the cheaper form.
 
 ### Writes
 
@@ -350,12 +361,12 @@ The large-scale comparison with Design A is a later, serial step.
 | Model change touching `parent` lists | full `ancestors` rebuild | global |
 | Other model changes (roles, permissions, new types) | catalog rows only | global (brief) |
 
-`write_nest_team` (nest the 1,000-member team `nest-src` into a random team of the 50-team tree, rolled back each time; small scale): **about 14 ms per nest with 1 client** (3,000 membership rows for a 3-level target). **With 4 clients, latency is about 61 ms and tps stays flat at 65–70**: the global lock serializes them. A plain object grant (`write_share`) is about 0.1 ms. This is the write where C pays and A doesn't.
+`write_nest_team` (nest the 1,000-member team `nest-src` into a random team of the 50-team tree, rolled back each time; small scale): **about 14 ms per nest with 1 client** (3,000 membership rows for a 3-level target; single-client, small scale). **With 4 clients, latency is about 61 ms and tps stays flat at 65–70**: the global lock serializes them. A plain object grant (`write_share`) is about 0.1 ms. This is the write where C pays and A doesn't. At large scale with 4 clients the measured `write_nest_team` is **333 ms p50** (A 0.15 ms, B 285 ms), because concurrent nests queue on the global lock; `COMPARISON.md` has no single-client large-scale figure.
 
 ## 12. Weaknesses and risks
 
 1. **The write path is the bulk of the code and where bugs live.** The prototype is about 1,860 lines (A is about 620): compiler about 590, derived-data maintenance about 350, preset about 250. A missed case causes silent drift. `verify()` and `rebuild()` mitigate this; a read-time walk has no drift by construction. Four deliberately broken copies (no propagation on nesting, forbid ignored, parent traversal cut to one hop, `verify()` blind) were each caught by the specs, but drift bugs outside the tested shapes would not be.
-2. **One global lock** for every membership, container-move and rebuild write. Bulk directory syncs (SCIM) and concurrent team edits queue: nesting a 1,000-member team holds it for about 14 ms. Per-key locking needs careful lock ordering and is deferred.
+2. **One global lock** for every membership, container-move and rebuild write. Bulk directory syncs (SCIM) and concurrent team edits queue: nesting a 1,000-member team holds it for about 14 ms (single client, small scale; 4 clients at large scale queue to a 333 ms p50). Per-key locking needs careful lock ordering and is deferred.
 3. **`repeatable read` is refused for those writes.** It surprises users. ORMs that default to it would have to switch for permission writes.
 4. **Write latency lands in the app's transaction.** Nesting a 10k-member team writes 10k+ rows synchronously. A TLE can't ship a background worker.
 5. **Model changes that touch usersets rebuild all memberships** under the lock, in one transaction. Fine for small apps; at 5M membership rows it's a maintenance window.
@@ -363,7 +374,7 @@ The large-scale comparison with Design A is a later, serial step.
 7. **Single-branch parent policies materialize large arrays** for org-wide roles (section 11).
 8. **Forbid is deny-overrides** (section 9), not OpenFGA's exact `but not`; exclusions are same-type relations only.
 9. **No expiring group memberships.** Rejected rather than silently wrong.
-10. **`who_can` omits public grants.**
+10. ~~**`who_can` omits public grants.**~~ Fixed: `who_can` returns one null row for a public grant (section 7; `c/54_who_can_public`).
 11. **uuid only**, and uuids are assumed unique across principal types (memberships key on the uuid alone).
 12. **Storage:** memberships grow as principals × transitive groups (100k users in 50 groups is 5M rows).
 13. **Provenance is lost.** Memberships say *that* Carol is in `platform`, not why (only the shortest depth). `explain()` isn't built.
@@ -393,7 +404,7 @@ The large-scale comparison with Design A is a later, serial step.
 
 1. Is uuid-only acceptable, or do we need a per-type key kind (`uuid` | `text`)?
 2. JSON only, or also an OpenFGA-style DSL (client-side)?
-3. Global lock, or per-key locking now? Measure `write_nest_team` with concurrent clients at large scale first.
+3. Global lock, or per-key locking now? Measured: `write_nest_team` is 333 ms p50 with 4 clients at large scale (`COMPARISON.md`); no per-key locking prototype exists to compare against.
 4. Should `memberships` hold a reflexive row per principal so `can()` needs one branch instead of two? That costs a row per principal and requires knowing principals the extension doesn't otherwise track.
 5. How should `apply_model()` express renames, so they don't drop and re-add tuples?
 6. Is deny-overrides the forbid semantics we want, or do we need OpenFGA's exact `but not`?

@@ -249,7 +249,26 @@ Graduation (`b/40_graduation`) adds `define_role('document', ...)`, two `permit`
 
 ## Performance
 
-**Measured so far (small scale only).** 10k documents, 1k users, 20 orgs, 50 teams; `./bench/run.sh --impl prototypes/b-policy-first.sql --duration 3`; 4 clients on a laptop shared with other test runs, so treat these as a sanity check, not a result. All within budget:
+**Large and medium scale.** Serial runs, one engine at a time, 10 s per workload, 4 pgbench clients; full tables, plans and checksums are in [bench/baselines/COMPARISON.md](../bench/baselines/COMPARISON.md). Per-user visible-document checksums match A and C at every scale. p50 ms (p95 in `COMPARISON.md`):
+
+| workload | large (1M docs) | medium (100k docs) |
+| --- | --- | --- |
+| `rbac_check` | 0.33 | 0.33 |
+| `rbac_select_page` | 0.62 | 0.48 |
+| `rbac_update_one` | 0.79 | 0.80 |
+| `share_select_page` | 1.21 | 0.89 |
+| `parents_proj_select_page` (two-arm projection) | 1.44 | 1.05 |
+| `parents_select_page` (single branch, per-document parents rows) | 197 | 28.8 |
+| `write_nest_team` (4 clients, global lock) | 285 | 220 |
+| `nest_check` | 2.60 | 2.36 |
+
+- RBAC and sharing reads sit between A and C: B is faster than A on sharing (large `share_select_page` 1.21 ms vs A's 2.02) and slower than C (0.95).
+- With the two-arm projection (the form this design recommends), parents cost about what sharing costs. The single-branch form needs a `parents` row and closure rows per document and costs 197 ms at large (about 140× the projection). The seed for it took 167 s and added about 736 MB (1M `parents` rows plus 2M closure rows).
+- Nesting a 1,000-member team writes closure rows under the global lock, so concurrent nests queue (285 ms p50 at large, 4 clients; A writes one tuple in 0.15 ms).
+- `nest_check` is the slowest check of the three engines (1.2 ms small, 2.4-2.8 ms medium and large) after the `_parent_keys` row-estimate fix.
+- Deep and wide shapes (medium): B's `share_select_page` is 2.04 ms deep and 70 ms wide.
+
+**Small scale, early sanity check (superseded by the numbers above).** 10k documents, 1k users, 20 orgs, 50 teams; `./bench/run.sh --impl prototypes/b-policy-first.sql --duration 3`; 4 clients on a laptop shared with other test runs, so treat these as a sanity check, not a result. All within budget:
 
 | workload | p50 ms | p95 ms |
 | --- | --- | --- |
@@ -262,7 +281,7 @@ Graduation (`b/40_graduation`) adds `define_role('document', ...)`, two `permit`
 | share_select_page | 0.73 | 0.89 |
 | write_share | 0.08 | 0.14 |
 
-The B sharing seed (`bench/designs/b/`) produces the same visible document set as A's for all 1,000 users (identical checksum over every user's RLS result). Large-scale numbers are pending a serial run.
+The B sharing seed (`bench/designs/b/`) produces the same visible document set as A's for all 1,000 users (identical checksum over every user's RLS result).
 
 **Why the stand-in's RBAC was ~3× slower than A** (rbac_update_one p95 3.27 ms vs 1.04 ms). It was the implementation, not the design:
 
