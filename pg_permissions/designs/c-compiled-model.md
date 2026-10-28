@@ -1,305 +1,299 @@
 # Design C: Compiled model
 
 > One of three candidate designs. See [../PLAN.md](../PLAN.md) for the shared goals, requirements and evaluation criteria.
+>
+> **Status (2026-10-28):** built as [`prototypes/c-compiled-model.sql`](../prototypes/c-compiled-model.sql). It passes every shared spec file and its own `test/spec/c/` files (30, 31, 32, 40, 50–53): 14 files, 178 assertions. This document describes what was built. Section 13 lists where the build departed from the earlier draft, and why.
 
 ## 1. Summary
 
-The developer declares an authorization model once (types, relations, implications, permissions, which subjects may hold which relation) as JSON and passes it to `permissions.apply_model()`. The extension compiles that model into lookup tables and keeps a materialized "who is in which group" closure up to date with triggers, so every check at read time is two or three indexed lookups with no recursion. All IDs are native `uuid`, and the extension runs no DDL or dynamic SQL after install.
+The developer declares an authorization model once, as JSON, and passes it to `permissions.apply_model()`. The model lists types, relations, implications, permissions, parent types, exclusions (forbid) and which subjects may hold each relation. The extension compiles the model into lookup tables, and triggers keep two derived tables up to date: a materialized "who is in which group" table, and the ancestor closure of container objects such as folders. Every read is then a fixed number of indexed lookups with no recursion. All IDs are native `uuid`. Apart from the install script, the extension runs no DDL and no dynamic SQL.
 
 ## 2. Core idea
 
-A generic tuple store with a read-time graph walk does all the work on every check: resolve implied relations, expand groups, recurse through nested groups. In an RLS policy that walk runs once per query (fast path) or once per row (per-row check), and it is the part that is hardest to make cheap.
+A generic tuple store with a read-time graph walk does all the work on every check: resolve implied relations, expand groups, recurse through nested groups and parent chains. In an RLS policy that walk runs once per query (fast path) or once per row (per-row check).
 
 An authorization graph has three axes, and each changes at a different rate:
 
 | Axis | Example | Changes | Size | This design |
 | --- | --- | --- | --- | --- |
-| Relation axis | `owner` > `admin` > `member`, `editor` implies `viewer`, `update` = `editor` | Rarely (model changes) | Tiny (per type) | **Compiled** into a `satisfies` lookup table at `apply_model()` time |
-| Subject axis | Carol is in `eng`, `eng` is in `platform` | Occasionally | principals x groups | **Materialized** into `memberships`, maintained by triggers |
-| Object axis | Bob is editor of `readme`; later, `readme` is in folder `docs` | Constantly | Large | **Stored as written**, looked up by index; no fan-out |
+| Relation axis | `admin` implies `member`, `edit` = `editor` or the parent's `edit` | Rarely (model changes) | Tiny | **Compiled** into the `satisfies` table by `apply_model()` |
+| Subject axis | Carol is in `eng`, `eng` is in `platform` | Occasionally | principals × groups | **Materialized** into `memberships` by triggers |
+| Container axis | folder `plans` is in folder `specs`, which is in org `acme` | Occasionally | containers × depth | **Materialized** into `ancestors` by `set_parent()` |
+| Object axis | Bob is editor of `readme`; `readme` is in folder `specs` | Constantly | Large | **Stored as written** (`tuples`, `parents`), looked up by index |
 
-The key choice is what *not* to materialize. A full "effective permissions" table (one row per user per object per permission) makes a check a single index probe, but its size is the product of the axes: one org admin over 1M documents is 1M rows, and adding a user to a team that is granted access to 50k documents writes 50k rows inside the app's transaction. Materializing only the subject axis keeps write amplification proportional to *group size*, never to *object count*, and still removes all recursion from reads.
-
-Why this might beat a read-time walk:
-
-- **Reads are flat.** `can()` is: look up the compiled set of relations that satisfy the permission, then probe `tuples` for a direct grant, then join the principal's (pre-computed) groups against `tuples`. No recursive CTE, no depth loop, predictable plans.
-- **Typed and validated at write time.** The compiled model rejects `grant('document', x, 'editr', ...)` or granting a `document` as a team member. A tuple store accepts anything and silently denies later.
-- **Native `uuid`.** No `id::text` casts in policies, so `documents.id = any(...)` uses the primary key index directly.
-- **Changing the role hierarchy is cheap.** Only `satisfies` changes; no grant rows are rewritten.
-
-### Options weighed
+The key choice is what *not* to materialize. A full "effective permissions" table (user × object × permission) makes a check a single index probe, but its size is the product of the axes: one org admin over 1M documents is 1M rows. Materializing only group membership and the closure of *containers* keeps write amplification proportional to group size or folder-tree size, never to the number of documents.
 
 | Option | Verdict |
 | --- | --- |
-| Full effective-permissions table (user x object x permission) | Rejected as default. Product blow-up for org-wide roles and team grants; a hierarchy change rewrites everything. Could be an opt-in later for a hot permission. |
-| Generated typed tables per object type (`permissions.document_grants` with an FK to `public.documents`) | Rejected. Needs runtime DDL from a security-definer function, `references` privilege on app tables, and produces tables that `drop extension` does not own or remove. FKs couple the extension to app schema migrations. |
-| Extension creates RLS policies itself (`apply_policies()`) | Rejected. Same DDL and ownership problems: the extension owner would need to own or alter app tables. |
-| **Static schema, compiled data, materialized memberships** (chosen) | All tables exist at install time. A model compiles to *rows*, not code. The only generated SQL is returned as text by `policy_sql()` for the developer to paste into a migration. |
+| Full effective-permissions table | Rejected. Product blow-up for org-wide roles and team grants; a hierarchy change rewrites everything. |
+| Generated typed tables per object type | Rejected. Runtime DDL from a security-definer function, ownership problems, couples the extension to app migrations. |
+| Extension creates RLS policies itself | Rejected. Same DDL and ownership problems. |
+| **Static schema, compiled data, materialized memberships and container closure** (built) | All tables exist at install time. A model compiles to rows, not code. |
 
-## 3. Schema
+## 3. Model format
 
-### Model definition format
-
-JSON, because PL/pgSQL can validate `jsonb` without a parser. An OpenFGA-style DSL can be a client-side tool that emits this JSON.
+JSON, because PL/pgSQL can validate `jsonb` without a parser. An OpenFGA-style DSL could be a client-side tool that emits this JSON. The model below is the one in `test/spec/c/50_parents.sql` and `52_forbid.sql` combined:
 
 ```json
 {
   "types": {
     "user": { "principal": true },
-    "team": {
-      "relations": { "member": ["user", "team#member"] }
-    },
+    "team": { "relations": { "member": ["user", "team#member"] } },
     "org": {
-      "relations": { "owner": ["user"], "admin": ["user"], "member": ["user", "team#member"] },
-      "implies": { "owner": ["admin"], "admin": ["member"] },
-      "permissions": { "edit_documents": ["admin"], "view_documents": ["member"] }
+      "relations":   { "admin": ["user"], "member": ["user", "team#member"] },
+      "implies":     { "admin": ["member"] },
+      "permissions": { "edit": ["admin"], "view": ["member"] }
+    },
+    "folder": {
+      "parent":      ["org", "folder"],
+      "relations":   { "editor": ["user", "team#member"], "viewer": ["user", "team#member"] },
+      "implies":     { "editor": ["viewer"] },
+      "permissions": { "edit": ["editor", "parent->edit"], "view": ["viewer", "parent->view"] }
     },
     "document": {
-      "relations": { "editor": ["user", "team#member"], "viewer": ["user", "team#member"] },
-      "implies": { "editor": ["viewer"] },
-      "permissions": { "update": ["editor"], "select": ["viewer"] }
+      "parent":      ["folder", "org"],
+      "relations":   { "editor": ["user", "team#member"], "viewer": ["user", "user:*", "team#member"],
+                       "blocked": ["user", "team#member"] },
+      "implies":     { "editor": ["viewer"] },
+      "permissions": {
+        "edit": { "any": ["editor", "parent->edit"], "but_not": ["blocked"] },
+        "view": { "any": ["viewer", "parent->view"], "but_not": ["blocked"] }
+      }
     }
   }
 }
 ```
 
-- `relations`: what can be granted, and which subjects may hold it (`user`, or a userset like `team#member`).
-- `implies`: holding the key relation also satisfies the listed relations (transitive, cycles rejected).
-- `permissions`: named checks, each satisfied by any of the listed relations (after implications). Permissions cannot be granted directly.
-- `principal: true`: types whose IDs are end subjects (`current_subject()` returns one). UUIDs are assumed unique across principal types.
-
-### Tables
-
-```sql
-create schema permissions;
-
--- model history; the latest row is the active model
-create table permissions.models (
-  version     int generated always as identity primary key,
-  definition  jsonb not null,
-  applied_at  timestamptz not null default now(),
-  applied_by  name not null default current_user
-);
-
--- compiled catalog: names map to small ids that never change across model versions
-create table permissions.types (
-  id         smallint generated always as identity primary key,
-  name       text not null unique check (name ~ '^[a-z][a-z0-9_]{0,62}$'),
-  principal  boolean not null default false
-);
-
-create table permissions.relations (
-  id          smallint generated always as identity primary key,
-  type_id     smallint not null references permissions.types,
-  name        text not null check (name ~ '^[a-z][a-z0-9_.]{0,62}$'),  -- dots allowed: documents.read
-  kind        text not null check (kind in ('relation', 'permission')),
-  is_userset  boolean not null default false,  -- appears as type#relation somewhere in the model
-  unique (type_id, name)
-);
-
--- which subjects may hold a relation (compiled from "relations")
-create table permissions.allowed_subjects (
-  relation_id          smallint not null references permissions.relations,
-  subject_type         smallint not null references permissions.types,
-  subject_relation     smallint references permissions.relations,
-  unique nulls not distinct (relation_id, subject_type, subject_relation)
-);
-
--- compiled relation axis: holding relation_id satisfies grants_id (reflexive + implies* + permissions)
-create table permissions.satisfies (
-  grants_id    smallint not null references permissions.relations,
-  relation_id  smallint not null references permissions.relations,
-  primary key (grants_id, relation_id)
-);
-
--- object axis: grants as written. immutable; change = revoke + grant
-create table permissions.tuples (
-  id                bigint generated always as identity primary key,
-  object_type       smallint not null references permissions.types,
-  object_id         uuid not null,
-  relation          smallint not null references permissions.relations,
-  subject_type      smallint not null references permissions.types,
-  subject_id        uuid not null,
-  subject_relation  smallint references permissions.relations,
-  expires_at        timestamptz,  -- stretch goal, see section 9
-  created_at        timestamptz not null default now(),
-  unique nulls not distinct (object_type, object_id, relation, subject_type, subject_id, subject_relation)
-);
-create index tuples_direct on permissions.tuples (subject_id, object_type, relation)
-  include (object_id) where subject_relation is null;
-create index tuples_userset on permissions.tuples (subject_type, subject_id, subject_relation, object_type, relation)
-  include (object_id) where subject_relation is not null;
-
--- subject axis, materialized: principal is (transitively) in userset set_type:set_id#set_relation
-create table permissions.memberships (
-  principal_id  uuid not null,
-  set_type      smallint not null,
-  set_id        uuid not null,
-  set_relation  smallint not null,
-  primary key (principal_id, set_type, set_id, set_relation)
-);
-create index memberships_by_set on permissions.memberships (set_type, set_id, set_relation) include (principal_id);
-```
-
-All tables: `revoke all ... from public`, and RLS enabled with no policies, so nothing is readable or writable except through the security-definer functions owned by the extension owner.
-
-### Compilation
-
-`apply_model()` validates the JSON (names, references, no `implies` cycles, permissions reference only relations of the same type), upserts `types` and `relations` by name, rewrites `allowed_subjects` and `satisfies`, marks `is_userset`, and inserts a `models` row. `satisfies` is a recursive CTE over `implies` plus one join for `permissions`. For the model above, the `document` rows are:
-
-| grants | satisfied by |
+| Key | Meaning |
 | --- | --- |
-| `viewer` | `viewer`, `editor` |
-| `editor` | `editor` |
-| `select` | `viewer`, `editor` |
-| `update` | `editor` |
+| `principal: true` | IDs of this type are end subjects (`current_subject_id()` returns one). UUIDs are assumed unique across principal types. |
+| `relations` | What can be granted, and to whom: a principal type (`user`), every principal of a type (`user:*`, public access), or a userset (`team#member`). Plain non-principal subjects (`"org"`) are rejected; use a userset. |
+| `implies` | Holding the key relation also satisfies the listed relations of the same type. Transitive. Cycles are rejected. |
+| `permissions` | Named checks. An array is "any of these". `{"any": [...], "but_not": [...]}` adds exclusions: holding a `but_not` relation vetoes the permission (forbid). Items are relations of the same type, or `parent->P`. Permissions can't be granted directly and can't list other permissions. |
+| `parent` | The types an object of this type may have as its parent. Each object has at most one parent, set with `set_parent()`. Types that appear in some `parent` list are **containers**. |
+| `parent->P` | Inside permission `P` only: whoever has `P` on the parent has `P` here. |
 
-### Maintaining `memberships`
+### Compile-time rules
 
-Only tuples whose relation satisfies an `is_userset` relation (here: `team#member`) touch `memberships`. Document and org grants never do; they are a plain insert.
+`apply_model()` rejects a model, with the offending names in the message (SQLSTATE `22023`), when:
 
-Statement-level `after insert` / `after delete` triggers with transition tables on `tuples`:
+- a type, relation or permission name is invalid (types `^[a-z][a-z0-9_]{0,62}$`; relations and permissions also allow dots, so `documents.read` works), a type has unknown keys, or a value has the wrong shape;
+- a name is both a relation and a permission on the same type (this is also how the `rbac` preset gets "role and permission names can't overlap" for free);
+- a subject names an unknown type, an unknown relation, or a non-principal type without `#relation`, or uses `type:*` on a non-principal type;
+- `implies` names something that isn't a relation of the same type, or has a cycle;
+- a permission has no granting item, an item is not a relation of the same type, or `parent->X` appears inside a permission not named `X`, or in a type without `parent`;
+- **parent inheritance isn't all-or-nothing:** if `X.P` contains `parent->P`, every parent type of `X` must define `P`, and if that parent type has parents of its own, its `P` must contain `parent->P` too;
+- `type:*` is allowed on a relation that feeds a userset (it would make every user a group member, which can't be materialized);
+- the model would make an existing expiring grant feed a userset;
+- it names the preset-owned types `app` or `tenant` (see section 8).
 
-1. Validate new rows against `allowed_subjects` (so even the owner cannot insert ill-typed tuples).
-2. If no changed row affects a userset relation, stop.
-3. Take `pg_advisory_xact_lock(<permissions constant>)`. If `transaction_isolation = 'repeatable read'`, raise (see section 10).
-4. Affected principals `P` = the principal subjects of changed rows, plus current members of any userset subjects (read from `memberships`, which is still in its pre-change state).
-5. For each principal in `P`, recompute its full membership set from `tuples` with an upward recursive CTE (`cycle` clause, `max_depth` default 10, raise if a path exceeds it), then delete rows no longer derived and insert new ones.
+The all-or-nothing rule is what makes the compiled form exact. Without it, "`P` on any ancestor" could over-grant. For example, if `folder.view` didn't inherit but `document.view` did, a document's grandparent org would wrongly count. With the rule, the permission checked at every hop up the chain is the same `P`, so one flat set of `(type, relation)` pairs describes every ancestor.
 
-The same algorithm handles insert and delete, cycles are harmless (the CTE stops on revisits), and cost is `|P| x (memberships per principal)`. Updates to `tuples` are rejected by a trigger.
+## 4. Schema
 
-## 4. Linking to identity
+Ten tables in schema `permissions`. All have `revoke all ... from public` and RLS enabled with no policies, so they are reachable only through the extension's security-definer functions.
+
+| Table | Rows | Notes |
+| --- | --- | --- |
+| `models` | One per applied model version | Full definition (including the preset's types), `applied_at`, `applied_by`. The latest row is active. |
+| `types` | One per type | `smallint` id that stays the same across versions; `principal`, `container`. |
+| `relations` | One per relation or permission | `kind`, `is_userset` (appears as `type#rel`), `feeds_userset` (granting it changes memberships, e.g. `org.admin` when `admin` implies `member` and `org#member` is a userset). |
+| `allowed_subjects` | Compiled `relations` lists | `(relation, subject_type, subject_relation, wildcard)`. |
+| `parent_types` | Compiled `parent` lists | |
+| `satisfies` | The compiled relation axis | `(grants_id, relation_id, via_parent, forbid)`: a tuple with `relation_id` on the object itself (`via_parent = false`) or on any ancestor (`true`) satisfies, or with `forbid` vetoes, `grants_id`. |
+| `tuples` | One per grant | `(object_type, object_id uuid, relation, subject_type, subject_id uuid, subject_relation, expires_at)`. `subject_id` null = public grant. Unique on `(object_id, relation, subject_type, subject_id, subject_relation)` with `nulls not distinct`. Partial covering indexes for direct, userset and public lookups. |
+| `parents` | One per object that has a parent | Primary key `(object_id, object_type)`: one parent per object. Indexed by parent. |
+| `memberships` | principal × transitive userset | `(principal_id, set_type, set_id, set_relation, depth)`, where `depth` is the shortest path (1 = direct). Indexed by principal (PK) and by set. |
+| `ancestors` | container × ancestors | Only for objects of **container** types. Leaf objects (documents) store just their parent link. |
+
+For the `document` type of the model above, `satisfies` holds (relation names shown instead of ids):
+
+| grants | relation | via_parent | forbid |
+| --- | --- | --- | --- |
+| `document.view` | `document.viewer`, `document.editor` | false | false |
+| `document.view` | `document.blocked` | false | true |
+| `document.view` | `folder.viewer`, `folder.editor`, `org.member`, `org.admin` | true | false |
+| `document.edit` | `document.editor` | false | false |
+| `document.edit` | `document.blocked` | false | true |
+| `document.edit` | `folder.editor`, `org.admin` | true | false |
+| `document.viewer` | `document.viewer`, `document.editor` | false | false |
+
+If `folder.view` had its own `but_not`, those rows would appear for `document.view` too, with `via_parent = true, forbid = true`.
+
+### Compilation (`apply_model`)
+
+1. Validate shape, names, references and the rules in section 3 (nothing is touched yet).
+2. If the definition equals the active one, return `unchanged`.
+3. Take the graph advisory lock. Remove types and relations that are gone, along with their tuples and parent links. This needs `p_force => true` if any exist; otherwise the call raises `2BP01` and names how many rows would go.
+4. Upsert types and relations by name (ids are stable). Rewrite `allowed_subjects`, `parent_types`, `container`, `is_userset`.
+5. Rewrite `satisfies`: implication closure for relations (recursive CTE), then each permission's own-type rows (permit and forbid), then the `via_parent` rows. Those are the own-type rows of `P` on every type reachable up the `parent_types` graph.
+6. Set `feeds_userset`. Check the post-compile rules (public on userset feeders, expiring feeders). Delete tuples and parent links the new model no longer accepts (needs force).
+7. If what memberships depend on changed (the userset relations and what feeds them, or the principal types), rebuild `memberships`. If `parent_types` changed, rebuild `ancestors`.
+8. Insert a `models` row. Return the plan: `(change, detail)` rows such as `add relation | document.blocked`, `rebuild memberships | ...`, `version | 7`.
+
+`p_dry_run => true` runs the same code inside a subtransaction and rolls it back at the end, so the plan it returns is exact, including validation errors. The one shortcut: it reports a rebuild without performing it.
+
+## 5. Maintaining derived data
+
+### Memberships
+
+Statement-level `after insert` and `after delete` triggers on `tuples`, with transition tables:
+
+1. Type-check every new row against `allowed_subjects` and `relations` (right type, relation not a permission, allowed subject, no expiry on userset feeders). Even the owner can't insert an ill-typed tuple (`23514`).
+2. If no changed row has a `feeds_userset` relation, stop. Object grants end here: one insert, no lock.
+3. Take the graph lock (below).
+4. Affected principals `P` = principal subjects of changed rows, plus current members of any userset subject of a changed row. At this point `memberships` still reflects the state before the statement.
+5. Recompute every principal in `P` with one upward recursive CTE (`union` over `(principal, set, depth)`, capped at depth 11), then apply the difference: delete rows no longer derived, upsert new rows and changed depths. If any shortest path is longer than 10, raise `54001` (the write is rejected; this resolves the old open question 3).
+
+The same code handles insert and delete. Cycles are harmless because the CTE stops revisiting at the depth cap, and a set reachable at depth ≤ 10 keeps that depth. Diamonds are handled because each principal's set is recomputed from scratch, not patched. Updates are rejected by a row trigger, except for `expires_at`, which re-granting changes (expiry can't affect memberships, see section 9). `truncate` is rejected.
+
+Why `P` is complete: take any principal whose membership changes, and the changed tuple closest to it on the path. Either that tuple's subject is the principal, or the prefix of the path before it uses only unchanged tuples, so the principal was already in that tuple's subject set.
+
+### Ancestors (container closure)
+
+`set_parent(type, id, parent_type, parent_id)` upserts the parent link. For a container object it also takes the graph lock and computes the object's subtree (itself plus its container descendants, from the current closure). It rejects the move if the new parent is in that subtree (a cycle, `23514`), then recomputes the closure rows of the subtree. A chain deeper than 10 raises `54001`. `unset_parent` and `forget_object` do the same. Moving a leaf object (a document) is one upsert, with no lock and no closure rows.
+
+So moving a folder rewrites rows only for its sub-folders. Documents under it are found at read time through `parents` (one index lookup), so they never get closure rows.
+
+### Concurrency
+
+Every write that changes memberships or the container closure (userset grants and revokes, container moves, model changes that trigger a rebuild, `rebuild()`) runs `_lock_graph()`:
+
+- It raises `0A000` under **repeatable read**. The snapshot is fixed before the lock is taken, so a concurrent writer's committed rows would stay invisible and the derived rows would drift.
+- Otherwise it takes one transaction-level advisory lock. In **read committed**, each statement after the lock sees fresh data. **Serializable** is allowed: SSI aborts one of two conflicting writers (`40001`, retry).
+
+Checked with two real sessions (session 1 adds Carol to `eng` and holds the transaction open; session 2 nests `eng` into `platform` meanwhile). With the lock, `verify()` reports no drift afterwards. With the lock removed from a copy of the prototype, the same race leaves Carol's `platform` membership missing, and `verify()` reports it. Plain object grants take no lock.
+
+### Drift: `verify()` and `rebuild()`
+
+`verify()` recomputes all memberships and the full container closure from `tuples` and `parents` and diffs them against the stored rows. It returns `(kind, member_id, set_key, problem)` with `problem` in `missing`, `extra`, or a depth mismatch. No rows means no drift. `rebuild()` takes the lock, throws both derived tables away and recomputes them. Both are full recomputes, so they cost O(all memberships) and are maintenance tools, not something to run per request.
+
+## 6. Identity
 
 ```sql
-create function permissions.current_subject() returns uuid
-language sql stable
-as $$
-  select case
-    when s ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then s::uuid
-  end
-  from (select coalesce(
-    nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub',
-    nullif(current_setting('permissions.subject_id', true), '')
-  ) as s) x
-$$;
+permissions.current_subject_id() returns uuid   -- JWT sub, else permissions.subject_id setting, else null
+permissions.current_subject_type() returns text -- permissions.subject_type setting, else 'user'
 ```
 
-- **Supabase / PostgREST**: no configuration; `sub` is what `auth.uid()` returns. Nothing references the `auth` schema.
-- **Plain Postgres**: the app runs `set local permissions.subject_id = '<uuid>'` per transaction. This setting is only as trustworthy as whoever can run `set`, so it is meant for a trusted middle tier, not end users holding database logins.
-- **No subject** (anon, missing or non-uuid `sub`): returns `null`, and every check returns `false`.
-- **Explicit subject**: every read function takes `subject_id uuid default permissions.current_subject()`.
-- **Cleanup**: no FKs to app tables, so the extension ships trigger functions the app attaches:
+The JWT wins over the setting (PLAN.md §3). A value that isn't a uuid counts as no subject, and every check for a null subject is false. Nothing references the `auth` schema.
+
+Cleanup: there are no FKs to app tables. The app attaches the shipped trigger functions, which read the id column through `to_jsonb(old)` (no dynamic SQL):
 
 ```sql
--- on the app's user table (on Supabase this could be auth.users; the app writes this, not the extension)
-create trigger users_permissions_cleanup after delete on public.profiles
+create trigger profiles_permissions_cleanup after delete on public.profiles
   for each row execute function permissions.on_subject_deleted('id');
--- on any object table
 create trigger documents_permissions_cleanup after delete on public.documents
   for each row execute function permissions.on_object_deleted('document', 'id');
 ```
 
-They read the id column via `to_jsonb(old) ->> tg_argv[n]` (no dynamic SQL) and call `permissions.forget_subject(uuid)` / `permissions.forget_object(text, uuid)`, which delete tuples and fire normal maintenance.
+They call `forget_subject(uuid)` (deletes every grant to the principal) and `forget_object(type, uuid)` (deletes grants on the object, grants to its usersets, and its parent links; its children become roots). Execute on them is revoked from public, so only roles the app trusts can attach them.
 
-## 5. Public API
+## 7. Public API
 
 ```sql
--- model
-permissions.apply_model(definition jsonb, dry_run boolean default false, force boolean default false)
-  returns table (change text, detail text)            -- the plan; executed unless dry_run
-permissions.model() returns jsonb                     -- active definition
+-- model (admin)
+permissions.apply_model(p_definition jsonb, p_dry_run boolean default false, p_force boolean default false)
+  returns table (change text, detail text)
+permissions.model() returns jsonb                                   -- active full definition
 
--- identity
-permissions.current_subject() returns uuid
+-- reads for the current subject (clients, RLS): stable, security definer
+permissions.can(object_type text, object_id uuid, permission text) returns boolean
+permissions.accessible(object_type text, permission text) returns uuid[]
 
--- reads: stable, security definer, set search_path = ''
-permissions.can(object_type text, object_id uuid, permission text,
-                subject_id uuid default permissions.current_subject()) returns boolean
-permissions.accessible(object_type text, permission text,
-                       subject_id uuid default permissions.current_subject()) returns setof uuid
+-- reads for any subject (admin only: they would leak other users' access)
+permissions.can_for(subject_type text, subject_id uuid, object_type text, object_id uuid, permission text) returns boolean
+permissions.accessible_for(subject_type text, subject_id uuid, object_type text, permission text) returns uuid[]
 permissions.who_can(object_type text, object_id uuid, permission text) returns setof uuid
-permissions.explain(object_type text, object_id uuid, permission text,
-                    subject_id uuid default permissions.current_subject())
-  returns table (path text)                           -- slow read-time walk, debugging only
 
--- writes: security definer, execute revoked from public
-permissions.grant(object_type text, object_id uuid, relation text,
-                  subject_type text, subject_id uuid, subject_relation text default null,
-                  expires_at timestamptz default null) returns void
-permissions.revoke(object_type text, object_id uuid, relation text,
-                   subject_type text, subject_id uuid, subject_relation text default null) returns boolean
+-- writes (admin)
+permissions.grant(object_type, object_id uuid, relation, subject_type, subject_id uuid,
+                  subject_relation text default null, expires_at timestamptz default null)
+permissions.revoke(object_type, object_id uuid, relation, subject_type, subject_id uuid,
+                   subject_relation text default null) returns boolean
+permissions.grant_public(object_type, object_id uuid, relation, subject_type text default 'user')
+permissions.revoke_public(object_type, object_id uuid, relation, subject_type text default 'user') returns boolean
+permissions.set_parent(object_type, object_id uuid, parent_type, parent_id uuid)
+permissions.unset_parent(object_type, object_id uuid) returns boolean
 permissions.forget_subject(subject_id uuid) returns bigint
-permissions.forget_object(object_type text, object_id uuid) returns bigint
+permissions.forget_object(object_type, object_id uuid) returns bigint
 
--- maintenance (owner only)
-permissions.verify() returns table (principal_id uuid, set_key text, problem text)  -- recompute and diff
-permissions.rebuild() returns bigint                                                -- truncate + recompute memberships
-permissions.policy_sql(tbl regclass, id_column name, object_type text,
-                       select_permission text, update_permission text) returns text  -- text only, never executed
+-- maintenance (admin)
+permissions.verify() returns table (kind text, member_id uuid, set_key text, problem text)
+permissions.rebuild() returns bigint
 ```
 
-`check` is a reserved word in Postgres: `permissions.check(...)` works when schema-qualified, but a bare `check(...)` is a syntax error, so this design uses `can`. `can`, `accessible` and `who_can` raise on unknown type or permission names, so a typo in a policy fails loudly instead of denying silently.
+- "permission" in the read functions accepts relations too (`can('document', x, 'viewer')`).
+- **Unknown names in reads return false or empty**, they don't raise. This matches the `rbac` preset rule (PLAN.md §6): a policy naming a dropped permission denies instead of breaking every query. Writes validate everything and raise on unknown names.
+- A forbid is a grant of a `but_not` relation, so it is admin-only like every grant (tested: `authenticated` gets `42501`).
+- `grant_public` is a separate function so a null `subject_id` from a failed lookup can never grant public access (`grant` raises on null).
+- `who_can` can't enumerate public grants and doesn't list them. A public forbid empties the list.
+- `can` is used rather than `check` because `check` is a reserved word: `permissions.check(...)` works schema-qualified, but a bare `check(...)` is a syntax error.
 
-`can()` in full, to show there is no recursion:
+Reads have no recursion. `can()` is one statement: resolve the permission's `satisfies` rows; build the candidate objects (the object itself, its parent from `parents`, and the parent's rows in `ancestors`); then probe `tuples` for a direct grant, a public grant, or a grant to a userset the subject is in (`memberships` joined on the unique index). The result is "some permit and no forbid". `accessible()` runs the same three branches from the subject side, then expands grants on containers to the target type's objects through `ancestors` and `parents`. It returns permitted minus forbidden. `who_can()` starts from the object and expands usersets through `memberships_by_set`.
+
+### RLS fast path
+
+`accessible()` returns `uuid[]` natively. The fastest correct policy form is:
 
 ```sql
-create function permissions.can(
-  object_type text, object_id uuid, permission text,
-  subject_id uuid default permissions.current_subject()
-) returns boolean
-language sql stable security definer set search_path = ''
-as $$
-  with p as (
-    select r.type_id, s.relation_id
-    from permissions.relations r
-    join permissions.types t on t.id = r.type_id
-    join permissions.satisfies s on s.grants_id = r.id
-    where t.name = can.object_type and r.name = can.permission
-  )
-  select can.subject_id is not null and exists (
-    select 1 from p
-    join permissions.tuples t on t.object_type = p.type_id and t.relation = p.relation_id
-    where t.object_id = can.object_id and t.subject_relation is null
-      and t.subject_id = can.subject_id
-      and (t.expires_at is null or t.expires_at > now())
-    union all
-    select 1 from p
-    join permissions.tuples t on t.object_type = p.type_id and t.relation = p.relation_id
-    join permissions.memberships m
-      on m.set_type = t.subject_type and m.set_id = t.subject_id and m.set_relation = t.subject_relation
-    where t.object_id = can.object_id and m.principal_id = can.subject_id
-      and (t.expires_at is null or t.expires_at > now())
-  )
-$$;
+id = any ((select permissions.accessible('document', 'view'))::uuid[])
 ```
 
-`accessible()` is the same two branches selecting `t.object_id` with `union`; `who_can()` starts from the object and unions direct principals with `memberships_by_set` lookups.
+The `::uuid[]` is a no-op, because the type already matches, so no cast node remains. Its only job is to make Postgres treat the subquery as an array expression. The plan shows `InitPlan 1` and `Index Cond: (id = ANY ($0))`. Measured against 1M documents and a user with 300 grants, 100–400 pgbench runs per form, on a busy machine (other agents were running tests, so read the ratios, not the absolute numbers):
 
-## 6. Reference scenario
+| Policy form | Page of 50 | Count | Notes |
+| --- | --- | --- | --- |
+| `id = any ((select f())::uuid[])` | 0.36–0.48 ms | 0.47–0.62 ms | **Use this.** No cast and no re-array. |
+| `id = any (array(select unnest(f())))` | 0.55–0.69 ms | 0.66–0.78 ms | Correct; pays for unnest and rebuilding the array. |
+| `id = any (array(select unnest(f())::uuid))` | 0.55–0.71 ms | 0.66–0.82 ms | The PLAN.md §4 form for `text[]` functions; same as above here. |
+| `id = any (f())` | 0.53–0.57 ms | 0.68–0.77 ms | Works only while it lands in an `Index Cond`, where it is evaluated once. In a filter it would run once per row. Don't rely on it. |
+| `id = any ((select f()))` | error | error | `operator does not exist: uuid = uuid[]`: parsed as a subquery comparison. |
+| `id in (select unnest(f()))` | 47 ms | 57 ms | Hashed subplan, seq scan of every row. |
 
-### Model
+PLAN.md §4's warning about `((select f())::uuid[])` (a per-row cast) applies only when `f()` returns `text[]`. For a `uuid[]` function the cast disappears. `scopes_with_permission` returns `text[]` (it's part of the shared preset API), so tenant policies keep the §4 form.
 
-The JSON in section 3, applied once in a migration: `select * from permissions.apply_model($json$ ... $json$::jsonb);`
+## 8. Blessed path: the `rbac` preset
 
-### Setup
+The preset API from PLAN.md §6 is a set of functions that edit the active model and recompile it. The developer never sees the JSON. Two preset-owned types hold the roles: `app` (one object, the nil uuid, for app-wide roles) and `tenant` (one object per scope). `apply_model()` refuses definitions that mention `app` or `tenant`, and carries them over from the active model. So graduating to per-object sharing is one `apply_model()` call with only the app's own types, and the roles are untouched. `user` is added if the developer's model omits it.
+
+| Preset call | What happens |
+| --- | --- |
+| `create_role('editor', '{documents.edit}', '{viewer}')` | Adds relation `editor` (subjects `user`), `"editor": ["viewer"]` in `implies`, and `editor` to permission `documents.edit`, on both `app` and `tenant`. Recompiles (one new model version). |
+| `drop_role('editor')` | Fails (`2BP01`) while another role's `implies` lists it. Otherwise removes the relation, removes it from permission lists, drops permissions left empty, and recompiles with force, which deletes its assignments. |
+| `assign_role(bob, 'editor', acme)` | `grant('tenant', acme, 'editor', 'user', bob)`. Unknown role raises `22023`. |
+| `has_permission('documents.edit', acme)` | `can` restricted to `kind = 'permission'` on `tenant:acme`. |
+| `has_role('viewer')` | `can` restricted to `kind = 'relation'` on `app`, so inherited roles count and permission names don't. |
+| `scopes_with_permission('documents.read')` | `accessible('tenant', ...)` as `text[]`. |
+| `user_permissions(bob, acme)` | The `permission`-kind relations on `tenant` for which `can_for` is true. |
+| `users_with_role('admin', acme)` | `who_can('tenant', acme, 'admin')` as text. |
+
+**Signatures take `text` IDs, exactly as in PLAN.md §6, not `uuid`.** The shared specs require it: they compare `scopes_with_permission` and `users_with_role` with `text[]` arrays (`tap.set_eq` needs the same element type on both sides), and they pass `org_id::text` and `md5(...)::uuid::text`. Text-to-uuid is an explicit-only cast, so a `uuid` parameter would fail with "function does not exist". Underneath, everything is uuid. On reads, a scope that isn't a uuid gives false; on writes it raises `22P02`. `has_permission(text, uuid)` and `has_role(text, uuid)` overloads exist so policies can pass a uuid column without a cast. An unknown literal still resolves to the `text` version, so there is no ambiguity.
+
+Roles aren't usersets, so `memberships` stays empty for an RBAC-only app and none of the trigger machinery runs past step 2. The RBAC scenario (PLAN.md §6) and graduation (`c/40_graduation`) pass unchanged; every RBAC answer is identical before and after adding sharing.
+
+- **A model version per `create_role`.** Fine for migrations. An app that creates roles at runtime churns versions; a batch `define_roles(jsonb)` would fit better.
+- **UUID only.** Apps with `bigint` or `text` user IDs need a mapping table.
+
+## 9. v0.0.2 features (PLAN.md §10), as built
+
+| Goal | How C does it | Spec |
+| --- | --- | --- |
+| G10 parents | `"parent": [...]` + `"parent->P"`; `set_parent()`; container closure. The RLS policy is a single branch: `id = any ((select permissions.accessible('document', 'view'))::uuid[])`. `who_can` includes parent-derived subjects. Cycles are **rejected on write** (`23514`). | `c/50_parents` 13/13 |
+| G11 public | `"viewer": ["user", "user:*"]`, `grant_public()` / `revoke_public()`. Null subject is denied. | `c/51_public` 7/7 |
+| G12 forbid | `{"any": [...], "but_not": ["blocked"]}`; the forbid is `grant(..., 'blocked', ...)`. Forbid beats parent-derived access. | `c/52_forbid` 9/9 |
+| G13 conditions | Resource conditions stay in RLS on the app's column: `id = any (accessible('document','edit')) or (status = 'published' and id = any (accessible('document','view')))`. Grant expiry is `expires_at` on the tuple. | `c/53_conditions` 6/6 |
+
+**Forbid semantics are deny-overrides across the inheritance chain (Cedar-like), not OpenFGA's exact `but not`.** A `but_not` relation of permission `P` on any type in the chain vetoes `P` for everything that inherits `P` from that object. A forbid on a folder therefore blocks its documents even for someone who is a direct viewer of a document. In OpenFGA, `document.view = (viewer or view from parent) but not blocked` would subtract the folder's `blocked` only from the folder-derived part. The flat compiled form can't express that difference, and "forbid always wins" is easier to reason about. Exclusion relations must be relations of the permission's own type.
+
+**Expiry** works on any grant that doesn't feed a userset. Expiring group memberships (or anything that implies one) are rejected at `grant()` (`0A000`) and at compile time. A principal's membership would expire at the max over paths of the min along each path, which the materialized table doesn't model.
+
+**Not built:** `explain()` (a provenance walk for debugging), `policy_sql()` (generated policy text), rename hints in `apply_model()`, per-key locking. CEL would compile into SQL text at model time rather than be interpreted per row; Cedar `when`/`unless` over arbitrary attributes doesn't compile to lookups. Both are unchanged from the earlier draft.
+
+## 10. Reference scenario
+
+The model in section 3 without `folder`, `parent` and `blocked` (it's spelled out in `test/spec/c/30_zanzibar_reference.sql`), then:
 
 ```sql
-\set acme   'ace00000-0000-0000-0000-000000000001'
-\set eng    'e0000000-0000-0000-0000-000000000001'
-\set readme 'd0c00000-0000-0000-0000-000000000001'
-\set alice  'a11ce000-0000-0000-0000-000000000001'
-\set bob    'b0b00000-0000-0000-0000-000000000001'
-\set carol  'ca000000-0000-0000-0000-000000000001'
-\set dave   'da000000-0000-0000-0000-000000000001'
-
-create table public.documents (
-  id     uuid primary key default gen_random_uuid(),
-  org_id uuid not null,
-  title  text not null
-);
-create index on public.documents (org_id);
-insert into public.documents (id, org_id, title) values (:'readme', :'acme', 'readme');
-
 select permissions.grant('org', :'acme', 'admin',  'user', :'alice');
 select permissions.grant('org', :'acme', 'member', 'user', :'carol');
 select permissions.grant('team', :'eng', 'member', 'user', :'carol');
@@ -308,192 +302,100 @@ select permissions.grant('document', :'readme', 'editor', 'user', :'bob');
 select permissions.grant('document', :'readme', 'viewer', 'team', :'eng', 'member');
 ```
 
-Resulting state: 6 rows in `tuples`, 2 rows in `memberships` (carol and dave in `team:eng#member`). The org and document grants wrote nothing else.
+Result: 6 tuples, 2 membership rows (Carol and Dave in `team:eng#member`).
 
-### RLS policies
+- **Can Bob update readme?** `can_for('user', bob, 'document', readme, 'editor')`: one probe, true.
+- **Which documents can Dave select?** `accessible_for('user', dave, 'document', 'viewer')`: his one membership joins the userset grant, giving `{readme}`.
+- **Who can view readme?** `who_can('document', readme, 'viewer')`: Bob, Carol and Dave.
 
-Tenant RBAC is checked at the tenant, using the app's own `org_id` column. In v0.0.1 the extension does not know that a document belongs to an org (that is parent inheritance, section 9), so the policy has two arms.
+With parents (`c/50_parents`), `set_parent('document', readme, 'org', acme)` (or through a folder) makes Alice and Carol appear in `who_can`. The policy then collapses to the single branch shown in section 9 instead of a hand-written `org_id` arm. At scale the two-arm policy on the app's `org_id` column is still the faster form for org-wide roles (section 11).
 
-```sql
-alter table public.documents enable row level security;
+## 11. Performance
 
-create policy documents_select on public.documents for select
-using (
-  id = any (array(select permissions.accessible('document', 'select')))
-  or org_id = any (array(select permissions.accessible('org', 'view_documents')))
-);
-
-create policy documents_update on public.documents for update
-using (
-  permissions.can('document', id, 'update')
-  or permissions.can('org', org_id, 'edit_documents')
-)
-with check (permissions.can('org', org_id, 'edit_documents') or permissions.can('document', id, 'update'));
-
-create policy documents_insert on public.documents for insert
-with check (permissions.can('org', org_id, 'edit_documents'));
-```
-
-`select permissions.policy_sql('public.documents', 'id', 'document', 'select', 'update')` returns the document arm of these statements as text (identifiers quoted with `format('%I')`), for the developer to review and paste.
-
-### The three queries
-
-**Can Bob update `readme`?** `permissions.can('document', :'readme', 'update', :'bob')`. `satisfies(update) = {editor}`; probe `tuples` for (document, readme, editor, bob): found, `true`. The org arm (`edit_documents` on acme for Bob) is false and irrelevant. Through RLS, `update documents set title = 'x' where id = :'readme'` as Bob updates 1 row.
-
-**Which documents can Dave select?** `set local permissions.subject_id = :'dave'; select id from documents;` The first initplan runs `accessible('document', 'select')`: `satisfies(select) = {viewer, editor}`; Dave has no direct tuples; his memberships are `{team:eng#member}`, which joins to the tuple (document, readme, viewer, team:eng#member). Result `{readme}`. The second initplan, `accessible('org', 'view_documents')`, is empty (`satisfies = {member, admin, owner}`, Dave holds none). Postgres does a BitmapOr of `documents_pkey` and the `org_id` index and returns `readme`.
-
-**Who can view `readme`?** `permissions.who_can('document', :'readme', 'select')` returns Bob (direct editor), Carol and Dave (via `memberships_by_set` on `team:eng#member`). The org path is the app's second query in v0.0.1: `who_can('org', :'acme', 'view_documents')` returns Alice and Carol. The union is Alice, Bob, Carol, Dave. Having to union by hand is a real v0.0.1 limitation; parent inheritance removes it.
-
-## 7. Blessed path: the `rbac` preset
-
-The preset API from [PLAN.md §6](../PLAN.md) is a set of functions that edit the active model and call `apply_model()`. The developer never sees the JSON. Two built-in types hold the roles: `app` (one object, the nil UUID `00000000-0000-0000-0000-000000000000`, for app-wide roles) and `tenant` (one object per scope).
-
-### How it maps
-
-| Preset call | What happens |
-| --- | --- |
-| `create_role('editor', '{documents.edit}', '{viewer}')` | Adds `editor` to `relations` (subjects: `user`) on `app` and `tenant`, `"editor": ["viewer"]` to `implies`, and `editor` to `permissions.documents.edit`. Then calls `apply_model()`. |
-| `assign_role(bob, 'editor', acme)` | `grant('tenant', acme, 'editor', 'user', bob)` |
-| `has_permission('documents.edit', acme)` | `can('tenant', acme, 'documents.edit')` |
-| `scopes_with_permission('documents.read')` | `array(select accessible('tenant', 'documents.read'))` |
-| `user_permissions(bob, acme)` | The `permission`-kind relations on `tenant` for which `can()` is true |
-| `users_with_role('admin', acme)` | `who_can('tenant', acme, 'admin')` |
-
-The compiled model for the scenario (the `tenant` type is identical to `app`):
-
-```json
-{
-  "types": {
-    "user": { "principal": true },
-    "app": {
-      "relations": { "viewer": ["user"], "editor": ["user"], "admin": ["user"] },
-      "implies": { "editor": ["viewer"], "admin": ["editor"] },
-      "permissions": {
-        "documents.read": ["viewer"], "documents.edit": ["editor"],
-        "documents.delete": ["admin"], "users.manage": ["admin"]
-      }
-    }
-  }
-}
-```
-
-### RBAC scenario
-
-What the developer writes is the same as in every design (see PLAN.md §6). The differences are UUIDs everywhere and no casts on the column side:
-
-```sql
-select permissions.create_role('viewer', '{documents.read}');
-select permissions.create_role('editor', '{documents.edit}', '{viewer}');
-select permissions.create_role('admin',  '{documents.delete,users.manage}', '{editor}');
-
-select permissions.assign_role(:'alice', 'admin');
-select permissions.assign_role(:'bob',   'editor');
-select permissions.assign_role(:'carol', 'viewer');
-
-create policy documents_select on documents for select using ((select permissions.has_permission('documents.read')));
-create policy documents_update on documents for update using ((select permissions.has_permission('documents.edit')));
-create policy documents_delete on documents for delete using ((select permissions.has_permission('documents.delete')));
-
--- tenant-scoped variant
-create policy documents_select on documents for select
-  using (org_id = any (array(select unnest(permissions.scopes_with_permission('documents.read'))::uuid)));
-create policy documents_update on documents for update
-  using (permissions.has_permission('documents.edit', org_id));
-```
-
-What's stored underneath: one `models` row per `create_role` call; 14 `relations` rows (3 roles and 4 permissions on each of `app` and `tenant`); `satisfies` rows such as `documents.read` satisfied by `{viewer, editor, admin}`; and one tuple per assignment. Roles aren't usersets, so `memberships` stays empty and none of the trigger machinery runs.
-
-Graduation: the preset adds a `document` type to the model (`editor`, `viewer`, `editor` implies `viewer`, permissions `select` and `update`), which writes catalog rows only. Then `grant('document', <doc id>, 'editor', 'user', dave)` and one extra branch in the select policy: `or id = any (array(select permissions.accessible('document', 'select')))`. The RBAC tuples are untouched.
-
-Queries:
-
-- **Can Carol edit documents?** No. `satisfies(documents.edit) = {editor, admin}` on `app`, and Carol holds `viewer`.
-- **What permissions does Bob have in `globex`?** `{documents.read}`.
-- **Who are the admins of `acme`?** `who_can('tenant', acme, 'admin')` returns Alice.
-
-### Tested (partly)
-
-`apply_model()` is only described in prose, so the catalog was compiled by hand with a recursive query that mimics it. The rest ran on Postgres 16: the §3 schema, `current_subject()`, the §5 `can()`, a matching `accessible()`, and the preset functions. Carol can't edit; Bob gets `{documents.read}` in `globex`; Bob's edit scopes are exactly `{acme}`. The original name rule (`^[a-z][a-z0-9_]{0,62}$`) rejected `documents.read`, so it now allows dots. Names are only stored as data in this design, never used as SQL identifiers, so dots are safe.
-
-### Fit
-
-- **RBAC is the cheapest case.** Role hierarchies compile into `satisfies`, so a permission check is one lookup plus one index probe. No closure maintenance, because roles aren't groups.
-- **A model change per `create_role`.** Each call creates a new model version. That's fine for migrations, but an app that creates roles at runtime (for example customer-defined roles) churns model versions. The preset could also accept every role in one call (`permissions.define_roles(jsonb)`), which matches the model-file style better.
-- **UUID only.** It fits Supabase (`auth.users.id` is a UUID), but apps with `bigint` or `text` user IDs can't use it without a mapping table.
-
-## 8. RLS performance
-
-### Read cost
+### Reads
 
 | Operation | Work |
 | --- | --- |
-| `can()` | 1 `satisfies` lookup (a few rows) + 1 unique-index probe per satisfying relation + (principal's memberships, typically under 50) x index probes on `tuples_userset` |
-| `accessible()` | 1 range scan on `tuples_direct` + memberships x range scans on `tuples_userset`; output size dominates |
-| `who_can()` | object range scan on the unique index + `memberships_by_set` per userset grant |
+| `can()` | `satisfies` rows (a few) × candidate objects (1 + parent chain, ≤ 11) × unique-index probes, plus memberships (typically < 50) × probes. |
+| `accessible()` | Range scans of `tuples_direct`, `tuples_public`, and `tuples_userset` per membership; then, for grants on containers, `ancestors` and `parents` lookups. The output size dominates. |
+| `who_can()` | Object-side probes plus `memberships_by_set` per userset grant. |
 
-No recursion and no depth loop at read time. Cost depends on the principal's group count and the size of the answer, not on graph depth.
+Small-scale benchmark (`./bench/run.sh --impl prototypes/c-compiled-model.sql --duration 3`: 10k documents, 1,000 users, 50 teams; machine shared with other test runs, so this is a sanity check, not a comparison):
 
-### 1M-row `documents`
+| Workload | p50 ms | p95 ms | Budget (p95) |
+| --- | --- | --- | --- |
+| `rbac_check` | 0.23 | 0.31 | 1 |
+| `rbac_select_page` | 0.40 | 0.53 | 2 |
+| `rbac_select_count` | 0.36 | 0.51 | 2 |
+| `rbac_update_one` | 0.67 | 0.87 | 4 |
+| `write_assign_role` | 0.13 | 0.17 | 1 |
+| `share_list_objects` | 0.22 | 0.35 | 2 |
+| `share_select_page` | 0.52 | 0.63 | 5 |
+| `write_share` | 0.10 | 0.14 | 1 |
 
-- Use `col = any(array(select permissions.accessible(...)))`. The array is an initplan computed once per query, and `= any($1)` is indexable, so each arm becomes an index or bitmap scan and the arms combine with BitmapOr. `id in (select ...)` also runs once (hashed subplan) but forces a scan of every row to probe the hash; prefer it only when the accessible set is very large (an admin of an org owning most rows, where a seq scan wins anyway).
-- Index `documents (org_id)` for the tenant arm.
-- Never put `can()` in a SELECT policy on a big table: it runs per row. Use it for UPDATE/DELETE/INSERT, where Postgres evaluates it on the few target rows.
-- Rough expectation (to verify in phase 4): a user with a few hundred direct or team grants scans `tuples` in well under 1 ms; the `documents` side costs the same as `where id = any(...) or org_id = any(...)` written by hand.
+The large-scale comparison with Design A is a later, serial step.
 
-### Write cost
+**Org-wide access through parents** makes `accessible()` return every document id under the org. For an admin of an org with 1M documents that's a 1M-element array per query, the same cost A or B pay for an equivalent single-branch policy. The two-arm policy (`org_id = any (scopes...) or id = any (accessible(...))`) avoids it and stays the recommended form for large tenants. This was not benchmarked.
 
-| Operation | Rows written |
-| --- | --- |
-| Grant a user or a team on a document or org | 1 tuple |
-| Revoke the same | 1 tuple delete |
-| Add a user to team `eng` (eng nested in k ancestor usersets) | 1 tuple + (1 + k) memberships |
-| Remove a user from a team | 1 tuple delete + recompute of 1 principal |
-| Nest team A (n members) into team B (k ancestors) | 1 tuple + n x (1 + k) memberships, n principal recomputes |
-| Change `implies` / `permissions` | rewrite `satisfies` (tens of rows); recompute principals of affected userset relations only |
-| Add a relation or type to the model | catalog rows only |
+### Writes
 
-The expensive cases are nesting or un-nesting a large group and changing the implications of a relation that is used as a userset. Both scale with group size, not with object count.
+| Operation | Rows written | Lock |
+| --- | --- | --- |
+| Grant or revoke on a document or org (not a userset feeder) | 1 tuple | none |
+| Add a user to team `eng` (eng in k ancestor usersets) | 1 tuple + (1 + k) memberships | global |
+| Nest team A (n members) into team B (k ancestors) | 1 tuple + n × (1 + k) memberships; n principals recomputed | global |
+| Move a document | 1 parent link | none |
+| Move a folder with s sub-folders | 1 parent link + closure rows of s + 1 folders | global |
+| Model change touching usersets or what feeds them | full `memberships` rebuild | global |
+| Model change touching `parent` lists | full `ancestors` rebuild | global |
+| Other model changes (roles, permissions, new types) | catalog rows only | global (brief) |
 
-## 9. How later features fit
+`write_nest_team` (nest the 1,000-member team `nest-src` into a random team of the 50-team tree, rolled back each time; small scale): **about 14 ms per nest with 1 client** (3,000 membership rows for a 3-level target). **With 4 clients, latency is about 61 ms and tps stays flat at 65–70**: the global lock serializes them. A plain object grant (`write_share`) is about 0.1 ms. This is the write where C pays and A doesn't.
 
-**Parent inheritance (v0.0.2).** Add tupleset-to-userset to the format: `"relations": {"org": ["org"]}, "permissions": {"select": ["viewer", "org->view_documents"]}`. The parent link is a tuple `(document:readme, org, org:acme)`. Because the model is static, the compiler knows each type's parent chain length. For fixed chains (document to org) `can()` adds one join per hop and `accessible()` adds "objects whose parent is in `accessible(parent_type, perm)`". No object fan-out is materialized. Self-recursive parents (folder in folder) reuse the `memberships` machinery as an ancestor closure (`folder:x` is "in" `folder:y#parent`). `who_can()` then covers the org path, and the two-arm policy can collapse to one arm, although the two-arm form using the app's `org_id` column stays faster for RLS.
+## 12. Weaknesses and risks
 
-**Attribute conditions.** Two kinds. Grant conditions such as expiry live on the tuple (`expires_at`, already in the schema). They work in v0.0.1 for direct object grants. Expiry on *membership* tuples is harder (a principal's membership expires at the max over paths of the min along each path) and is deferred. Resource conditions ("only published documents") belong in the RLS policy on the app's own columns (`and status = 'published'`), where the planner can use indexes. The extension should not copy app attributes.
+1. **The write path is the bulk of the code and where bugs live.** The prototype is about 1,860 lines (A is about 620): compiler about 590, derived-data maintenance about 350, preset about 250. A missed case causes silent drift. `verify()` and `rebuild()` mitigate this; a read-time walk has no drift by construction. Four deliberately broken copies (no propagation on nesting, forbid ignored, parent traversal cut to one hop, `verify()` blind) were each caught by the specs, but drift bugs outside the tested shapes would not be.
+2. **One global lock** for every membership, container-move and rebuild write. Bulk directory syncs (SCIM) and concurrent team edits queue: nesting a 1,000-member team holds it for about 14 ms. Per-key locking needs careful lock ordering and is deferred.
+3. **`repeatable read` is refused for those writes.** It surprises users. ORMs that default to it would have to switch for permission writes.
+4. **Write latency lands in the app's transaction.** Nesting a 10k-member team writes 10k+ rows synchronously. A TLE can't ship a background worker.
+5. **Model changes that touch usersets rebuild all memberships** under the lock, in one transaction. Fine for small apps; at 5M membership rows it's a maintenance window.
+6. **Parent links duplicate app data.** The app's `folder_id` column and `set_parent()` must be kept in sync (the specs do both by hand). A helper trigger could read the column like `on_object_deleted` does, but it isn't built. One parent per object.
+7. **Single-branch parent policies materialize large arrays** for org-wide roles (section 11).
+8. **Forbid is deny-overrides** (section 9), not OpenFGA's exact `but not`; exclusions are same-type relations only.
+9. **No expiring group memberships.** Rejected rather than silently wrong.
+10. **`who_can` omits public grants.**
+11. **uuid only**, and uuids are assumed unique across principal types (memberships key on the uuid alone).
+12. **Storage:** memberships grow as principals × transitive groups (100k users in 50 groups is 5M rows).
+13. **Provenance is lost.** Memberships say *that* Carol is in `platform`, not why (only the shortest depth). `explain()` isn't built.
+14. **"Compiled" only partly.** Checks still go through generic PL/pgSQL functions the planner can't see into. The gains are no recursion and typed keys, not SQL inlined per type.
 
-**CEL.** The compiled approach suggests compiling CEL at `apply_model()` time into SQL text, delivered through `policy_sql()` for review, instead of interpreting CEL per row in PL/pgSQL. A per-row interpreter is possible but slow. Either way the parser is the expensive part and comes later.
+## 13. Deviations from the earlier draft
 
-**Cedar.** Cedar's entity hierarchy and `principal in Group::"eng"` map directly onto `memberships`, and Cedar actions map onto `permissions`. `forbid` fits as an exclusion list per permission (`"select": {"any": ["viewer"], "but_not": ["blocked"]}`) compiled into a second `excludes` table; `can()` becomes "satisfied and not excluded". Cedar `when`/`unless` clauses over arbitrary attributes do not compile to lookups, so full Cedar compatibility would need an expression evaluator, the same problem as CEL.
+| Earlier draft | Built | Why |
+| --- | --- | --- |
+| Read functions take `subject_id uuid default current_subject()` | Separate admin-only `can_for`, `accessible_for`; `who_can` admin-only | A defaulted parameter lets any client ask about any user (PLAN.md §3). |
+| `current_subject()` | `current_subject_id()` (uuid) and `current_subject_type()` | Shared identity contract (`01_identity`). |
+| `can`, `accessible`, `who_can` raise on unknown names | Return false or empty | Same rule as the preset (PLAN.md §6); resolves open question 6. Writes still validate. |
+| Preset takes `uuid` IDs | `text` IDs as in PLAN.md §6, plus `uuid` overloads for `has_permission` and `has_role` | The shared specs and the bench seed need the text signatures (section 8). |
+| Preset edits "the active model" | `app` and `tenant` are reserved; `apply_model()` carries them over | Otherwise graduating with a model that omits them would drop every role. |
+| `accessible()` returns `setof uuid` | Returns `uuid[]`, used as `= any ((select f())::uuid[])` | Measured fastest (section 7). |
+| Parent link as a tuple (`document:readme#org@org:acme`), syntax `org->view_documents` | Dedicated `parents` table (one parent per object), `"parent": [...]` + `parent->P` inside `P` only, all-or-nothing up the hierarchy | Single parent makes a move one upsert and the closure a chain. The same-name rule keeps the flat compiled form exact (section 3). |
+| Recursive parents reuse the memberships machinery | Separate `ancestors` table, for container types only | Leaf objects never get closure rows, so moving a folder doesn't fan out to documents. |
+| Forbid as `excludes` table | `forbid` flag on `satisfies`, deny-overrides along the chain | One table; semantics in section 9. |
+| `user:*` was an open question | `type:*` in the model, `grant_public`, `tuples.subject_id` null | G11. Separate function so a null can't grant public access. |
+| Membership expiry deferred | Rejected on write and at compile time | Fail loudly instead of drifting. |
+| Max depth: reject or truncate (open question) | Reject (`54001`); `memberships.depth` stores the shortest path | Open question 3. |
+| `tuples` immutable | Only `expires_at` can change (re-granting updates it); `truncate` blocked | `31_zanzibar_groups` re-grants with a new expiry. |
+| `verify()` returns `(principal_id, set_key, problem)` | `(kind, member_id, set_key, problem)`, covering memberships and ancestors | Two derived tables. |
+| `explain()`, `policy_sql()` | Not built | Not needed by any goal; open question 8 stands. |
 
-## 10. Weaknesses and risks
+## 14. Open questions
 
-1. **The write path is the hard part, and the bulk of the code.** Incremental maintenance, isolation checks and model migration are where bugs will live. A missed case causes silent drift (wrong access, possibly a grant that should be gone). `verify()` and `rebuild()` mitigate this but do not remove it. A read-time walk has no drift by construction.
-2. **Concurrency needs a global lock.** Two concurrent membership writes can each miss the other's uncommitted rows (Carol added to `eng` while `eng` is nested into `platform`), leaving Carol out of `platform`. v0.0.1 serializes all *membership-affecting* writes with one advisory lock. Plain object grants take no lock. Bulk directory syncs (SCIM) will queue behind each other. Per-key locking is possible but needs careful lock ordering and is deferred.
-3. **`repeatable read` is unsupported for membership writes.** The snapshot is fixed before the trigger takes the lock, so the race above can't be fixed there; the trigger raises. `read committed` works (each statement after the lock sees fresh data) and `serializable` works (SSI detects the conflict and aborts one transaction). This surprises users.
-4. **Write latency lands in the app's transaction.** Nesting a 10k-member team writes 10k+ rows synchronously. There is no async option without a background worker, which a TLE can't ship.
-5. **uuid-only IDs.** Apps with `bigint` or `text` keys can't use it without a mapping table. Supporting other key types would bring back casts or need per-type columns.
-6. **No real FKs.** Cleanup relies on triggers the app must remember to attach. Forgetting them leaves orphaned grants, which are harmless until an ID is reused (rare with uuids).
-7. **Storage for `memberships`.** It grows as principals x transitive groups. 100k users in 50 groups each is 5M rows, roughly several hundred MB with indexes.
-8. **Provenance is lost.** `memberships` says *that* Carol is in `platform`, not *why*. `explain()` has to redo the walk.
-9. **Model changes can be heavy.** Changing `implies` on a userset relation, or removing a relation with `force`, recomputes many principals under the global lock in one transaction. Renames look like drop + add unless we add a rename hint.
-10. **More SQL in policies in v0.0.1.** The app writes a document arm and an org arm, and unions `who_can()` by hand, until parent inheritance lands.
-11. **Assumes uuids are unique across principal types.** `memberships` and direct grants key on the uuid alone.
-12. **It is "compiled" only partly.** Checks still go through generic security-definer functions the planner can't see into. The gain is no recursion and typed keys, not inlined SQL per type.
-
-## 11. Implementation phases
-
-1. **Catalog and compiler.** Schema, `apply_model()` validation and `satisfies` compilation (no data yet), `model()`, `current_subject()`. Tests: rejected models (cycles, bad names, dangling references).
-2. **Grants and reads without groups.** `grant`/`revoke` with type checking, `can`, `accessible`, `who_can` for direct grants and implications. Reference scenario for Alice and Bob.
-3. **Memberships.** Statement triggers, upward recompute, advisory lock, isolation check, depth cap, `verify`, `rebuild`, `explain`. Concurrency tests with two sessions. Full reference scenario.
-4. **Lifecycle.** Model diffing (`dry_run`, `force`), `forget_*` and cleanup triggers, `policy_sql`, `expires_at` on direct grants. 1M-row benchmark: SELECT, single-row UPDATE, team nesting writes.
-5. **v0.0.2.** Parent inheritance (fixed chains first, then recursive folders), per-key locking if phase 4 benchmarks show lock contention.
-
-## 12. Open questions
-
-1. Is uuid-only acceptable for v0.0.1, or do we need a per-type key kind (`uuid` | `text`) from the start?
-2. JSON only, or ship an OpenFGA-style DSL parser in PL/pgSQL as well?
-3. When a membership path exceeds `max_depth`: reject the write (proposed) or silently truncate like a read-time walk would?
-4. Global lock in v0.0.1, or invest in per-key locking now?
-5. Should `memberships` hold a reflexive row per principal so `can()` needs one branch instead of two? That costs a row per principal and requires knowing principals the extension does not otherwise track.
-6. Should unknown permission names in `can()` raise (proposed) or return `false`? Raising breaks a query after a model change that removes a permission still used in a policy.
-7. How should `apply_model()` express renames, so they don't drop and re-add tuples?
+1. Is uuid-only acceptable, or do we need a per-type key kind (`uuid` | `text`)?
+2. JSON only, or also an OpenFGA-style DSL (client-side)?
+3. Global lock, or per-key locking now? Measure `write_nest_team` with concurrent clients at large scale first.
+4. Should `memberships` hold a reflexive row per principal so `can()` needs one branch instead of two? That costs a row per principal and requires knowing principals the extension doesn't otherwise track.
+5. How should `apply_model()` express renames, so they don't drop and re-add tuples?
+6. Is deny-overrides the forbid semantics we want, or do we need OpenFGA's exact `but not`?
+7. Should the extension ship a trigger that keeps `parents` in sync with an app column (`folder_id`)?
 8. Is `policy_sql()` worth shipping, given the developer still pastes the result into a migration?
