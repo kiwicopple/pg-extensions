@@ -22,6 +22,8 @@ create table permissions.relations (
     object_type text not null references permissions.object_types(name) on delete cascade,
     relation    text not null,
     implied_by  text[] not null default '{}',
+    from_parent text[] not null default '{}',  -- G10: relations inherited from the object's `parent`
+    unless      text[] not null default '{}',  -- G12: excluded for subjects holding one of these relations
     description text,
     primary key (object_type, relation)
 );
@@ -89,14 +91,28 @@ as $$
     on conflict (name) do update set description = coalesce(excluded.description, object_types.description)
 $$;
 
--- Defining a relation again replaces its implied_by list.
-create function permissions.define_relation(p_object_type text, p_relation text, p_implied_by text[] default '{}')
+-- Defining a relation again replaces all three lists.
+--
+--   implied_by  relations on the same object that imply this one (editor => viewer)
+--   from_parent relations on the object's parent that imply this one (G10, OpenFGA's
+--               "viewer from parent"). The parent is whatever the object's `parent`
+--               tuples point at, of any type; the relation is looked up by name there.
+--   unless      relations on the same object that exclude this one (G12, OpenFGA's
+--               "but not"). A subject holding one of them directly never reaches this
+--               relation on that object, whichever path would have granted it.
+create function permissions.define_relation(
+    object_type text, relation text,
+    implied_by text[] default '{}', from_parent text[] default '{}', unless text[] default '{}'
+)
 returns void
 language sql security definer
 set search_path = ''
 as $$
-    insert into permissions.relations (object_type, relation, implied_by) values (p_object_type, p_relation, p_implied_by)
-    on conflict (object_type, relation) do update set implied_by = excluded.implied_by
+    insert into permissions.relations (object_type, relation, implied_by, from_parent, unless)
+    values (define_relation.object_type, define_relation.relation,
+            define_relation.implied_by, define_relation.from_parent, define_relation.unless)
+    on conflict on constraint relations_pkey do update
+    set implied_by = excluded.implied_by, from_parent = excluded.from_parent, unless = excluded.unless
 $$;
 
 -- ============================================================================
@@ -117,6 +133,20 @@ begin
         select 1 from permissions.relations where object_type = p_subject_type and relation = p_subject_relation
     ) then
         raise exception 'unknown relation %#%', p_subject_type, p_subject_relation using errcode = '22023';
+    end if;
+    -- G11: `user:*` means every user; `team:*#member` would mean nothing
+    if p_subject_id = '*' and p_subject_relation <> '' then
+        raise exception 'a wildcard subject can''t have a relation' using errcode = '22023';
+    end if;
+    -- G10/G12: parent links and exclusions only match one concrete subject.
+    -- A blocked userset would need the walk itself to decide who is in it.
+    if (p_subject_relation <> '' or p_subject_id = '*') and (
+        p_relation = 'parent'
+        or exists (select 1 from permissions.relations r
+                   where r.object_type = p_object_type and p_relation = any (r.unless))
+    ) then
+        raise exception 'relation %#% only takes a direct subject, not a userset or wildcard', p_object_type, p_relation
+            using errcode = '22023';
     end if;
 
     insert into permissions.tuples (object_type, object_id, relation, subject_type, subject_id, subject_relation, expires_at)
@@ -140,6 +170,62 @@ begin
       and subject_type = p_subject_type and subject_id = p_subject_id
       and subject_relation = coalesce(p_subject_relation, '');
     return found;
+end;
+$$;
+
+-- G10: an object's parent. Replaces any existing parent; null clears it.
+-- A parent is just the tuple `child#parent@parent_type:parent_id`.
+create function permissions.set_parent(
+    p_object_type text, p_object_id text, p_parent_type text, p_parent_id text
+)
+returns void
+language plpgsql security definer
+set search_path = ''
+as $$
+begin
+    delete from permissions.tuples
+    where object_type = p_object_type and object_id = p_object_id and relation = 'parent';
+    if p_parent_id is not null then
+        perform permissions.grant(p_object_type, p_object_id, 'parent', p_parent_type, p_parent_id);
+    end if;
+end;
+$$;
+
+-- G10: keep parent tuples in sync with an app column, so they can't drift.
+--
+--   create trigger documents_parent
+--   after insert or update of folder_id or delete on public.documents
+--   for each row execute function permissions.sync_parent('document', 'folder', 'folder_id');
+--
+-- Arguments: object type, parent type, parent column, id column (default 'id').
+-- Execute is revoked from public: Postgres checks it when the trigger is
+-- created, not when it fires, so only the owner can attach it to a table.
+create function permissions.sync_parent()
+returns trigger
+language plpgsql security definer
+set search_path = ''
+as $$
+declare
+    id_col text := coalesce(tg_argv[3], 'id');
+    o jsonb;
+    n jsonb;
+begin
+    if tg_op in ('UPDATE', 'DELETE') then
+        o := to_jsonb(old);
+    end if;
+    if tg_op in ('INSERT', 'UPDATE') then
+        n := to_jsonb(new);
+    end if;
+    if tg_op = 'UPDATE' and o ->> id_col = n ->> id_col and o ->> tg_argv[2] is not distinct from n ->> tg_argv[2] then
+        return null;
+    end if;
+    if o is not null and (n is null or o ->> id_col <> n ->> id_col) then
+        perform permissions.set_parent(tg_argv[0], o ->> id_col, null, null);
+    end if;
+    if n is not null then
+        perform permissions.set_parent(tg_argv[0], n ->> id_col, tg_argv[1], n ->> tg_argv[2]);
+    end if;
+    return null;
 end;
 $$;
 
@@ -174,14 +260,43 @@ $$;
 -- ============================================================================
 
 -- Every (object_type, object_id, relation) node a subject can reach.
--- `union` removes duplicates, so cycles terminate.
+-- `union` removes duplicates, so cycles (groups or parents) terminate.
+--
+-- Three edges, all in one `lateral` because Postgres allows only one recursive
+-- reference:
+--   1. tuples where this node is the subject (direct grants, usersets)
+--   2. relations implied by this one on the same object (implied_by)
+--   3. relations inherited by this node's children (from_parent, G10)
+-- The walk starts from the subject and from `subject_type:*` (G11), and never
+-- enters a node the subject is excluded from (unless, G12), so nothing derived
+-- through an excluded node is reached either.
+--
+-- PL/pgSQL rather than SQL only so the plan is cached per session: Postgres 16
+-- re-plans a SQL function body on every call, which cost ~0.25 ms per check
+-- once the query grew the parent and exclusion steps.
 create function permissions._reach(p_subject_type text, p_subject_id text)
 returns table (object_type text, object_id text, relation text)
-language sql stable security definer
+language plpgsql stable security definer
 set search_path = ''
 as $$
-    with recursive reach(object_type, object_id, relation) as (
-        select p_subject_type, p_subject_id, ''::text
+#variable_conflict use_column
+begin
+    return query
+    with recursive
+    blocked(object_type, object_id, relation) as (
+        select t.object_type, t.object_id, rel.relation
+        from permissions.tuples t
+        join permissions.relations rel on rel.object_type = t.object_type and t.relation = any (rel.unless)
+        where t.subject_type = p_subject_type
+          and t.subject_id = p_subject_id
+          and t.subject_relation = ''
+          and t.condition is null
+          and (t.expires_at is null or t.expires_at > now())
+    ),
+    reach(object_type, object_id, relation) as (
+        select p_subject_type, s, ''::text
+        from unnest(array[p_subject_id, '*']) s
+        where p_subject_id is not null
       union
         select n.object_type, n.object_id, n.relation
         from reach r
@@ -198,9 +313,24 @@ as $$
             from permissions.relations rel
             where rel.object_type = r.object_type
               and r.relation = any (rel.implied_by)
+          union all
+            select c.object_type, c.object_id, rel.relation
+            from permissions.tuples c
+            join permissions.relations rel on rel.object_type = c.object_type and r.relation = any (rel.from_parent)
+            where c.subject_type = r.object_type
+              and c.subject_id = r.object_id
+              and c.subject_relation = ''
+              and c.relation = 'parent'
+              and c.condition is null
+              and (c.expires_at is null or c.expires_at > now())
         ) n
+        where not exists (
+            select 1 from blocked b
+            where b.object_type = n.object_type and b.object_id = n.object_id and b.relation = n.relation
+        )
     )
-    select * from reach where p_subject_id is not null
+    select * from reach where p_subject_id is not null;
+end;
 $$;
 
 -- Explicit-subject variants: admin only (see the grants at the end).
@@ -251,9 +381,31 @@ as $$
             select b.t, b.i, x
             from permissions.relations rel, unnest(rel.implied_by) x
             where rel.object_type = b.t and rel.relation = b.r
+          union all
+            -- G10: up to the parent, as the relations this one inherits
+            select p.subject_type, p.subject_id, x
+            from permissions.relations rel
+            cross join unnest(rel.from_parent) x
+            join permissions.tuples p
+              on p.object_type = b.t and p.object_id = b.i and p.relation = 'parent' and p.subject_relation = ''
+             and p.condition is null and (p.expires_at is null or p.expires_at > now())
+            where rel.object_type = b.t and rel.relation = b.r
         ) n(t, i, r)
+    ),
+    candidates as (
+        select distinct t, i from back where r = ''
     )
-    select distinct t, i from back where r = ''
+    -- G12: exclusions depend on the subject, not the path, so the reverse walk
+    -- can't prune. Candidates holding any exclusion tuple are re-checked forwards.
+    select c.t, c.i
+    from candidates c
+    where not exists (
+            select 1
+            from permissions.tuples x
+            join permissions.relations rel on rel.object_type = x.object_type and x.relation = any (rel.unless)
+            where x.subject_type = c.t and x.subject_id = c.i and x.subject_relation = ''
+          )
+       or permissions.check_for(c.t, c.i, p_object_type, p_object_id, p_relation)
 $$;
 
 -- Current-subject variants: safe for clients and RLS policies.

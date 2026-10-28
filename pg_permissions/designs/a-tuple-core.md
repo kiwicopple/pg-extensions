@@ -30,6 +30,8 @@ create table permissions.relations (
     object_type text not null references permissions.object_types(name) on delete cascade,
     relation    text not null,
     implied_by  text[] not null default '{}',  -- e.g. viewer implied_by {editor}
+    from_parent text[] not null default '{}',  -- v0.0.2: inherited from the parent's relation (§12.1)
+    unless      text[] not null default '{}',  -- v0.0.2: excluded by these relations (§12.3)
     description text,
     primary key (object_type, relation)
 );
@@ -110,7 +112,8 @@ Model definition:
 
 ```sql
 permissions.define_type(name text, description text default null)
-permissions.define_relation(object_type text, relation text, implied_by text[] default '{}')
+permissions.define_relation(object_type text, relation text, implied_by text[] default '{}',
+                            from_parent text[] default '{}', unless text[] default '{}')  -- last two: v0.0.2, §12
 ```
 
 Writing tuples:
@@ -120,6 +123,10 @@ permissions.grant(object_type, object_id, relation, subject_type, subject_id, su
 permissions.revoke(object_type, object_id, relation, subject_type, subject_id, subject_relation default '')
 permissions.delete_subject(subject_type, subject_id)   -- removes all tuples for that subject
 permissions.delete_object(object_type, object_id)      -- removes all tuples on that object
+
+-- v0.0.2 (§12.1): parents
+permissions.set_parent(object_type, object_id, parent_type, parent_id)  -- replaces the parent; null clears it
+permissions.sync_parent()  -- trigger function: keeps parent tuples in sync with an app column
 ```
 
 Checks (STABLE, SECURITY DEFINER, `set search_path = ''`):
@@ -171,6 +178,8 @@ where object_type = p_object_type and relation = p_relation;
 ```
 
 `union` (not `union all`) removes duplicate rows, so cycles terminate: the set of reachable `(type, id, relation)` nodes is finite. `check` is the same query with `object_id = p_object_id` and `limit 1`. `list_subjects` walks the same edges in reverse.
+
+v0.0.2 adds a third edge (parents), a second starting node (`user:*`) and a filter (exclusions) to the same query. See §12; the shape above is unchanged.
 
 ## 5. Reference scenario
 
@@ -235,7 +244,7 @@ using (
 
 - **Can Bob update `readme`?** Yes. `user:bob` reaches `document:readme#editor` directly, so `check_for('user', 'bob', 'document', 'readme', 'editor')` is true.
 - **Which documents can Dave select?** `user:dave` reaches `team:eng#member`, which reaches `document:readme#viewer`. Dave isn't in `acme`, so the org path is empty. Result: `readme` only.
-- **Who can view `readme`?** `list_subjects('document', 'readme', 'viewer')` returns Bob (editor implies viewer), Carol and Dave (via `team:eng`). It does **not** return Alice, even though she can view it via the org: that path lives in the RLS policy, not in the tuples. See §9.
+- **Who can view `readme`?** `list_subjects('document', 'readme', 'viewer')` returns Bob (editor implies viewer), Carol and Dave (via `team:eng`). It does **not** return Alice, even though she can view it via the org: in this v0.0.1 model that path lives in the RLS policy, not in the tuples. With parent inheritance (§12.1) the org path moves into the model and `list_subjects` includes her.
 
 ## 6. Blessed path: the `rbac` preset
 
@@ -369,7 +378,7 @@ This preset was built on top of the §4 engine and run on Postgres 16 with a non
 └──────────────────────────────────────────────────────────┘
 ```
 
-- **Parent inheritance (v0.0.2):** add a tuple `(document:readme, org, org:acme)` and a rule on `relations` such as "`viewer` also comes from `org#view_documents`" (Zanzibar's tuple-to-userset). The evaluator gets a third step in the `lateral`. The RLS policy then needs only the document path.
+- **Parent inheritance (v0.0.2, built, §12.1):** a tuple `document:readme#parent@folder:specs` and a rule on `relations` (`from_parent`), Zanzibar's tuple-to-userset. The evaluator got a third step in the `lateral`. The RLS policy can then use only the document path, at a cost (§12.1).
 - **Attribute conditions (Model 3):** evaluate `tuples.condition` against `entities.attributes` and request context. Tuples with a false condition are skipped during the walk.
 - **CEL (#9):** an alternative format for `condition`. It's a parser plus evaluator in the policy layer, not a separate extension. The JWT helpers fold into the identity layer.
 - **Cedar (#10):** `entity_parents` maps onto tuples (`member` relations). Permit/forbid with priority is a policy-layer feature on top.
@@ -377,11 +386,12 @@ This preset was built on top of the §4 engine and run on Postgres 16 with a non
 
 ## 9. Weaknesses and risks
 
-- **Org-level access lives in RLS policies until v0.0.2.** Until parent inheritance exists, "admins can edit all org documents" is half model and half policy SQL. `list_subjects` gives incomplete answers in the meantime (it misses Alice in the scenario).
-- **Parent links duplicate app data.** Parent inheritance needs a `(document, org, org:acme)` tuple that mirrors `documents.org_id`. Apps need a trigger to keep them in sync, or they will drift.
+- **Org-level access: model or speed, pick one.** With parent inheritance (§12.1) "admins can edit all org documents" lives in the model and `list_subjects` is complete. But a single-branch RLS policy then enumerates every visible document on every query (7 ms for 1,007 IDs at small scale). Keeping the `org_id = any(...)` branch is an order of magnitude cheaper but puts org access back in policy SQL.
+- **Parent links duplicate app data.** Parent inheritance needs one `parent` tuple per child that mirrors `documents.folder_id` or `org_id`: 1M documents means 1M tuples (about 430 MB with indexes, extrapolated from 450 bytes per tuple at small scale). `permissions.sync_parent()` keeps them in sync from a trigger, but the data is still stored twice.
 - **No foreign keys to app tables.** IDs are `text`, so deleting a document doesn't delete its tuples unless the app calls `delete_object`. Orphaned tuples are harmless but accumulate.
 - **Read-time cost grows with nesting.** Deep or wide group hierarchies make every check walk more rows. Zanzibar systems solve this with caching and precomputed indexes, which this design doesn't have.
-- **Unions only.** The graph walk can only add access. `forbid` (Cedar) and "deny if" rules don't fit naturally and need a separate pass in the policy layer. That layer is the least designed part of this proposal.
+- **Exclusions are limited.** v0.0.2 adds OpenFGA-style `but not` (§12.3), but only against a direct `blocked` tuple on the subject itself, not a group. Cedar-style forbids over attributes or groups would still need a separate pass in the policy layer, which is the least designed part of this proposal.
+- **No condition evaluator.** `tuples.condition` is still ignored (default deny). Rules over app columns such as `status` are RLS composition (§12.4), so `check()` and the RLS policy can give different answers for the same row.
 - **Weak validation.** Nothing stops granting `document#viewer` to a subject type that makes no sense (e.g. `org:acme` with no relation). OpenFGA's type restrictions would need an extra column on `relations`.
 
 ## 10. Implementation phases
@@ -395,7 +405,178 @@ This preset was built on top of the §4 engine and run on Postgres 16 with a non
 ## 11. Open questions
 
 1. **Text IDs**: every RLS call casts `id::text`. Fine for the PoC, but worth benchmarking on a 1M-row table before v0.1.
-2. **Wildcard subjects** (`user:*` for public access, as in OpenFGA): include in v0.0.1 or defer?
+2. **Wildcard subjects** (`user:*` for public access, as in OpenFGA): built in v0.0.2 (§12.2).
 3. **SECURITY DEFINER inside a TLE**: confirm the function owner on Supabase/dbdev installs has read access to `permissions.*` while clients don't.
 4. **Name `check`**: `check` is a reserved word. `permissions.check(...)` works, but a bare `check(...)` (for example with `permissions` on the `search_path`) is a syntax error. Rename to `can`, or document that it must always be schema-qualified?
 5. **Subject type restrictions**: add an `allowed_subjects` column to `relations` in v0.0.1 for validation, or wait?
+
+## 12. v0.0.2: parents, public access, forbid, conditions
+
+PLAN.md §10 goals G10–G13, built into [`../prototypes/a-tuple-core.sql`](../prototypes/a-tuple-core.sql) and tested by `test/spec/a/50_parents`, `51_public`, `52_forbid` and `53_conditions`. Everything stays in A's character: no derived data, the answer is computed at read time by the same recursive walk. Each feature borrows OpenFGA's construct for it, so FGA users will recognise the semantics.
+
+The walk after v0.0.2 (one query, still one recursive reference):
+
+```sql
+with recursive
+blocked(object_type, object_id, relation) as (     -- G12: nodes this subject is excluded from
+    select t.object_type, t.object_id, rel.relation
+    from permissions.tuples t
+    join permissions.relations rel on rel.object_type = t.object_type and t.relation = any (rel.unless)
+    where t.subject_type = p_subject_type and t.subject_id = p_subject_id and t.subject_relation = ''
+      and t.condition is null and (t.expires_at is null or t.expires_at > now())
+),
+reach(object_type, object_id, relation) as (
+    select p_subject_type, s, ''::text
+    from unnest(array[p_subject_id, '*']) s            -- G11: also start from user:*
+    where p_subject_id is not null
+  union
+    select n.object_type, n.object_id, n.relation
+    from reach r
+    cross join lateral (
+        ... 1. tuples where this node is the subject (unchanged)
+      union all
+        ... 2. implied_by on the same object (unchanged)
+      union all
+        select c.object_type, c.object_id, rel.relation  -- G10: children inherit through `parent` tuples
+        from permissions.tuples c
+        join permissions.relations rel on rel.object_type = c.object_type and r.relation = any (rel.from_parent)
+        where c.subject_type = r.object_type and c.subject_id = r.object_id and c.subject_relation = ''
+          and c.relation = 'parent'
+          and c.condition is null and (c.expires_at is null or c.expires_at > now())
+    ) n
+    where not exists (select 1 from blocked b              -- G12: never enter an excluded node
+                      where (b.object_type, b.object_id, b.relation) = (n.object_type, n.object_id, n.relation))
+)
+select * from reach
+```
+
+`_reach` is now PL/pgSQL wrapping this query. Postgres 16 re-plans a SQL function body on every call, and the larger query made every check ~0.25 ms slower (`rbac_check` p50 0.32 → 0.58 ms, measured interleaved in one cluster). PL/pgSQL caches the plan per session, which brought it back to 0.34 ms. The same change on the v0.0.1 query would have made it faster than before (0.26 ms).
+
+### 12.1 Parent inheritance (G10)
+
+**API.** A child points at its parent with a tuple whose relation is always `parent`. A relation inherits from the parent with `from_parent`, which names relations **on the parent** (any parent type; the relation is looked up by name there). This is OpenFGA's `define viewer: viewer from parent`.
+
+```sql
+select permissions.define_relation('org', 'admin');
+select permissions.define_relation('org', 'member', '{admin}');
+select permissions.define_relation('org', 'editor', '{admin}');
+select permissions.define_relation('org', 'viewer', '{member,editor}');
+select permissions.define_relation('folder', 'parent');
+select permissions.define_relation('folder', 'editor', from_parent => '{editor}');
+select permissions.define_relation('folder', 'viewer', '{editor}', from_parent => '{viewer}');
+select permissions.define_relation('document', 'parent');
+select permissions.define_relation('document', 'editor', from_parent => '{editor}');
+select permissions.define_relation('document', 'viewer', '{editor}', from_parent => '{viewer}');
+
+select permissions.set_parent('folder', 'specs', 'org', 'acme');      -- = grant('folder','specs','parent','org','acme') after removing the old parent
+
+-- or keep parents in sync with an app column:
+create trigger documents_parent after insert or update of folder_id or delete on public.documents
+    for each row execute function permissions.sync_parent('document', 'folder', 'folder_id');
+
+-- one fast-path branch covers org roles, folder grants and direct shares
+create policy documents_select on public.documents for select to authenticated using (
+    id = any (array(select unnest(permissions.list_objects('document', 'viewer'))::uuid))
+);
+```
+
+`set_parent` gives single-parent semantics (moving = replacing). Raw `grant(..., 'parent', ...)` allows several parents, and the test uses that to build a cycle. `sync_parent(object_type, parent_type, parent_column [, id_column])` reads the columns through `to_jsonb(new)`, so one function serves any table. It is SECURITY DEFINER with execute revoked from public. Postgres checks execute when the trigger is **created**, not when it fires, so only the owner can attach it to a table, while client inserts and updates still fire it.
+
+Because the parent can be any type, the rbac preset graduates to parents without new types: `define_relation('document', 'viewer', '{editor}', from_parent => '{documents.read}')` plus `set_parent('document', id, 'tenant', org_id)` makes every scoped `viewer`/`editor`/`admin` role reach the org's documents (this is the benchmark seed, `bench/designs/a/seed_parents.sql`).
+
+**How it evaluates.** Forwards: from a node `org:acme#viewer`, edge 3 finds tuples `X#parent@org:acme` and yields `X#R` for every relation `R` on X's type whose `from_parent` contains `viewer`. Backwards (`list_subjects`): from `document:readme#viewer`, it follows readme's `parent` tuples up to `folder:specs#viewer`. `union` deduplicates nodes, so parent cycles terminate. `50_parents` builds a `specs ↔ plans` cycle and walks into it both ways under a 5 s statement timeout. The plain "a non-grantee gets false" assertion doesn't prove termination for A: a forward walk from a user with no tuples never reaches the cycle. A `union all` mutant passed that assertion until the spec also walked into the cycle.
+
+**Costs.**
+- **Storage: one tuple per child.** 1M documents means 1M `parent` tuples mirroring a column the app already has. At small scale the tuples table averaged 450 bytes per row including its three indexes, so about 430 MB at 1M (extrapolated, not measured).
+- **Reading the parent from the app's column instead** would avoid the copy, but the walk is generic SQL over `permissions.tuples`. Reading `documents.folder_id` needs either dynamic SQL per type (no plan caching, harder to secure) or a registry of app tables. That is the "bring your own data" design that was rejected for being slower and more confusing. `sync_parent` is the compromise: one source of truth (the app column), copied mechanically.
+- **The single-branch policy enumerates every visible document.** `list_objects('document', 'viewer')` walks to each document one by one. At small scale (10k documents, 20 orgs, a user with roles in two orgs plus team shares) that is 1,007 IDs and **7.3 ms per call**, about 7 µs per visible document. Under pgbench (4 clients, busy machine) the first page took **18 ms p50** against 2.2 ms for the two-branch policy on the same data. At large scale a user sees ~20k documents, so expect on the order of 150 ms per query (extrapolated, not measured). The two-branch policy (`org_id = any(scopes) or id = any(shares)`) stays the fast option: parents then make `check` and `list_subjects` complete without being on the hot RLS path.
+- **Every walk does one more probe per node** (edge 3), even for nodes with no children. Measured at small scale it costs ~0.1 ms per check before plan caching.
+
+**Weaknesses.**
+- Moving a document into a folder grants that folder's viewers access. If clients can update `folder_id`, the app's UPDATE policy needs a `with check` that the user may write into the target folder. The extension can't know that.
+- `parent` is a reserved relation name, and `from_parent` matches relations by name on whatever type the parent is. There's no type check that an org actually has the relation a folder inherits. A typo yields no access rather than an error.
+- `grant` rejects usersets and wildcards as parents (`document#parent@team:eng#member` has no meaning).
+- `delete_object` on a folder doesn't remove its children's `parent` tuples pointing at it; `delete_subject('folder', id)` does.
+
+### 12.2 Public access (G11)
+
+**API.** OpenFGA's wildcard: the subject id `*`.
+
+```sql
+select permissions.grant('document', 'announcement', 'viewer', 'user', '*');
+select permissions.revoke('document', 'announcement', 'viewer', 'user', '*');
+```
+
+**How it evaluates.** The walk starts from two nodes, `user:<id>` and `user:*`, so every non-null subject of type `user` reaches whatever `user:*` reaches, including through groups (`team:eng#member@user:*` makes everyone a member). A null subject starts from no nodes and is denied, so anonymous access stays out of scope. `list_subjects` returns `('user', '*')` as a subject, which is how OpenFGA reports it too. `grant` rejects `*` with a subject relation (`team:*#member`).
+
+**Costs.** One extra starting node per walk; measured as no difference.
+
+**Weaknesses.**
+- A JWT whose `sub` is literally `*` is that wildcard. It only gets what everyone gets, but apps should never issue it.
+- Public access is per subject type: `user:*` doesn't cover a `service` subject type.
+- A public grant can't be scoped ("every member of an org" is a group, not a wildcard).
+
+### 12.3 Forbid (G12)
+
+**API.** OpenFGA's exclusion (`define viewer: ... but not blocked`), with the keyword `unless`. A forbid is an ordinary tuple on the excluding relation, written by admins only (`grant` isn't executable by clients, so `52_forbid` checks for `42501`).
+
+```sql
+select permissions.define_relation('document', 'blocked');
+select permissions.define_relation('document', 'editor', from_parent => '{editor}', unless => '{blocked}');
+select permissions.define_relation('document', 'viewer', '{editor}', from_parent => '{viewer}', unless => '{blocked}');
+
+select permissions.grant('document', 'readme', 'blocked', 'user', 'dave');   -- forbid
+select permissions.revoke('document', 'readme', 'blocked', 'user', 'dave');  -- lift it
+```
+
+**How it evaluates.** Before walking, `blocked` collects the subject's own exclusion tuples (one index lookup on the subject). The walk then **never enters** an excluded node. Nothing derived through it is reached either: blocking Alice on readme removes `readme#editor`, and with it `readme#viewer` via `implied_by`, even though she arrived through org → folder parents. Blocking a folder relation hides everything inherited through that folder, but a direct grant on a document below it still applies (OpenFGA behaves the same). Because pruning happens during the walk, `check`, `list_objects` and the RLS policy all agree.
+
+`list_subjects` walks backwards, and in that direction exclusions depend on the final subject, not the path, so it can't prune. It collects candidates as before and re-checks forwards only those that hold at least one exclusion tuple. Unblocked subjects cost one index probe each.
+
+**Costs.** The `blocked` CTE and the anti-join on every step: ~0.13 ms per check before plan caching, small after. A subject with many forbids makes the anti-join larger, but forbids are expected to be rare.
+
+**Weaknesses.**
+- **Direct subjects only.** A forbid on a group (`team:contractors#member`) would need the walk itself to decide membership, which is negation inside recursion. `grant` rejects usersets and wildcards on any relation used in an `unless` list rather than silently ignoring them. Cedar's `forbid ... when { principal in Group }` isn't expressible.
+- **The model has to opt in per relation.** A relation without `unless => '{blocked}'` ignores `blocked` tuples, and `editor` and `viewer` each need it. Forgetting it on one relation is a silent hole.
+- Not an attribute rule: "deny if `resource.status = 'archived'`" is still RLS SQL (§12.4).
+
+### 12.4 Conditions (G13)
+
+**API.** Nothing new in the engine. Expiry is the grant's `expires_at` (already in v0.0.1). Rules over the app's own columns are RLS composition:
+
+```sql
+select permissions.grant('org', 'acme', 'member', 'user', 'gina', '', now() - interval '1 day');  -- grants nothing
+
+-- viewers see published documents; editors (and so admins) see drafts too
+create policy documents_select on public.documents for select to authenticated using (
+    (status = 'published' and id = any (array(select unnest(permissions.list_objects('document', 'viewer'))::uuid)))
+    or id = any (array(select unnest(permissions.list_objects('document', 'editor'))::uuid))
+);
+```
+
+`53_conditions` links documents to the org through `sync_parent('document', 'org', 'org_id')`, so the parent tuple comes from the app's existing `org_id` column.
+
+**How it evaluates.** Expired tuples are skipped on every edge of the walk, forwards and backwards. The status rule is plain SQL on the row; each `list_objects` call is an InitPlan, so the policy costs two walks per query, not one per row.
+
+**Why not evaluate conditions in the engine.** It would mean mirroring `status` into `permissions.entities` (a second copy to keep in sync, like parents) and evaluating `tuples.condition` per step, which no longer fits one cached plan. With the status in the app's row, Postgres filters it for free.
+
+**Weaknesses.**
+- **The model and the policy disagree.** `check_for('user', 'carol', 'document', 'draft_doc', 'viewer')` is **true**, because the engine doesn't know about status. Only RLS hides the draft. Every app check outside RLS has to repeat the status rule, and `list_subjects` over-reports.
+- The rule lives in each policy, so a second table with the same rule repeats it.
+- `tuples.condition` and `entities` are still unused: a tuple with a condition is ignored (default deny).
+
+### 12.5 Testing
+
+`./test/run.sh --impl prototypes/a-tuple-core.sql`: 13/13 files, 147/147 assertions. Each new feature was broken once on purpose ("mutants"), and every mutant failed a spec:
+
+| Mutant | Caught by |
+| --- | --- |
+| No parent edge in the walk | `50_parents` (7 failed), `52_forbid`, `53_conditions` |
+| `sync_parent` ignores updates (moving a document) | `50_parents` (1 failed) |
+| `union all` instead of `union` (cycles) | `50_parents` (statement timeout), but only after the spec walked into the cycle (§12.1) |
+| No `user:*` starting node | `51_public` (3 failed) |
+| No exclusion pruning in the walk | `52_forbid` (5 failed) |
+| `list_subjects` doesn't re-check excluded subjects | `52_forbid` (1 failed) |
+| Expiry ignored in the walk | `53_conditions` (Gina), `31_zanzibar_groups` |
+
+The status rule lives in the spec's RLS policy, not the engine, so it has no engine mutant.
