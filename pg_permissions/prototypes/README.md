@@ -5,7 +5,7 @@ Working implementations of the candidate designs, used to run the test suite and
 | File | Design | Status |
 | --- | --- | --- |
 | [`a-tuple-core.sql`](./a-tuple-core.sql) | [A: Shared tuple core](../designs/a-tuple-core.md) | Complete engine plus `rbac` preset, and the v0.0.2 goals G10–G13 (parents, `user:*`, forbid, conditions). Passes every spec file, shared and `a/` (13 files, 147 assertions). |
-| [`b-policy-first.sql`](./b-policy-first.sql) | [B: Policy-first](../designs/b-policy-first.md) | **Stand-in.** B's schema, a minimal evaluator (permit policies without `via`) and the `rbac` preset. Passes the engine-independent spec files; fails the zanzibar-level ones by design. |
+| [`b-policy-first.sql`](./b-policy-first.sql) | [B: Policy-first](../designs/b-policy-first.md) | Complete engine plus `rbac` preset: facts with closures maintained by triggers (one advisory lock, repeatable read refused), permit/forbid policies with `via` parent anchors, jsonb conditions split into a per-query half and a per-row half, `who_can`/`explain`, and `rls_expression`/`apply_rls`/`lint`. Covers G10–G13 natively (parents, public, forbid, conditions). Passes every spec file, shared and `b/` (13 files, 147 assertions). Changes from the original design are listed in its design doc. |
 | — | [C: Compiled model](../designs/c-compiled-model.md) | Not built yet. Needs `apply_model()` and the membership triggers. |
 
 ```bash

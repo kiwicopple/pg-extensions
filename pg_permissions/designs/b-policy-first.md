@@ -1,431 +1,328 @@
 # Design B: Policy-first
 
 > One of three candidate designs. See [../PLAN.md](../PLAN.md) for the shared goals, requirements and evaluation criteria.
+>
+> Status: **built** as [`prototypes/b-policy-first.sql`](../prototypes/b-policy-first.sql). This document describes what the prototype does. Where the build changed the original design, the change and the reason are listed in [Deviations from the original design](#deviations-from-the-original-design).
 
 ## Summary
 
-Every decision comes from one small policy table. A policy is Cedar-shaped: principal scope, actions, resource type, an optional "role on anchor" requirement, an optional condition, and an effect. Roles, group memberships and parent links are entity data that policies read, and group membership is kept as a precomputed closure at write time. Because of that, a decision is a flat join with no recursion, and the RLS fast path is a partial evaluation: "which resource IDs, or which org IDs, does this policy set let me reach?", computed once per query.
+Every decision comes from one small policy table. A policy is Cedar-shaped: a principal scope, actions, a resource type, an optional "role on anchor" requirement, an optional condition, and an effect (`permit` or `forbid`). Roles, group memberships and parent links are facts that policies read. Group and parent membership is kept as a precomputed closure on write, so a decision is a handful of flat joins with no recursion. The RLS fast path is a partial evaluation: "which resource ids, or which parent ids (a folder, an org), would this policy set let me reach?", computed once per query.
 
 ## Core idea
 
 A tuple store with a read-time graph walk puts the authorization logic inside the graph: `editor` implies `viewer` is a rewrite rule, "org admins can edit org documents" is a tupleset rewrite, and the answer to "can X do Y" comes out of a recursive CTE. This design moves that logic into explicit policies and keeps the data simple:
 
-- **Entity data** says who is in what and who holds which role on what: `parents` (Carol is in team `eng`), `role_grants` (Alice holds `admin` on org `acme`), `role_implies` (`editor` implies `viewer` on documents).
-- **Policies** say what those facts allow: "anyone holding `member` on a document's org may `select` the document".
-- **One evaluator** answers every question by matching policies against the facts. RBAC, ReBAC and attribute rules are different policy shapes, not different engines.
+- **Facts** say who is in what and who holds which role on what: `parents` (Carol is in team `eng`, folder `specs` is in org `acme`), `role_grants` (Alice holds `admin` on org `acme`), `role_implies` (`editor` implies `viewer` on documents).
+- **Policies** say what those facts allow: "anyone holding `member` on a document's org may `select` the document", "Dave may not `select` readme".
+- **One evaluator** answers every question by matching policies against the facts. RBAC, ReBAC, public access, forbid and attribute rules are different policy shapes, not different engines.
 
-Why this might beat a generic tuple store with a read-time walk:
+Why this might beat a tuple store with a read-time walk:
 
-1. **The 1M documents never enter the permission store.** A policy with `via = 'org'` grants access through the document's `org_id` column. The fast path returns the caller's org IDs, and RLS matches them against `org_id`. A tuple design has to either write one `document#org` tuple per row or special-case this.
-2. **No recursion at read time.** Group nesting is precomputed into `ancestors` (depth at most 10, cycles rejected on write). Role implication is precomputed into `role_closure`. A check is a handful of index lookups.
-3. **Policy changes are cheap and auditable.** Adding "members can view" is one row and needs no backfill. "Why can Dave see this?" has an answer: a policy name plus the grant that matched.
-4. **Forbid, conditions, CEL and Cedar have an obvious home:** the `effect` and `condition` columns of a policy, rather than a new tuple semantic.
+1. **Documents never enter the permission store.** A document's org or folder is its own column. A policy with `via => 'folder'` grants access through that column, and RLS matches `folder_id` against the folder ids the caller can reach. In the tests and benchmarks no document row exists in any permissions table unless the document has its own grant.
+2. **No recursion at read time.** Group and folder nesting is precomputed into `ancestors` (depth at most 10, cycles rejected on write). Role implication is precomputed into `role_closure`.
+3. **Policy changes are cheap and auditable.** Adding "members can view" is one row and needs no backfill. `explain()` answers "why can Dave see this?" with a policy name and the grant that matched.
+4. **Forbid and conditions have an obvious home:** the `effect` and `condition` columns of a policy, rather than a new tuple semantic.
 
-The trade-off is that policies are restricted to shapes we know how to partially evaluate into SQL filters. That restriction is deliberate: the policy language is shaped by what we can index.
+The trade-off is that policies are limited to shapes that can be partially evaluated into SQL filters. That limit is deliberate: the policy language is shaped by what we can index.
 
-## Schema
+## Schema (as built)
 
-All objects live in a fixed schema `permissions`. Entity IDs are `text` so uuid, bigint and slug keys all fit.
+All objects live in a fixed schema `permissions`. Entity ids are `text`, so uuid, bigint and slug keys all fit.
 
-```sql
-create schema permissions;
+| Table | Holds | Written by |
+| --- | --- | --- |
+| `entities(type, id, attrs jsonb)` | Attributes for principals, read by conditions (`principal.attrs.*`) | `set_attrs` |
+| `parents(child_type, child_id, parent_type, parent_id)` | User in team, team in team, folder in org, folder in folder | `add_parent`, `remove_parent` |
+| `ancestors(child, ancestor, depth)` | Transitive closure of `parents`; `depth` is the shortest path, 1–10 | triggers on `parents` only |
+| `roles(resource_type, role)` | Roles declared per resource type, so typos fail at grant time | `define_role` |
+| `role_implies(resource_type, role, implies)` | `editor` implies `viewer` | `define_role` |
+| `role_closure(resource_type, role, implied)` | Reflexive transitive closure of `role_implies` | rebuilt per type by `define_role` |
+| `role_grants(principal, role, resource, expires_at)` | Principal (user or group) holds role on resource, optionally until a time | `grant_role`, `revoke_role` |
+| `policies` | Permit and forbid rules (below) | `permit`, `forbid`, `drop_policy` |
 
--- optional: attributes for principals (and later resources). only needed for conditions.
-create table permissions.entities (
-  type  text  not null,
-  id    text  not null,
-  attrs jsonb not null default '{}',
-  primary key (type, id)
-);
+A policy row has `effect` (`permit` / `forbid`), a principal scope (`principal_type`, default `'user'`, null = any; optional `principal_id` for one principal; optional `principal_in_type/id` for "member of this group"), `actions text[]`, `resource_type`, optional `resource_id`, optional `roles` plus `via` (the anchor), the `condition` as written plus its two halves `principal_condition` and `resource_condition` (split on write), `managed_by` (`'rbac'` for preset-generated policies) and `enabled`.
 
--- "child is in parent": user in team, team in team, user in global role group.
--- from v0.0.2 also resource hierarchy (document in folder, folder in folder).
-create table permissions.parents (
-  child_type  text not null,
-  child_id    text not null,
-  parent_type text not null,
-  parent_id   text not null,
-  primary key (child_type, child_id, parent_type, parent_id),
-  check ((child_type, child_id) <> (parent_type, parent_id))
-);
-create index on permissions.parents (parent_type, parent_id);
+Indexes that matter: `role_grants` primary key `(principal_type, principal_id, resource_type, resource_id, role)`, which every check probes by subject and anchor; `role_grants (resource_type, resource_id)` for `who_can`; `ancestors` primary key `(child_type, child_id, ...)` for "my groups" and "this folder's ancestors"; `ancestors (ancestor_type, ancestor_id, child_type)` for "folders under this org".
 
--- transitive closure of parents, maintained by triggers on parents. never written by apps.
-create table permissions.ancestors (
-  child_type    text     not null,
-  child_id      text     not null,
-  ancestor_type text     not null,
-  ancestor_id   text     not null,
-  depth         smallint not null check (depth between 1 and 10),
-  primary key (child_type, child_id, ancestor_type, ancestor_id)
-);
-create index on permissions.ancestors (ancestor_type, ancestor_id);
+### Closure maintenance and concurrency
 
--- roles are declared per resource type, so typos fail at grant time
-create table permissions.roles (
-  resource_type text not null,
-  role          text not null,
-  primary key (resource_type, role)
-);
+`ancestors` is maintained by row-level `after insert` / `after delete` triggers on `parents` (updates are rejected; remove and add instead). Every trigger first takes one transaction-scoped advisory lock, `pg_advisory_xact_lock(hashtext('permissions.closure'))`, so closure writers are serialized.
 
-create table permissions.role_implies (
-  resource_type text not null,
-  role          text not null,   -- holding this role ...
-  implies       text not null,   -- ... also gives this one
-  primary key (resource_type, role, implies),
-  foreign key (resource_type, role)    references permissions.roles,
-  foreign key (resource_type, implies) references permissions.roles
-);
+- **Insert `c -> p`:** reject if `p` is already below `c` (cycle, SQLSTATE `23514`), reject if any new path would be deeper than 10 (`23514`), then insert `descendants-or-self(c) x ancestors-or-self(p)` with `on conflict ... depth = least(...)`.
+- **Delete `c -> p`:** only `c` and its descendants can change. Their closure rows are deleted and rebuilt from `parents` with a depth-bounded recursive walk.
+- **Isolation:** the closure is computed from what the transaction sees *after* it gets the lock. Under read committed each statement takes a fresh snapshot, so it sees the previous writer's committed rows. Under serializable, a stale read is a serialization failure, which aborts. Under **repeatable read** the snapshot predates the lock and the closure would silently miss a concurrent writer's edge, so parent and role-definition writes raise `0A000` there. (Design C makes the same call.)
+- `role_closure` is rebuilt for one resource type under a second advisory lock (`permissions.roles`), with the same isolation guard.
 
--- reflexive transitive closure of role_implies. tiny; rebuilt in full on change.
-create table permissions.role_closure (
-  resource_type text not null,
-  role          text not null,   -- granted role
-  implied       text not null,   -- role it satisfies (includes itself)
-  primary key (resource_type, implied, role)
-);
-
--- "principal holds role on resource". principal may be a user or a group.
-create table permissions.role_grants (
-  principal_type text not null,
-  principal_id   text not null,
-  role           text not null,
-  resource_type  text not null,
-  resource_id    text not null,
-  expires_at     timestamptz,
-  primary key (principal_type, principal_id, resource_type, resource_id, role),
-  foreign key (resource_type, role) references permissions.roles
-);
-create index on permissions.role_grants (resource_type, resource_id);
-
-create table permissions.policies (
-  id               bigint generated always as identity primary key,
-  name             text not null unique,
-  effect           text not null default 'permit' check (effect in ('permit', 'forbid')),
-  -- principal scope
-  principal_type   text default 'user',     -- null = any type
-  principal_in_type text,                   -- optional: principal must be in this group
-  principal_in_id   text,
-  -- action and resource scope
-  actions          text[] not null,
-  resource_type    text not null,
-  resource_id      text,                    -- optional: one specific resource
-  -- relationship requirement
-  roles            text[],                  -- principal must hold one of these roles on the anchor
-  via              text,                    -- anchor: null = the resource itself, else a parent type, e.g. 'org'
-  -- attribute condition (v0.0.1: jsonb AST; later CEL source in condition_src)
-  condition        jsonb,
-  condition_src    text,
-  enabled          boolean not null default true,
-  check (effect = 'permit'),                -- forbid is reserved; constraint dropped in v0.0.2
-  check ((principal_in_type is null) = (principal_in_id is null)),
-  check (via is null or roles is not null)
-);
-create index on permissions.policies using gin (actions);
-
-revoke all on all tables in schema permissions from public;
-grant usage on schema permissions to public;
-```
-
-Closure maintenance (`ancestors`, `role_closure`) is done by `after insert or delete` triggers on `parents` and `role_implies`, under `pg_advisory_xact_lock(hashtext('permissions.closure'))` so concurrent writers can't produce a stale closure. Inserting edge `c -> p` rejects the write if `p = c` or `p` is already a descendant of `c` (cycle), or if any new path would be deeper than 10. Deleting an edge deletes the closure rows for descendants-or-self of `c` and rebuilds just those rows from `parents` with a depth-bounded recursive CTE. The cap is enforced on write, not by truncating at read time, so a check never silently gives a partial answer.
+The depth cap is enforced on write, not by truncating at read time, so a check never silently gives a partial answer.
 
 ## Linking to identity
 
-The extension stores no users. A subject is a `(type, id)` pair, `type` defaulting to `'user'`.
+The extension stores no users. A subject is a `(type, id)` pair. The contract is fixed by `test/spec/01_identity.sql`: `permissions.current_subject_id()` returns the JWT `sub` (`request.jwt.claims`), otherwise the `permissions.subject_id` setting, otherwise null. `current_subject_type()` defaults to `'user'`.
+
+- **No subject**: every check returns false, every `ids` call returns `'{}'`. Default deny (asserted in `b/51_public`).
+- **Explicit subject**: every client function has a `*_for` variant taking `subject_type, subject_id`. They are revoked from `public`, because otherwise any client could ask "what can Alice see?".
+- **User deletion**: `permissions.delete_entity(type, id)` removes the entity's attributes, the grants it holds and grants on it, its `parents` edges (closures follow through the triggers) and unmanaged policies that name it. For automatic cleanup, attach `permissions.on_entity_deleted('user', 'id')` as an `after delete` trigger on the app's identity table. It reads `to_jsonb(old) ->> tg_argv[1]`, so there's no dynamic SQL. Execute is revoked from `public`.
+
+## Public API (as built)
+
+Read functions are `stable security definer set search_path = ''`. They have to be `security definer` because callers have no `select` on the tables.
 
 ```sql
-create function permissions.current_subject() returns text
-language sql stable as $$
-  select coalesce(
-    nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub',  -- postgrest / supabase
-    nullif(current_setting('request.jwt.claim.sub', true), ''),                -- older postgrest
-    nullif(current_setting('permissions.subject', true), '')                   -- plain postgres
-  )
-$$;
+-- current subject: granted to public, safe in RLS
+permissions.can(action, resource_type, resource_id, resource jsonb default '{}') returns boolean
+permissions.ids(action, resource_type, via default null, resource_condition jsonb default null) returns text[]
+permissions.denied_ids(action, resource_type, via default null, resource_condition jsonb default null) returns text[]
+permissions.allows_all(action, resource_type, resource_condition jsonb default null) returns boolean
+permissions.denies_all(action, resource_type, resource_condition jsonb default null) returns boolean
 
-create function permissions.current_subject_type() returns text
-language sql stable as $$
-  select coalesce(nullif(current_setting('permissions.subject_type', true), ''), 'user')
-$$;
+-- explicit subject and debugging: admin only
+permissions.can_for(subject_type, subject_id, action, resource_type, resource_id, resource jsonb default '{}')
+permissions.ids_for / denied_ids_for / allows_all_for / denies_all_for(subject_type, subject_id, ...)
+permissions.who_can(action, resource_type, resource_id, resource jsonb default '{}')
+    returns table (subject_type, subject_id, policy)
+permissions.explain(subject_type, subject_id, action, resource_type, resource_id, resource jsonb default '{}')
+    returns table (effect, policy, matched_grant jsonb)
+permissions.is_in(child_type, child_id, parent_type, parent_id) returns boolean    -- Cedar's `in`
+
+-- facts: admin only
+permissions.define_role(resource_type, role, implies text[] default '{}')
+permissions.grant_role(principal_type, principal_id, role, resource_type, resource_id, expires_at default null)
+permissions.revoke_role(principal_type, principal_id, role, resource_type, resource_id) returns boolean
+permissions.add_parent(child_type, child_id, parent_type, parent_id)
+permissions.remove_parent(child_type, child_id, parent_type, parent_id) returns boolean
+permissions.set_attrs(type, id, attrs jsonb)
+permissions.delete_entity(type, id) returns bigint
+
+-- policies: admin only
+permissions.permit(name, actions text[], resource_type,
+                   roles => null, via => null, principal_in_type => null, principal_in_id => null,
+                   resource_id => null, condition => null, principal_id => null, principal_type => 'user') returns bigint
+permissions.forbid(...same arguments...) returns bigint
+permissions.drop_policy(name) returns boolean          -- refuses policies managed by the rbac preset
+
+-- RLS tooling: admin only
+permissions.rls_expression(action, resource_type, id_column default 'id', via_columns jsonb default '{}', id_type regtype default 'uuid') returns text
+permissions.apply_rls(table regclass, command, resource_type, id_column default 'id', via_columns jsonb default '{}', to_role default 'authenticated')
+permissions.lint() returns table (problem, policy)
 ```
 
-- **Supabase**: works with no configuration; `sub` is the same value `auth.uid()` returns, as text. The `auth` schema is never referenced.
-- **Plain Postgres**: the app runs `set local permissions.subject = '<user id>'` at the start of each transaction. Any session can set this, so it is exactly as trustworthy as the code that owns the connection, which is also true of the JWT setting.
-- **No subject** (`anon`, missing setting): every check returns false and every `ids` call returns `'{}'`. Default deny.
-- **Explicit subject**: every check has a `*_for` variant that takes `subject_type, subject_id`. These are `revoke`d from `public`, because otherwise any client could ask "what can Alice see?". The app grants them to trusted roles (on Supabase, `service_role`).
-- **User deletion**: `permissions.delete_entity(type, id)` removes the entity, its grants, its `parents` edges (closure follows via trigger) and any policies that name it. For automatic cleanup the app attaches a trigger to its own identity table:
+## Evaluation
+
+### Anchors
+
+A policy with `roles` requires the principal (or any group it is in, via `ancestors`) to hold one of those roles, directly or through `role_closure`, on an **anchor**, with an unexpired grant:
+
+- `via => null`: the anchor is the resource itself.
+- `via => 'folder'`: the anchor is any `folder` among the resource's parents, strictly above the resource. A resource's parents are:
+  1. the values in the `resource` jsonb argument (the row's columns). Every key is an attribute, and is also read as a parent of that type: `{"folder": "<id>"}` says the document's folder is `<id>`;
+  2. its rows in `parents`, for resources that are themselves entities (a folder's org);
+  3. transitively, every ancestor of either, from `ancestors`.
+
+So with folder `specs` in org `acme` and readme's `folder_id = specs`, a policy `via => 'org'` reaches readme through `acme`, with nothing stored about readme itself (`b/50_parents`).
+
+A policy with no `roles` needs no grant: it matches every principal in its scope, either for one resource (`resource_id`, which is how public access works) or for every resource of the type (allow-all).
+
+### Decision
+
+`can()` evaluates `_matches()`, the single place that matches policies against one concrete resource, and returns **true if any permit matches and no forbid matches**. Forbid always wins and there are no priorities, as in Cedar (`b/52_forbid`). Conditions are evaluated with the row's attributes, and principal scope and the row-independent condition come from `_candidate_policies()`, which `ids()` and `who_can()` share.
+
+### Partial evaluation for RLS: `ids()`
+
+`ids(action, type)` returns the ids of resources matched through their own grants, through parents-table ancestors, or by a `resource_id` policy. `ids(action, type, 'folder')` is a **projection onto the parent column**: the folder ids `F` such that a resource whose direct parent is `F` would be matched. That is the folders where the caller holds a matching role (`via => 'folder'`) plus every folder below an anchor the caller holds (`via => 'folder'` on a parent folder, `via => 'org'` on the org). This is what lets one RLS branch, `folder_id = any(...)`, cover org-level and folder-level access together (G10).
+
+`ids_for` is net of unconditioned forbids in the same projection (a forbid on readme removes readme from the id list; a forbid on a folder removes the folder), so it doubles as "list what I can see" (`b/52_forbid` assertion 3). `denied_ids` / `denies_all` give the forbid side separately, for RLS.
+
+`can()` and `ids()` are two implementations of one semantics, the risk the original doc warned about. During the build they were checked against each other on random data: 20 users, 60 documents in 12 nested folders under 3 orgs, groups, two forbids, every user × document × action (2,400 cases). There were **0 disagreements** between `can_for(...)` and `(id ∈ ids ∨ folder ∈ ids(folder)) ∧ ¬(id ∈ denied_ids ∨ folder ∈ denied_ids(folder))`, and 0 between `who_can` and `can_for`. This was an ad-hoc check, not a committed spec file.
+
+### Conditions
+
+A condition is a jsonb AST interpreted in PL/pgSQL with no `execute`:
+
+```json
+{"op": "==", "left": {"var": "resource.status"}, "right": "published"}
+```
+
+Operators: `and`/`or` (`args`), `not` (`arg`), `has` (`var`), `==`, `!=`, `<`, `<=`, `>`, `>=`, `in`. Variables: `principal.id`, `principal.type`, `principal.attrs.*`, `resource.<attr>`, `context.*` (the `permissions.context` setting, plus `context.jwt` = JWT claims) and `now`. Comparisons use jsonb ordering. A missing or null operand makes a comparison false.
+
+On write, the top-level `and` is split into a **principal half** (principal/context/now terms, evaluated once per query inside `ids()`) and a **resource half** (`resource.*` terms). A term that mixes the two can't be partially evaluated and is rejected with `22023`.
+
+- `can()` evaluates the resource half against its `resource` jsonb.
+- `ids()` only includes policies whose resource condition equals its `resource_condition` argument (null = unconditioned).
+- `rls_expression` emits one extra group per distinct resource condition, `(<condition compiled to SQL> and (id = any(ids(..., cond)) or folder_id = any(...)))`. The compiler maps `resource.status` to column `status` and compares through `to_jsonb(col)` so the SQL means exactly what the interpreter means (`b/53_conditions`).
+
+Grant expiry is a column on `role_grants`, not a condition, so it costs nothing.
+
+## RLS
+
+The fast path rule from PLAN.md §4: `col = any (array(select unnest(f())::uuid))`. Every call is an uncorrelated `(select ...)`, so Postgres runs it once per query as an InitPlan, and the per-row work is an array membership test that can use the column's index.
+
+`rls_expression('select', 'document', 'id', '{"folder": "folder_id"}')` produces:
 
 ```sql
-create trigger cleanup_permissions after delete on public.profiles
-  for each row execute function permissions.on_entity_deleted('user', 'id');
--- the function reads to_jsonb(old) ->> tg_argv[1]; no dynamic sql needed.
+(
+    id = any (array(select unnest(permissions.ids('select', 'document'))::uuid))
+    or folder_id = any (array(select unnest(permissions.ids('select', 'document', 'folder'))::uuid))
+) and not (
+    (select permissions.denies_all('select', 'document'))
+    or id = any (array(select unnest(permissions.denied_ids('select', 'document'))::uuid))
+    or folder_id = any (array(select unnest(permissions.denied_ids('select', 'document', 'folder'))::uuid))
+)
 ```
 
-Execute on `on_entity_deleted` is revoked from `public` (Postgres checks it at `create trigger` time), so nobody can attach it to a throwaway table to wipe someone else's grants.
+plus one group per resource condition and an `allows_all` arm when an allow-all permit exists. `apply_rls` runs it through `create policy` for `select` (`using`), `update` (`using` and `with check`), `delete` and `insert` (`with check`). The InitPlan form is used for writes too, because it runs once per statement rather than once per row; the per-row `can()` stays available for hand-written policies.
 
-## Public API
+**Finding: a boolean arm breaks index use.** The first version always emitted `(select permissions.allows_all(...)) or id = any(...) or ...`. A boolean InitPlan OR'd with the id arms stops Postgres from building a BitmapOr over the indexes. On the 10k-document benchmark data a count went from a bitmap/index scan to a Seq Scan. That's the same class of trap as the hashed subquery in PLAN.md §4. The permit side now emits `allows_all` only if an allow-all policy exists when the expression is generated (the forbid side is AND'd, so `denies_all` is always present and harmless). `lint()` reports allow-all permits that no RLS policy includes.
 
-Read functions are `stable security definer set search_path = ''`. They have to be `security definer` because callers have no `select` on the tables, and granting `select` would leak everyone's memberships.
-
-```sql
--- per-row check (writes, single rows). resource carries row values the policies may need, e.g. {"org": "<org id>"}
-permissions.can(action text, resource_type text, resource_id text, resource jsonb default '{}') returns boolean
-
--- fast path: ids of resources (via is null) or of anchors (via = 'org') the caller can reach for action
-permissions.ids(action text, resource_type text, via text default null) returns text[]
-permissions.allows_all(action text, resource_type text) returns boolean   -- policies with no role/resource restriction
-
--- explicit subject; revoked from public
-permissions.can_for(subject_type text, subject_id text, action text, resource_type text, resource_id text, resource jsonb default '{}') returns boolean
-permissions.ids_for(subject_type text, subject_id text, action text, resource_type text, via text default null) returns text[]
-permissions.who_can(action text, resource_type text, resource_id text, resource jsonb default '{}')
-  returns table (subject_type text, subject_id text, policy text)
-permissions.explain(subject_type text, subject_id text, action text, resource_type text, resource_id text, resource jsonb default '{}')
-  returns table (policy text, matched_grant jsonb)
-
--- management (security definer, revoked from public)
-permissions.define_role(resource_type text, role text, implies text[] default '{}') returns void
-permissions.grant_role(principal_type text, principal_id text, role text, resource_type text, resource_id text, expires_at timestamptz default null) returns void
-permissions.revoke_role(principal_type text, principal_id text, role text, resource_type text, resource_id text) returns void
-permissions.add_parent(child_type text, child_id text, parent_type text, parent_id text) returns void
-permissions.remove_parent(child_type text, child_id text, parent_type text, parent_id text) returns void
-permissions.set_attrs(type text, id text, attrs jsonb) returns void
-permissions.permit(name text, actions text[], resource_type text, roles text[] default null, via text default null,
-                   principal_in_type text default null, principal_in_id text default null,
-                   resource_id text default null, condition jsonb default null) returns bigint
-permissions.drop_policy(name text) returns void
-permissions.delete_entity(type text, id text) returns void
-
--- rls helpers (see "dynamic sql" below)
-permissions.rls_expression(action text, resource_type text, id_column text, via_columns jsonb default '{}', id_type regtype default 'uuid') returns text
-permissions.apply_rls(tbl regclass, command text, resource_type text, id_column text, via_columns jsonb default '{}', to_role name default 'authenticated') returns void
-permissions.lint() returns table (problem text, policy text)
-```
-
-**Dynamic SQL.** The evaluator itself uses none. Only `apply_rls` runs `execute`, to create a policy on a table. It is run by the table owner at migration time, builds its statement with `format('create policy %I on %s for %s to %I using (%s)', ...)` where the table is a `regclass` (quoted by its output function), `command` is checked against `select|insert|update|delete`, column names go through `%I` and the action and type go through `%L`. `rls_expression` only returns text, so developers who don't want any `execute` can paste its output into their migration.
-
-**Conditions** in v0.0.1 are a jsonb AST, interpreted in PL/pgSQL with no `execute`: `{"op": "==", "left": {"var": "principal.attrs.plan"}, "right": "pro"}`, with `and`, `or`, `not`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `in`, `has`. Variables are `principal.attrs.*`, `context.*` (from `permissions.context` setting plus `context.jwt` = JWT claims) and `now`. Comparisons use jsonb ordering. Grant expiry is a column on `role_grants`, not a condition, so it costs nothing.
+Hand-written policies are fine too: `b/50_parents` uses the single branch `folder_id = any (array(select unnest(permissions.ids('select', 'document', 'folder'))::uuid))`, and the benchmark uses A's two-branch shape.
 
 ## Reference scenario end to end
 
-IDs: org `acme` = `'00000000-0000-0000-0000-0000000000a1'`, document `readme` = `'00000000-0000-0000-0000-0000000000d1'`. Users are `'alice'`, `'bob'`, `'carol'`, `'dave'` for readability; in Supabase they would be auth user UUIDs.
+From `test/spec/b/30_zanzibar_reference.sql` (fixture UUIDs abbreviated):
 
 ```sql
-create table public.documents (
-  id     uuid primary key default gen_random_uuid(),
-  org_id uuid not null,
-  title  text
-);
-create index on public.documents (org_id);
-
--- 1. roles and implication (entity data)
 select permissions.define_role('org', 'member');
 select permissions.define_role('org', 'admin', '{member}');
 select permissions.define_role('org', 'owner', '{admin}');
 select permissions.define_role('document', 'viewer');
 select permissions.define_role('document', 'editor', '{viewer}');
 
--- 2. policies (the only place decisions are defined)
 select permissions.permit('org members view docs', '{select}',        'document', roles => '{member}', via => 'org');
 select permissions.permit('org admins edit docs',  '{update,delete}', 'document', roles => '{admin}',  via => 'org');
 select permissions.permit('doc viewers view',      '{select}',        'document', roles => '{viewer}');
 select permissions.permit('doc editors edit',      '{update}',        'document', roles => '{editor}');
 
--- 3. facts
-select permissions.grant_role('user', 'alice', 'admin',  'org', '00000000-0000-0000-0000-0000000000a1');
-select permissions.grant_role('user', 'carol', 'member', 'org', '00000000-0000-0000-0000-0000000000a1');
-select permissions.grant_role('user', 'bob',   'editor', 'document', '00000000-0000-0000-0000-0000000000d1');
-select permissions.add_parent('user', 'carol', 'team', 'eng');
-select permissions.add_parent('user', 'dave',  'team', 'eng');
-select permissions.grant_role('team', 'eng',   'viewer', 'document', '00000000-0000-0000-0000-0000000000d1');
+select permissions.grant_role('user', :'alice', 'admin',  'org', :'acme');
+select permissions.grant_role('user', :'carol', 'member', 'org', :'acme');
+select permissions.add_parent('user', :'carol', 'team', :'eng');
+select permissions.add_parent('user', :'dave',  'team', :'eng');
+select permissions.grant_role('user', :'bob',  'editor', 'document', :'acme_readme');
+select permissions.grant_role('team', :'eng',  'viewer', 'document', :'acme_readme');
 
-insert into public.documents (id, org_id, title)
-values ('00000000-0000-0000-0000-0000000000d1', '00000000-0000-0000-0000-0000000000a1', 'readme');
+-- RLS
+select permissions.apply_rls('public.documents', 'select', 'document', 'id', '{"org": "org_id"}');
+select permissions.apply_rls('public.documents', 'update', 'document', 'id', '{"org": "org_id"}');
 ```
 
-Admins can view because `admin` implies `member` on orgs, so "org members view docs" matches Alice. There is no document row in any permissions table except where a document has its own grant (`readme`).
+- **Can Bob update readme?** `can_for('user', bob, 'update', 'document', readme, '{"org": acme}')` is true: "doc editors edit" matches his `editor` grant on readme.
+- **Which documents can Dave select?** `ids_for('user', dave, 'select', 'document')` = `{readme}` (through `team:eng`), and `ids_for(..., 'org')` = `{}`. Carol gets `{readme}` and `{acme}`, so through RLS she sees every Acme document.
+- **Who can view readme?** `who_can('select', 'document', readme)` with no row attributes gives Bob, Carol and Dave from readme's own grants (the same question A's `list_subjects` answers). With `'{"org": acme}'` it also returns Alice and Carol through "org members view docs".
 
-RLS (this is what `permissions.apply_rls` would generate, written out by hand):
+## v0.0.2 scenarios (PLAN.md §10)
 
-```sql
-alter table public.documents enable row level security;
-
-create policy documents_select on public.documents for select to authenticated using (
-  (select permissions.allows_all('select', 'document'))
-  or id     = any (array(select unnest(permissions.ids('select', 'document'))::uuid))
-  or org_id = any (array(select unnest(permissions.ids('select', 'document', 'org'))::uuid))
-);
-
-create policy documents_update on public.documents for update to authenticated
-  using      (permissions.can('update', 'document', id::text, jsonb_build_object('org', org_id)))
-  with check (permissions.can('update', 'document', id::text, jsonb_build_object('org', org_id)));
-
-create policy documents_delete on public.documents for delete to authenticated
-  using (permissions.can('delete', 'document', id::text, jsonb_build_object('org', org_id)));
-```
-
-Each `(select ...)` is an uncorrelated scalar subquery, so Postgres runs it once as an InitPlan and the per-row work is an array membership test.
-
-**Can Bob update `readme`?** `permissions.can_for('user', 'bob', 'update', 'document', '…d1', '{"org": "…a1"}')`. Candidate policies for `(update, document)`: "org admins edit docs" (anchor = org `…a1`; Bob and his ancestors hold no role there, no match) and "doc editors edit" (anchor = `readme`; Bob holds `editor`, which satisfies `editor` in `role_closure`). Result: true. In RLS, Bob's `update documents set title = ... where id = '…d1'` passes `using` and `with check`.
-
-**Which documents can Dave select?** As Dave, `select * from documents`. `ids('select', 'document')`: Dave's set is `{user:dave, team:eng}` (one lookup in `ancestors`); "doc viewers view" needs `viewer` on the document; `team:eng` holds `viewer` on `…d1`, so the result is `{…d1}`. `ids('select', 'document', 'org')` is `{}`: Dave holds no org role. Dave sees only `readme`. Carol gets `{…d1}` from the first call and `{…a1}` from the second, so she sees every Acme document.
-
-**Who can view `readme`?** `permissions.who_can('select', 'document', '…d1', '{"org": "…a1"}')` runs each matching policy in reverse: find grants on the anchor whose role satisfies the policy roles, then expand group principals downward through `ancestors`.
-
-| subject | policy | via |
+| Goal | How B expresses it | Spec |
 | --- | --- | --- |
-| alice | org members view docs | `admin` on acme implies `member` |
-| carol | org members view docs | `member` on acme |
-| bob | doc viewers view | `editor` on readme implies `viewer` |
-| carol | doc viewers view | in `team:eng`, which holds `viewer` |
-| dave | doc viewers view | in `team:eng`, which holds `viewer` |
+| G10 parents | Folders are entities in `parents` under their org; a document's folder is its `folder_id` column. `via => 'org'` / `via => 'folder'` policies. RLS is one branch on `folder_id`. Moving a document is an `update` of its column. Cycles are rejected on write (`23514`). | `b/50_parents` 13/13 |
+| G11 public | `permit('announcement is public', '{select}', 'document', resource_id => ...)`: no role needed. Revoking is `drop_policy`. A null subject matches nothing. | `b/51_public` 7/7 |
+| G12 forbid | `forbid('block dave on readme', '{select,update,delete}', 'document', resource_id => readme, principal_id => dave)`. Beats team and org-derived permits; RLS deny side via `apply_rls`. Clients get `42501`. | `b/52_forbid` 9/9 |
+| G13 conditions | `permit(..., roles => '{member}', via => 'org', condition => resource.status == 'published')` plus an unconditioned editors policy; `apply_rls` compiles the condition into the RLS expression. Expiry is `grant_role(..., expires_at)`. | `b/53_conditions` 6/6 |
 
-A policy with no role or group requirement returns a single `('*', '*')` row instead of enumerating every user.
+Translations of A's zanzibar-level files (`b/30`, `b/31`, `b/40`) keep A's assertion count and wording. Two assertions had to change meaning, both in `b/31`:
+
+- **Cycles:** A asserts that a check over a cyclic membership graph terminates. B never stores a cycle, so the assertion checks that the cycle edge is rejected with `23514` *and* that checks still answer.
+- **Undefined userset:** B has no usersets (`team#lead`). The nearest validation, used in its place, is that a policy requiring a role not declared on its anchor type is rejected.
 
 ## Blessed path: the `rbac` preset
 
-The preset API from [PLAN.md §6](../PLAN.md) maps onto B's own concepts almost one to one. Two built-in resource types hold the roles: `app` (one resource, `app:global`, for app-wide roles) and `tenant` (one resource per scope). A role's inheritance is `role_implies`, and a role's permissions become one generated policy per resource type.
-
-### How it maps
+The preset API from [PLAN.md §6](../PLAN.md) maps onto B one to one. Two built-in resource types hold the roles: `app` (one resource, `app:global`) and `tenant` (one per scope).
 
 | Preset call | Engine call |
 | --- | --- |
-| `create_role('editor', '{documents.edit}', '{viewer}')` | On both `app` and `tenant`: `define_role(t, 'editor', '{viewer}')` and `permit('rbac:<t>:editor', '{documents.edit}', t, roles => '{editor}')` |
-| `assign_role('bob', 'editor')` | `grant_role('user', 'bob', 'editor', 'app', 'global')` |
-| `assign_role('bob', 'editor', 'acme')` | `grant_role('user', 'bob', 'editor', 'tenant', 'acme')` |
-| `has_permission('documents.edit', 'acme')` | `can('documents.edit', 'tenant', 'acme')` |
-| `scopes_with_permission('documents.read')` | `ids('documents.read', 'tenant')` |
-| `users_with_role('admin', 'acme')` | `role_grants` joined to `role_closure` on `tenant:acme` |
+| `create_role('editor', '{documents.edit}', '{viewer}')` | On `app` and `tenant`: `define_role(t, 'editor', '{viewer}')` plus a policy `rbac:<t>:editor` (actions `{documents.edit}`, roles `{editor}`, `managed_by = 'rbac'`) |
+| `assign_role('bob', 'editor', 'acme')` | a `role_grants` row on `tenant:acme` |
+| `has_permission('documents.edit', 'acme')` | `can_for(current subject, 'documents.edit', 'tenant', 'acme')` |
+| `scopes_with_permission('documents.read')` | `ids_for(current subject, 'documents.read', 'tenant')` |
+| `users_with_role('admin', 'acme')` | grants on `tenant:acme` joined to `role_closure`, group grantees expanded |
 
-Inheritance works the way B already defines it: `editor` implies `viewer` in `role_closure`, so the generated `rbac:app:viewer` policy (`documents.read`, roles `{viewer}`) also matches editors and admins. Permissions are B's actions, so nothing new is needed in the evaluator.
+What's stored for the RBAC scenario: 6 `roles` rows, 4 `role_implies` rows, the matching `role_closure`, 6 generated policies, and one `role_grants` row per assignment. `parents` and `ancestors` stay empty, so no closure triggers run. `drop_policy` refuses `managed_by` policies (`55000`), so a hand edit can't break a role.
 
-### RBAC scenario
+Graduation (`b/40_graduation`) adds `define_role('document', ...)`, two `permit` calls and a `grant_role`. The select policy gains one branch, `id = any(... permissions.ids('select', 'document') ...)`, and every RBAC answer is unchanged. Graduating is where B's second concept appears: on the sharing side the developer writes policies, which RBAC users never had to do.
 
-What the developer writes is the same in every design:
+## Performance
 
-```sql
-select permissions.create_role('viewer', '{documents.read}');
-select permissions.create_role('editor', '{documents.edit}', '{viewer}');
-select permissions.create_role('admin',  '{documents.delete,users.manage}', '{editor}');
+**Measured so far (small scale only).** 10k documents, 1k users, 20 orgs, 50 teams; `./bench/run.sh --impl prototypes/b-policy-first.sql --duration 3`; 4 clients on a laptop shared with other test runs, so treat these as a sanity check, not a result. All within budget:
 
-select permissions.assign_role('alice', 'admin');
-select permissions.assign_role('bob',   'editor');
-select permissions.assign_role('carol', 'viewer');
+| workload | p50 ms | p95 ms |
+| --- | --- | --- |
+| rbac_check | 0.30 | 0.52 |
+| rbac_select_page | 0.41 | 0.84 |
+| rbac_select_count | 0.34 | 0.62 |
+| rbac_update_one | 0.68 | 0.78 |
+| write_assign_role | 0.08 | 0.12 |
+| share_list_objects | 0.31 | 0.56 |
+| share_select_page | 0.73 | 0.89 |
+| write_share | 0.08 | 0.14 |
 
-create policy documents_select on documents for select using ((select permissions.has_permission('documents.read')));
-create policy documents_update on documents for update using ((select permissions.has_permission('documents.edit')));
-create policy documents_delete on documents for delete using ((select permissions.has_permission('documents.delete')));
+The B sharing seed (`bench/designs/b/`) produces the same visible document set as A's for all 1,000 users (identical checksum over every user's RLS result). Large-scale numbers are pending a serial run.
 
--- tenant-scoped variant
-create policy documents_select on documents for select
-  using (org_id = any (array(select unnest(permissions.scopes_with_permission('documents.read'))::uuid)));
-create policy documents_update on documents for update
-  using (permissions.has_permission('documents.edit', org_id::text));
-```
+**Why the stand-in's RBAC was ~3× slower than A** (rbac_update_one p95 3.27 ms vs 1.04 ms). It was the implementation, not the design:
 
-What's stored underneath: 6 `roles` rows and 4 `role_implies` rows (3 roles and 2 implications on each of `app` and `tenant`), the matching `role_closure`, 6 generated `policies` (one per role per type), and one `role_grants` row per assignment. `parents` and `ancestors` stay empty, so none of the closure triggers run.
+1. The stand-in's `can_for` computed the caller's whole `ids_for` set and then tested membership.
+2. `ids_for` matched the principal with `(principal = me) or (principal) in (select ... from ancestors)`. That OR stopped Postgres using the `role_grants` primary key prefix. EXPLAIN showed a bitmap scan of every grant of the role in `tenant` (~334 rows per role at small scale), filtered afterwards. The cost grew with the total number of users, not with the caller's grants.
 
-Graduation, sharing one `acme` document with Dave:
+The built evaluator drives every check from `subject (+ its groups) × anchor` into the `role_grants` primary key. Single-client rbac_update_one went from 2.5 ms (stand-in) to 0.56 ms, and rbac_check from 0.41 ms to 0.20 ms.
 
-```sql
-select permissions.define_role('document', 'viewer');
-select permissions.define_role('document', 'editor', '{viewer}');
-select permissions.permit('doc viewers view', '{select}', 'document', roles => '{viewer}');
-select permissions.permit('doc editors edit', '{update}', 'document', roles => '{editor}');
-select permissions.grant_role('user', 'dave', 'editor', 'document', '<doc id>');
+**Parents, indicative only.** On the same small data with folders added (10 folders per org, a `via => 'tenant'` policy, single-branch RLS on `folder_id`), page and count ran at about 0.43 ms single-client. The InitPlan returned 20 folder ids instead of 1,000 document ids, and the plan was an index-only scan on `folder_id`. This was ad hoc, not a committed benchmark.
 
--- select policy gains one branch
-create policy documents_select on documents for select using (
-  org_id = any (array(select unnest(permissions.scopes_with_permission('documents.read'))::uuid))
-  or id  = any (array(select unnest(permissions.ids('select', 'document'))::uuid))
-);
-```
+**What is cheap:** `ids()` and `can()` cost grows with the caller's grants and group count, not the table size. Org- or folder-level access costs one array element per folder. Policy edits and role grants need no maintenance writes.
 
-The RBAC rows are untouched. Graduating is where B's second concept appears: on the `zanzibar` side the developer writes policies explicitly, which RBAC users never had to do.
+**What needs care:**
 
-Queries:
-
-- **Can Carol edit documents?** No. Only `rbac:app:editor` grants `documents.edit`, and Carol's `viewer` doesn't satisfy `editor` in `role_closure`.
-- **What permissions does Bob have in `globex`?** `{documents.read}`.
-- **Who are the admins of `acme`?** Alice.
-
-### Tested (partly)
-
-This doc only describes the evaluator, so the test used a minimal `can`/`ids` written from the rules above: permit policies with no `via`, `role_closure`, and `ancestors`. It ran on Postgres 16 against the schema and identity functions from this doc. Every answer matched: Carol can't edit; Bob gets `{documents.read}` in `globex`, edit scopes `{acme}`, read scopes `{acme, globex}`; the admins of `acme` are `{alice}`; 6 policies were generated. The test checks the mapping, not B's real evaluator.
-
-### Fit
-
-- **Better than expected.** `role_implies` is exactly "inherits", and permissions are just actions. The preset is a thin layer like Design A's.
-- **Generated policies sit next to hand-written ones.** The preset owns the `rbac:*` policies, so `policies` needs a `managed_by` column (or a name convention the management functions enforce), so that `drop_policy` can't break a role. Changing a role's permissions rewrites its two generated policies.
-- **RBAC checks are flat joins**, with no recursion and no closure maintenance.
-- **The second concept is deferred, not removed.** RBAC users never see policies, but the moment they graduate they meet both facts and policies at once.
-
-## RLS performance
-
-**What is fast**
-
-- `ids()` cost depends on how many grants the caller holds, not on table size. It is one query: subject plus its ancestors (index on `ancestors` PK), joined to `role_grants` (PK prefix on principal), `role_closure` and the few matching `policies`. No recursion. Expected well under a millisecond for a user with tens of grants.
-- `can()` is the same join restricted to one anchor: a handful of index probes. Fine for single-row `update`/`delete` and `with check`.
-- Org-level access costs one array element (the org id) no matter how many documents the org has. That's the case where tuple designs hurt most.
-- Policy edits and role grants need no maintenance writes.
-
-**What is slow or needs care**
-
-- **Large ID arrays.** `id = any($1)` over an InitPlan param is a linear scan of the array for each row the planner checks (hashed `= any` only applies to constant arrays). If the planner uses an index on `id` this is fine; on a seq scan with a 50k-element array it is not. For big sets the generated expression could switch to `id in (select unnest(...)::uuid)`, which Postgres runs as a hashed SubPlan, O(1) per row. **Measured, this is a trap for small sets:** in the Design A benchmark (1M documents, 20k visible per user) the hashed form stopped Postgres using the `org_id` index, and counting visible documents went from 2.2 ms to 88.8 ms. Any cut-off has to be measured with `bench/run.sh`.
-- **Bulk updates** with the per-row `can()` call it once per row. For `update ... where org_id = X` across many rows, apps should use the `ids` form in the `using` clause too.
-- **Resource-attribute conditions** (for example `resource.status == 'published'`) can't be partially evaluated into an id set in v0.0.1. Those policies are only honoured by `can()`, and `lint()` flags them. v0.0.3 compiles them to SQL predicates inside `rls_expression`.
-- **`who_can`** fans out through group descendants. It is an admin and debugging function, not an RLS function.
+- **Number of InitPlans.** The generated expression has one function call per arm: 5 for a table with one parent column and no conditions, 7 with one resource condition. Each is a function call (tens of microseconds). This hasn't been measured at scale.
+- **Large id arrays.** `id = any($1)` is a linear scan of the array per row the planner checks. With an index on the column this is fine. A caller with tens of thousands of direct grants hasn't been measured. Don't switch to the hashed `in (select ...)` form (PLAN.md §4: 40× slower for counts).
+- **Bulk updates** through a hand-written per-row `can()` policy call it once per row; `apply_rls` uses the InitPlan form instead.
+- **`who_can`** fans out through group descendants and re-checks each candidate. It's a debugging function, not an RLS function.
 
 **Write cost**
 
-| write | cost |
+| Write | Cost |
 | --- | --- |
-| `grant_role`, `revoke_role`, `set_attrs`, `permit` | one row; no closure work |
+| `grant_role`, `revoke_role`, `set_attrs`, `permit`, `forbid` | one row; no closure work |
 | `define_role` | rebuild `role_closure` for one resource type (tens of rows) |
-| `add_parent(c, p)` | inserts `|descendants-or-self(c)| x |ancestors-or-self(p)|` closure rows; cycle and depth check first |
-| `remove_parent` | deletes and rebuilds closure for descendants of `c` |
+| `add_parent(c, p)` | `|descendants-or-self(c)| × |ancestors-or-self(p)|` closure rows, after cycle and depth checks |
+| `remove_parent(c, p)` | delete and rebuild closure for `c` and its descendants |
 
-All parent writes serialize on one advisory lock. That's fine for membership churn in the tens per second, not for thousands.
-
-**On a 1M-row `documents` table**: index `org_id` and `id`. A user in 3 orgs with 20 direct document grants gets `org_id = any('{3 ids}')` (bitmap index scan on `org_id`) or `id = any('{20 ids}')` (index scan on `id`). Postgres reads only the rows it will return. Reading 300k rows a user can legitimately see is still 300k rows; the filter adds an array test per row, not a function call per row. What we must avoid is a plain `using (permissions.can(...))` on select, which costs about 1M x (several index probes) and is the trap every policy engine falls into. Docs and `lint()` should say so.
-
-## How later features fit
-
-**Parent inheritance (v0.0.2).** Documents are put in folders with `parents` edges (or a `folder_id` column), folders nest via `parents`, and a policy says `roles => '{viewer}', via => 'folder'`. The anchor becomes "any ancestor folder". `ids('select', 'document', 'folder')` returns the folders where the caller holds `viewer` plus all their descendant folders (one join on `ancestors` by `ancestor_id`). RLS matches `folder_id = any(...)`. If documents are linked by `parents` edges instead of a column, `ids` returns document ids directly, at the cost of one closure row per document per level. The evaluator only changes in how it resolves the anchor; no new tables.
-
-**Attribute conditions.** Principal and context conditions are evaluated once per query inside `ids()` (they don't depend on the row), so they stay on the fast path. Expiring grants use `role_grants.expires_at`. Resource conditions: see above.
-
-**Forbid.** Drop the `check (effect = 'permit')` constraint. `can()` returns false if any forbid matches (forbid wins, no priority ordering, the same as Cedar). The fast path gains a deny side: `rls_expression` adds `and not (id = any(denied_ids) or org_id = any(denied_org_ids))`. A forbid with a resource-attribute condition forces the per-row path for that table, and `lint()` must say so.
-
-**CEL.** `condition_src` stores CEL text. A small PL/pgSQL parser for a CEL subset (field access, comparisons, `in`, `&&`, `||`, `!`, `has()`) compiles it to the same jsonb AST at write time. The evaluator doesn't change, and a parse error rejects the policy on insert rather than at query time.
-
-**Cedar compatibility.** A policy row maps to one Cedar policy. `principal_in` becomes `principal in Team::"eng"`. `roles` + `via` maps by exporting each `(resource, role)` pair as a synthetic entity `Role::"org/acme/member"`, `role_implies` as `Role::"org/acme/admin" in Role::"org/acme/member"`, and adding an attribute on the anchor: `permit (principal, action == Action::"select", resource is Document) when { principal in resource.org.member };`. Export of our subset to Cedar is feasible. Import of arbitrary Cedar is not: only policies that fit our shapes (scope + role-on-anchor + condition) can be loaded, and the rest are rejected with a reason.
+All parent writes serialize on one advisory lock. The sharing seed (1,047 parent edges, 2,722 closure rows) loads in about 1 s at small scale.
 
 ## Weaknesses and risks
 
-- **Two concepts to learn.** A developer has to write policies and facts, where a tuple design only needs tuples (plus a schema). For the reference scenario that is 4 policies and 5 role definitions on top of the grants.
-- **RLS has to mirror the policies' `via` values.** If someone adds a policy `via => 'project'`, the `documents` RLS policy must gain `or project_id = any(...)` or the new policy silently grants nothing on select. It fails closed, but it is confusing. `apply_rls` and `lint()` (which flags `via` values with no column mapping) reduce this, but it is a real coupling between data in a table and DDL.
-- **`can()` and `ids()` are two implementations of one semantics.** If they disagree, select and update behave differently. Phase 1 needs a property test: for random data, `can(x) = x in ids()`.
-- **The policy language is restricted.** Principal scope, role on the resource or one named anchor, condition. Anything else (for example "the author of the document", an `owner_id` column) is either a role grant per row or a per-row `can()` with `resource => {"owner": owner_id}` plus a condition, which is off the fast path in v0.0.1. A generic Cedar engine would accept such policies and just be slow; we refuse or flag them instead.
-- **Closure write amplification.** Adding a big group into another big group writes the product of their sizes. Moving a subtree rebuilds it. The single advisory lock serializes all membership writes. Groups of thousands of users nested a few levels deep are fine; org-chart-sized graphs with constant churn are not.
-- **Text IDs and casts.** `(...)::uuid[]` fails the whole query if any stored id for that type isn't a uuid. We should record an id type per resource type and validate on `grant_role`.
-- **Large id arrays** when a user has tens of thousands of direct grants. Mitigated by the hashed-subplan form, but unmeasured.
-- **Security definer everywhere.** The read functions run as the extension owner. A bug in them is a privilege bug. `search_path = ''` and the absence of dynamic SQL in that path limit the damage. The functions are also not `leakproof` (that needs a superuser), which can restrict some planner optimizations around RLS quals.
-- **Context from settings.** `permissions.context` and `permissions.subject` can be set by any session on plain Postgres. On Supabase the JWT wins, but a condition on `context.*` should only use JWT claims or values the server sets.
+- **Two concepts to learn.** A developer writes policies and facts. The reference scenario needs 5 role definitions and 4 policies on top of the grants.
+- **RLS has to mirror the policies.** The generated expression is fixed when `apply_rls` runs:
+  - `via` columns are named there;
+  - resource-conditioned groups and the `allows_all` arm are included only if such policies exist at that moment.
 
-## Implementation phases
+  Add a policy `via => 'project'`, a new resource condition, or an allow-all permit later, and the table's RLS must be regenerated, or the policy silently grants nothing on select. It fails closed for permits. `lint()` flags these cases, but it checks `pg_policy` text, which is brittle. Forbids added later need no regeneration for unconditioned shapes.
+- **`can()` needs the row.** Outside RLS, the caller must pass the row's parent columns and attributes in `resource`. Passing too little fails closed for permits but **fails open for forbids that depend on the row**: a forbid `via => 'folder'` or with a resource condition doesn't match if the caller omits the folder or attribute. RLS and `apply_rls` always pass the real columns. A hand-written `can()` call must too.
+- **Every jsonb key is a candidate parent.** `{"status": "draft"}` is also read as "parent of type `status`", which is harmless unless someone declares roles or parents for a type named `status`. That's simple but implicit.
+- **A document without a value in the RLS parent column** (e.g. `folder_id is null`) is reachable only through its own grants unless the policy also has an `org_id` branch.
+- **`ids()` is exact only for unconditioned policies.** With resource-conditioned permits or forbids, `ids_for` used as a "list" is an approximation. RLS is exact because it compiles the conditions.
+- **Closure write amplification and one global lock.** Nesting a big group in another writes the product of their sizes. Row-level triggers mean removing a 1,000-member team does 1,000 small rebuilds. Membership churn in the tens per second is fine; org-chart-sized graphs with constant churn are not. Repeatable read is refused for these writes.
+- **Text ids and casts.** `::uuid` in RLS fails the whole query if any stored id for that type isn't a uuid. An id type per resource type, validated in `grant_role`, would fix this.
+- **Security definer everywhere.** A bug in the read functions is a privilege bug. `search_path = ''` and no dynamic SQL in the read path limit the damage. The functions aren't `leakproof` (that needs a superuser).
+- **Context from settings.** `permissions.context` and `permissions.subject_id` can be set by any session on plain Postgres. On Supabase the JWT wins, but conditions on `context.*` should only use JWT claims or server-set values.
+- **Condition semantics are jsonb semantics.** `now` and timestamps compare as ISO strings, which works for same-offset values only.
+- **The policy language is restricted:** principal scope, role on the resource or on a parent of one named type, condition. "The author of the document" (an `owner_id` column) needs either a role grant per row or a condition comparing `resource.owner_id` with `principal.id`. That comparison mixes resource and principal variables, which the splitter rejects today (open question 7). A generic Cedar engine would accept such policies and just be slow; B refuses them.
 
-1. **Core (v0.0.1).** Identity functions; `entities`, `parents`, `ancestors` with triggers, cycle and depth checks; `roles`, `role_implies`, `role_closure`; `role_grants` with expiry; `policies` (permit only); jsonb condition interpreter; `can`, `ids`, `allows_all` and `_for` variants; `who_can`, `explain`; management functions; privileges. Tests: the reference scenario, the `can`/`ids` agreement property test, cycles, depth 10 and 11, user deletion, a client trying to write tables directly.
-2. **RLS tooling.** `rls_expression`, `apply_rls`, `lint`; pgbench comparison on 1M rows of the `= any` form vs the hashed-subplan form vs a naive per-row `can()`.
-3. **v0.0.2.** Parent inheritance via `via => '<parent type>'` with transitive anchors; `forbid` policies with deny sets in the fast path.
-4. **v0.0.3.** Resource-attribute conditions compiled to SQL predicates in `rls_expression`; CEL subset parser into the AST.
-5. **Later.** Cedar export, and import of the supported subset; action groups (`edit` implies `select`) as Cedar action hierarchies.
+## Deviations from the original design
+
+1. **Identity names** follow the shared contract: `current_subject_id()` and the `permissions.subject_id` setting (the original doc said `current_subject()` / `permissions.subject`, and read the old `request.jwt.claim.sub`).
+2. **`via` resolution** (original open question 2): both the `resource` jsonb (columns) and `parents` rows count as parents, and anchors are transitive through `ancestors`. Anchors for `via` are strictly above the resource.
+3. **`ids(..., via)` is a projection onto the parent column**, not "the anchor ids where I hold the role". The original version couldn't give G10 a single RLS branch, because org-level grants needed a separate `org_id` arm.
+4. **Forbid is implemented** (the check constraint is gone). `principal_id` was added so a forbid (or permit) can name one principal, as Cedar's `principal == User::"dave"` does. `ids_for` is net of forbids. `denied_ids`, `denies_all` and their `_for` variants are new, for the RLS deny side.
+5. **Public access** is a no-role policy with `resource_id`, not a wildcard grant. No new mechanism was needed.
+6. **Resource conditions run on the RLS fast path now**, not in "v0.0.3". Conditions are split into principal and resource halves on write, mixed terms are rejected, and `rls_expression` compiles resource halves to SQL with their own `ids(..., resource_condition)` group.
+7. **The hashed-subquery advice is removed.** The fast path is `= any (array(select unnest(...)::uuid))` (PLAN.md §4).
+8. **`allows_all` is not always emitted** (the BitmapOr finding above).
+9. **`apply_rls` uses the InitPlan expression for update, delete and insert** instead of a per-row `can()`. It runs as security invoker, so only the table owner can use it. It returns the policy name `permissions_<command>`.
+10. **Closure details:** `depth` is the shortest path; repeatable read is refused (serializable is allowed); `parents` rows are immutable.
+11. **Additions:** `is_in` (Cedar `in`); `explain` also returns the effect; `who_can` filters candidates through the same matcher as `can`, so the two agree by construction; `delete_entity` returns a row count; `managed_by` exists and `drop_policy` enforces it; `lint()` checks undeclared roles, unenforced forbids, missing allow-all arms and resource conditions missing from RLS.
+12. **Parameter names:** `permit` and `forbid` take named arguments without a prefix (`roles =>`, `via =>`, `resource_id =>`, `condition =>`, `principal_id =>`), matching the examples in the original doc.
 
 ## Open questions
 
-1. Should role implication stay a table, or should it just be policies (`roles => '{viewer,editor}'`)? The table is shorter for apps but is a second place where meaning lives.
-2. Should `via` resolve only through the `resource` jsonb argument and the RLS column mapping, or also through `parents` edges for resources? Allowing both gives two sources of truth for "which org is this document in".
+1. Should role implication stay a table, or just be policies (`roles => '{viewer,editor}'`)? The table is shorter for apps but is a second place where meaning lives.
+2. Should `rls_expression` be regenerated automatically (an event trigger or a policy-table trigger that re-runs `apply_rls`), instead of `lint()` reporting drift? That needs DDL from a trigger, which TLE may not allow.
 3. Explicit subject: is `revoke` on `*_for` functions enough, or should they check membership of a dedicated `permissions_admin` role?
-4. Where is the cut-off between emitting `= any(array)` and the hashed-subplan form, and can `rls_expression` pick it, or must the developer?
-5. Should `apply_rls` exist at all (it is the only `execute` in the extension), or should we ship only `rls_expression` and leave DDL to migrations?
-6. Is one global advisory lock acceptable for closure maintenance, or do we need per-component locks from day one?
+4. Should parent keys in the `resource` jsonb be explicit (declared parent types per resource type) rather than "every key"?
+5. Should `apply_rls` exist at all (it is the only `execute` in the extension), or should we ship only `rls_expression`?
+6. Is one global advisory lock acceptable for closure maintenance, or do we need per-component locks? Statement-level triggers would also cut the per-row cost of big membership changes.
+7. Principal-to-resource conditions (`resource.owner_id == principal.id`): allow them as a compiled SQL predicate comparing a column with `current_subject_id()`? That's partially evaluable, but the splitter rejects it today.
