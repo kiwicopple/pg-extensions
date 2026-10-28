@@ -1,0 +1,25 @@
+# p95 latency budgets in milliseconds, per scale and workload.
+# bench/run.sh --check exits 1 if any measured p95 is over its budget.
+#
+# Set on 2026-10-28 at roughly 2-3x Design A's measured p95 (Postgres 16,
+# Apple Silicon laptop, 4 clients). Tight enough to catch a real regression
+# (the per-row cast bug in PLAN.md section 4 was 5x), loose enough for
+# machine-to-machine noise. Medium scale has no budgets yet.
+#
+# scale	workload	p95_ms
+small	rbac_check	1
+small	rbac_select_page	2
+small	rbac_select_count	2
+small	rbac_update_one	4
+small	write_assign_role	1
+small	share_list_objects	2
+small	share_select_page	5
+small	write_share	1
+large	rbac_check	1
+large	rbac_select_page	3
+large	rbac_select_count	3
+large	rbac_update_one	3
+large	write_assign_role	1
+large	share_list_objects	2
+large	share_select_page	6
+large	write_share	1

@@ -7,6 +7,8 @@ help:
 	@echo "make reset  					# reset supabase database"
 	@echo "make tle.install  			# install all extensions locally"
 	@echo "make dbdev.publish.XXX  		# publish XXX extension"
+	@echo "make test.pg_permissions  		# run the pg_permissions test suite (IMPL=... to pick an implementation)"
+	@echo "make bench.pg_permissions 		# benchmark pg_permissions (IMPL=..., SCALE=small|medium|large)"
 
 reset:
 	supabase db reset
@@ -14,7 +16,8 @@ reset:
 .PHONY: tle.install
 tle.install: \
 	tle.install.pg_idkit \
-	tle.install.is_even
+	tle.install.is_even \
+	tle.install.pg_permissions
 	@echo "\n\nDone!"
 
 tle.install.%:
@@ -29,3 +32,13 @@ tle.update.%:
 dbdev.publish.%:
 	@echo "\n\nPublishing $* \n"
 	dbdev publish --path $(REPO_DIR)/$*
+# pg_permissions: test suite and benchmarks (see pg_permissions/test/README.md)
+IMPL ?= pg_permissions--0.0.1.sql
+SCALE ?= small
+
+.PHONY: test.pg_permissions bench.pg_permissions
+test.pg_permissions:
+	cd $(REPO_DIR)/pg_permissions && ./test/run.sh --impl $(IMPL)
+
+bench.pg_permissions:
+	cd $(REPO_DIR)/pg_permissions && ./bench/run.sh --impl $(IMPL) --scale $(SCALE)

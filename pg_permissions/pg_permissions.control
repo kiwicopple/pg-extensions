@@ -1,0 +1,4 @@
+# pg_permissions extension
+comment = 'Flexible authorization (RBAC, ReBAC) for RLS policies.'
+default_version = '0.0.1'
+superuser = false
