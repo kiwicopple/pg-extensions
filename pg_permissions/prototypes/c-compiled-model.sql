@@ -1187,8 +1187,11 @@ begin
 end;
 $$;
 
--- Principals holding the permission. Public grants can't be enumerated and
--- are not listed (a public forbid empties the list).
+-- Principals holding the permission. A public grant (user:*) can't be
+-- enumerated, so it is one null row: "every principal of the grant's type",
+-- like A's ('user', '*') row from list_subjects. The null row is not net of
+-- per-principal forbids (they can't be listed as exceptions); a public forbid
+-- empties the whole list, null row included.
 create function permissions._who_can(p_object_type text, p_object_id uuid, p_name text, p_kind text default null)
 returns setof uuid
 language sql stable
@@ -1220,6 +1223,8 @@ as $$
         from grants x join permissions.memberships m
           on m.set_id = x.subject_id and m.set_relation = x.subject_relation and m.set_type = x.subject_type
         where x.subject_relation is not null
+      union all
+        select null::uuid, forbid from grants where subject_relation is null and subject_id is null
     )
     select principal_id from holders where not forbid
     except

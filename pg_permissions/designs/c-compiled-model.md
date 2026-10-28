@@ -2,7 +2,7 @@
 
 > One of three candidate designs. See [../PLAN.md](../PLAN.md) for the shared goals, requirements and evaluation criteria.
 >
-> **Status (2026-10-28):** built as [`prototypes/c-compiled-model.sql`](../prototypes/c-compiled-model.sql). It passes every shared spec file and its own `test/spec/c/` files (30, 31, 32, 40, 50–53): 14 files, 178 assertions. This document describes what was built. Section 13 lists where the build departed from the earlier draft, and why.
+> **Status (2026-10-28):** built as [`prototypes/c-compiled-model.sql`](../prototypes/c-compiled-model.sql). It passes every shared spec file and its own `test/spec/c/` files (30, 31, 32, 40, 50–54): 16 files, 195 assertions. This document describes what was built. Section 13 lists where the build departed from the earlier draft, and why.
 
 ## 1. Summary
 
@@ -203,7 +203,7 @@ permissions.accessible(object_type text, permission text) returns uuid[]
 -- reads for any subject (admin only: they would leak other users' access)
 permissions.can_for(subject_type text, subject_id uuid, object_type text, object_id uuid, permission text) returns boolean
 permissions.accessible_for(subject_type text, subject_id uuid, object_type text, permission text) returns uuid[]
-permissions.who_can(object_type text, object_id uuid, permission text) returns setof uuid
+permissions.who_can(object_type text, object_id uuid, permission text) returns setof uuid   -- null row = public (user:*)
 
 -- writes (admin)
 permissions.grant(object_type, object_id uuid, relation, subject_type, subject_id uuid,
@@ -226,7 +226,7 @@ permissions.rebuild() returns bigint
 - **Unknown names in reads return false or empty**, they don't raise. This matches the `rbac` preset rule (PLAN.md §6): a policy naming a dropped permission denies instead of breaking every query. Writes validate everything and raise on unknown names.
 - A forbid is a grant of a `but_not` relation, so it is admin-only like every grant (tested: `authenticated` gets `42501`).
 - `grant_public` is a separate function so a null `subject_id` from a failed lookup can never grant public access (`grant` raises on null).
-- `who_can` can't enumerate public grants and doesn't list them. A public forbid empties the list.
+- **`who_can` reports a public grant as one null row**, meaning "every principal of the grant's type". It never enumerates users. This is the counterpart of A's `('user', '*')` row from `list_subjects`, encoded as C stores it (`tuples.subject_id` null) because `who_can` returns bare uuids. As in A, the null row is not net of per-principal forbids: a blocked user is dropped from the concrete rows, but can't be listed as an exception to "everyone". A public forbid (`blocked: ["user:*"]`) empties the whole list, null row included. Public grants on a parent count. Callers that test membership with `x = any (...)` ignore the null row; check for it explicitly (`c/54_who_can_public`). Until 2026-10-28 public grants were silently left out, so `who_can` under-reported who had access.
 - `can` is used rather than `check` because `check` is a reserved word: `permissions.check(...)` works schema-qualified, but a bare `check(...)` is a syntax error.
 
 Reads have no recursion. `can()` is one statement: resolve the permission's `satisfies` rows; build the candidate objects (the object itself, its parent from `parents`, and the parent's rows in `ancestors`); then probe `tuples` for a direct grant, a public grant, or a grant to a userset the subject is in (`memberships` joined on the unique index). The result is "some permit and no forbid". `accessible()` runs the same three branches from the subject side, then expands grants on containers to the target type's objects through `ancestors` and `parents`. It returns permitted minus forbidden. `who_can()` starts from the object and expands usersets through `memberships_by_set`.
@@ -279,7 +279,7 @@ Roles aren't usersets, so `memberships` stays empty for an RBAC-only app and non
 | Goal | How C does it | Spec |
 | --- | --- | --- |
 | G10 parents | `"parent": [...]` + `"parent->P"`; `set_parent()`; container closure. The RLS policy is a single branch: `id = any ((select permissions.accessible('document', 'view'))::uuid[])`. `who_can` includes parent-derived subjects. Cycles are **rejected on write** (`23514`). | `c/50_parents` 13/13 |
-| G11 public | `"viewer": ["user", "user:*"]`, `grant_public()` / `revoke_public()`. Null subject is denied. | `c/51_public` 7/7 |
+| G11 public | `"viewer": ["user", "user:*"]`, `grant_public()` / `revoke_public()`. Null subject is denied. `who_can` returns one null row for public access (section 7). | `c/51_public` 7/7, `c/54_who_can_public` 8/8 |
 | G12 forbid | `{"any": [...], "but_not": ["blocked"]}`; the forbid is `grant(..., 'blocked', ...)`. Forbid beats parent-derived access. | `c/52_forbid` 9/9 |
 | G13 conditions | Resource conditions stay in RLS on the app's column: `id = any (accessible('document','edit')) or (status = 'published' and id = any (accessible('document','view')))`. Grant expiry is `expires_at` on the tuple. | `c/53_conditions` 6/6 |
 
@@ -382,7 +382,7 @@ The large-scale comparison with Design A is a later, serial step.
 | Parent link as a tuple (`document:readme#org@org:acme`), syntax `org->view_documents` | Dedicated `parents` table (one parent per object), `"parent": [...]` + `parent->P` inside `P` only, all-or-nothing up the hierarchy | Single parent makes a move one upsert and the closure a chain. The same-name rule keeps the flat compiled form exact (section 3). |
 | Recursive parents reuse the memberships machinery | Separate `ancestors` table, for container types only | Leaf objects never get closure rows, so moving a folder doesn't fan out to documents. |
 | Forbid as `excludes` table | `forbid` flag on `satisfies`, deny-overrides along the chain | One table; semantics in section 9. |
-| `user:*` was an open question | `type:*` in the model, `grant_public`, `tuples.subject_id` null | G11. Separate function so a null can't grant public access. |
+| `user:*` was an open question | `type:*` in the model, `grant_public`, `tuples.subject_id` null; `who_can` returns a null row for it | G11. Separate function so a null can't grant public access. The null row matches A's `user:*` row in `list_subjects` without changing `who_can`'s `setof uuid` type. |
 | Membership expiry deferred | Rejected on write and at compile time | Fail loudly instead of drifting. |
 | Max depth: reject or truncate (open question) | Reject (`54001`); `memberships.depth` stores the shortest path | Open question 3. |
 | `tuples` immutable | Only `expires_at` can change (re-granting updates it); `truncate` blocked | `31_zanzibar_groups` re-grants with a new expiry. |

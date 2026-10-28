@@ -528,10 +528,38 @@ begin
 end;
 $$;
 
+-- The keys of a resource jsonb that are read as the row's parents: a key that
+-- names a type ("folder": <id>) is the parent of that type, except a key that
+-- names a principal type (one a policy scopes principals by, or that holds a
+-- grant), unless some policy on p_type anchors via that type. Principal types
+-- live in the parents table as group membership (user in team in org), so
+-- {"user": <author>} read as a parent would make the author's teams and orgs
+-- the row's anchors. Null values name no parent.
+create function permissions._parent_keys(p_type text, p_resource jsonb)
+returns table (parent_type text, parent_id text)
+language sql stable
+set search_path = ''
+as $$
+    select j.key, j.value
+    from jsonb_each_text(coalesce(p_resource, '{}')) j
+    where j.value is not null
+      and (exists (select 1 from permissions.policies p where p.enabled and p.resource_type = p_type and p.via = j.key)
+           or not (exists (select 1 from permissions.policies p where j.key in (p.principal_type, p.principal_in_type))
+                   or exists (select 1 from permissions.role_grants g where g.principal_type = j.key)))
+$$;
+
 -- Every policy that matches one concrete resource. p_resource carries the
--- row's attributes; a key that names a type (e.g. "folder") is also read as
--- the resource's parent of that type, and that parent's own ancestors count
--- too. Parents stored in the parents table count as well.
+-- row's attributes; its parent keys (_parent_keys, e.g. "folder") are also
+-- read as the resource's parents, and those parents' own ancestors count too.
+-- Parents stored in the parents table count as well.
+--
+-- Fails closed: a forbid that could apply to the subject (principal scope
+-- matches, and it needs no role or the subject holds one of its roles on some
+-- resource of its anchor type) must have its inputs. If it reads a
+-- resource.<attr> that isn't a key of p_resource, or anchors via a parent
+-- type that p_resource doesn't name and the stored ancestors don't supply,
+-- this raises 22023 instead of letting the forbid silently not match. A key
+-- with a null value means "the row has none" and counts as given.
 create function permissions._matches(
     p_subject_type text, p_subject_id text, p_action text,
     p_type text, p_id text, p_resource jsonb default '{}'
@@ -544,9 +572,53 @@ as $$
 #variable_conflict use_column
 declare
     v_env jsonb;
+    v_res jsonb := coalesce(p_resource, '{}');
+    v_policy text;
+    v_input text;
 begin
     if p_subject_id is null then
         return;
+    end if;
+    if exists (select 1 from permissions.policies p
+               where p.enabled and p.effect = 'forbid' and p.resource_type = p_type and p_action = any (p.actions)
+                 and (p.via is not null or p.resource_condition is not null)) then
+        select p.name, m.input into v_policy, v_input
+        from permissions._candidate_policies(p_subject_type, p_subject_id, p_action, p_type) p
+        cross join lateral (
+            -- an attribute the resource condition reads
+            select format('resource.%s', a.k) as input
+            from (select distinct substr(x #>> '{}', 10) as k
+                  from jsonb_path_query(p.resource_condition, 'lax $.**.var') x) a
+            where p.resource_condition is not null and not (v_res ? a.k)
+            union all
+            -- the parent type it anchors on
+            select format('a %s parent', p.via)
+            where p.via is not null and not (v_res ? p.via)
+              and not exists (select 1 from permissions.ancestors a
+                              where a.child_type = p_type and a.child_id = p_id and a.ancestor_type = p.via)
+              and not exists (select 1 from permissions._parent_keys(p_type, v_res) k
+                              join permissions.ancestors a on a.child_type = k.parent_type and a.child_id = k.parent_id
+                              where a.ancestor_type = p.via)
+            limit 1
+        ) m
+        where p.effect = 'forbid' and (p.resource_id is null or p.resource_id = p_id)
+          and (p.roles is null or exists (
+                select 1
+                from (select p_subject_type, p_subject_id
+                      union all
+                      select a.ancestor_type, a.ancestor_id from permissions.ancestors a
+                      where a.child_type = p_subject_type and a.child_id = p_subject_id) s(t, id)
+                join permissions.role_grants g
+                  on g.principal_type = s.t and g.principal_id = s.id and g.resource_type = coalesce(p.via, p_type)
+                join permissions.role_closure rc
+                  on rc.resource_type = g.resource_type and rc.role = g.role and rc.implied = any (p.roles)
+                where g.expires_at is null or g.expires_at > now()))
+        limit 1;
+        if v_policy is not null then
+            raise exception 'permissions: forbid "%" needs % of %:%, which the resource argument does not include', v_policy, v_input, p_type, p_id
+                using errcode = '22023',
+                      hint = 'Pass the row''s parent columns and the attributes forbids read in resource; a null value means the row has none.';
+        end if;
     end if;
     if exists (select 1 from permissions.policies p
                where p.enabled and p.resource_type = p_type and p_action = any (p.actions)
@@ -573,11 +645,11 @@ begin
         select a.ancestor_type, a.ancestor_id, false from permissions.ancestors a
         where a.child_type = p_type and a.child_id = p_id
         union all
-        select j.key, j.value, false from jsonb_each_text(coalesce(p_resource, '{}')) j
+        select k.parent_type, k.parent_id, false from permissions._parent_keys(p_type, p_resource) k
         union all
         select a.ancestor_type, a.ancestor_id, false
-        from jsonb_each_text(coalesce(p_resource, '{}')) j
-        join permissions.ancestors a on a.child_type = j.key and a.child_id = j.value
+        from permissions._parent_keys(p_type, p_resource) k
+        join permissions.ancestors a on a.child_type = k.parent_type and a.child_id = k.parent_id
     )
     select pol.effect, pol.name, anc.t, anc.id, g.role, g.principal_type, g.principal_id
     from pol
@@ -819,11 +891,11 @@ as $$
         select a.ancestor_type, a.ancestor_id, false from permissions.ancestors a
         where a.child_type = p_type and a.child_id = p_id
         union all
-        select j.key, j.value, false from jsonb_each_text(coalesce(p_resource, '{}')) j
+        select k.parent_type, k.parent_id, false from permissions._parent_keys(p_type, p_resource) k
         union all
         select a.ancestor_type, a.ancestor_id, false
-        from jsonb_each_text(coalesce(p_resource, '{}')) j
-        join permissions.ancestors a on a.child_type = j.key and a.child_id = j.value
+        from permissions._parent_keys(p_type, p_resource) k
+        join permissions.ancestors a on a.child_type = k.parent_type and a.child_id = k.parent_id
     ),
     grantees as (
         select pol.name, pol.principal_type as want, g.principal_type as gt, g.principal_id as gi
