@@ -22,6 +22,8 @@ Or from the repo root: `make test.pg_permissions` (and `IMPL=prototypes/a-tuple-
 
 By default the runner starts a throwaway Postgres in a temp directory. It listens on a Unix socket only, so it never conflicts with a server you have running, and it's deleted when the run ends. Each spec file gets a fresh database cloned from a template with the implementation installed. To use an existing server instead, pass `--external` and set `PGHOST`, `PGPORT`, `PGUSER` (the user must be able to create databases and roles).
 
+To run against Postgres 16, 17 and 18 with pg_tle installed, use Docker: `docker/run-matrix.sh test` runs A, B and C on each version, one server at a time (see [`../docker/README.md`](../docker/README.md)). That is the only way the `pgtle.install_extension` branch of `03_tle_install.sql` runs; without pg_tle it passes with a `SKIP` assertion.
+
 The runner creates Supabase's client roles (`anon`, `authenticated`, `service_role`) so RLS tests run the way Supabase clients do.
 
 ## Layout
@@ -132,3 +134,7 @@ The design is inferred from the `--impl` file name like in `test/run.sh`, or set
 **Equivalence check.** After each seed, the report lists for sample users how many documents RLS lets them see and an md5 of the sorted ids, so a broken seed can't produce fast-but-empty numbers. Complete runs save these to `bench/results/equivalence-<scale>-<shape>-<design>.tsv` and compare them with the other designs' latest files: the same data and correct engines give identical checksums, and a mismatch names the policy and users.
 
 The report also shows p50/p95/tps against `bench/budgets.tsv` (workloads without a budget never fail `--check`; `--shape deep|wide` look up keys like `medium-wide`, which have none yet), seed times, storage per table and query plans. It's saved as markdown to `bench/results/` (git-ignored). Reference runs worth keeping are copied to `bench/baselines/`, which is committed.
+
+Complete runs (not `--only`) also write `bench/baselines/data/<run_id>.json` through `bench/report_to_json.sh`, for the docs site's charts; the schema is in [`../bench/baselines/data/README.md`](../bench/baselines/data/README.md). The run_id is `pg<major>-<environment>-<design>-<scale>-<shape>`, so a new run replaces the previous one with the same settings; `--tag NAME` appends `-NAME` for experiments. `BENCH_ENVIRONMENT` (`local` by default, `docker` from `docker/run-matrix.sh`) and `BENCH_HOST` fill the environment and host fields. `bench/report_to_json.sh REPORT.md...` converts existing reports.
+
+`docker/run-matrix.sh bench -- <bench/run.sh options>` runs the benchmark on Postgres 16, 17 and 18 for each design, strictly one at a time (see [`../docker/README.md`](../docker/README.md)).

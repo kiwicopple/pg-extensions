@@ -19,6 +19,7 @@
 #   --design a|b|c|none          default: the letter before the first dash of the
 #                                --impl file name (a-tuple-core.sql -> a), else none
 #   --external                   use the server from PGHOST/PGPORT/PGUSER
+#   --tag NAME                   appended to the JSON run_id (e.g. smoke)
 #   --check                      exit 1 if a p95 is over budget or a workload fails
 #                                (workloads without a budget never fail; budgets.tsv
 #                                keys stress shapes as e.g. medium-wide, none set yet)
@@ -42,7 +43,10 @@
 # saved to bench/results/equivalence-<scale>-<shape>-<design>.tsv (complete
 # runs only, not --only) and compared with the other designs' latest files: identical data and correct engines
 # give identical checksums. Results are printed as a markdown table and saved
-# to bench/results/.
+# to bench/results/. Complete runs also write
+# bench/baselines/data/pg<major>-<environment>-<design>-<scale>-<shape>[-<tag>].json
+# with bench/report_to_json.sh ($BENCH_ENVIRONMENT, default local, and
+# $BENCH_HOST set its environment and host fields).
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -58,9 +62,11 @@ ONLY=
 CHECK=0
 EXTERNAL=0
 DESIGN=
+TAG=
 while [ $# -gt 0 ]; do
     case "$1" in
         --impl) IMPL=$2; shift 2 ;;
+        --tag) TAG=$2; shift 2 ;;
         --scale) SCALE=$2; shift 2 ;;
         --shape) SHAPE=$2; shift 2 ;;
         --duration) DURATION=$2; shift 2 ;;
@@ -320,7 +326,7 @@ run_workload() {
     avg=$(printf '%s\n' "$out" | sed -n 's/^latency average = \([0-9.]*\) ms/\1/p')
     read -r p50 p95 < <(cat "$dir"/pgbench_log.* | awk '{ print $3 / 1000 }' | sort -n |
         awk '{ a[NR] = $1 } END { if (NR == 0) { print "- -"; exit }
-             printf "%.2f %.2f\n", a[int(NR * 0.50) > 0 ? int(NR * 0.50) : 1], a[int(NR * 0.95) > 0 ? int(NR * 0.95) : 1] }')
+             printf "%.2f %.2f\n", a[(int(NR * 0.50) > 0) ? int(NR * 0.50) : 1], a[(int(NR * 0.95) > 0) ? int(NR * 0.95) : 1] }')
     budget=$(budget_for "$name")
     if [ -z "$budget" ]; then status="-"
     elif awk -v p="$p95" -v b="$budget" 'BEGIN { exit !(p <= b) }'; then status="ok"
@@ -330,6 +336,7 @@ run_workload() {
 }
 
 PG_VERSION=$("$PGBIN/psql" -X -tA -d "$DB" -c 'show server_version')
+RUN_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 echo "Implementation: ${IMPL#$EXT_DIR/} (design: $DESIGN)"
 echo "Scale:          $SCALE ($DOCS documents, $USERS users, $ORGS orgs, $TEAMS teams)"
 echo "Shape:          $SHAPE ($SHAPE_DESC)"
@@ -509,6 +516,13 @@ report="$HERE/results/$(date +%Y%m%d-%H%M%S)-$IMPL_NAME-$suffix.md"
 
 echo
 echo "Saved ${report#$EXT_DIR/}"
+if [ -z "$ONLY" ]; then
+    if json=$("$HERE/report_to_json.sh" --date "$RUN_DATE" ${TAG:+--tag "$TAG"} "$report"); then
+        echo "Saved ${json#$EXT_DIR/}"
+    else
+        echo "warning: JSON export failed" >&2
+    fi
+fi
 
 if [ $CHECK = 1 ] && [ ${#RESULTS[@]} -gt 0 ] && printf '%s\n' "${RESULTS[@]}" | grep -q -E '\| (OVER|error) \|'; then
     echo "Some workloads are over budget or failed." >&2

@@ -32,6 +32,7 @@ select exists (select 1 from pg_available_extensions where name = 'pg_tle')
 \set smoke_not ''
 \set tle_installed ''
 \set tle_has ''
+\set tle_members ''
 
 -- Leftovers from an earlier run
 drop database if exists pgperm_tle_scratch with (force);
@@ -77,10 +78,17 @@ select permissions.has_permission('tle.write')::text as smoke_not \gset
     create extension pg_tle;
     grant pgtle_admin to tle_owner;
     set session authorization tle_owner;
-    \set impl_body `cat :"impl_path"`
+    -- Backticks interpolate :name and :'name' (shell-quoted), not :"name".
+    \set impl_body `cat :'impl_path'`
     select pgtle.install_extension('pg_permissions', '0.0.1', 'pg_permissions test install', :'impl_body');
     create extension pg_permissions;
     select count(*)::text as tle_installed from pg_extension where extname = 'pg_permissions' \gset
+    -- functions in schema permissions that belong to the extension (0 if the body was empty)
+    select count(*)::text as tle_members
+    from pg_depend d join pg_proc p on p.oid = d.objid and d.classid = 'pg_proc'::regclass
+    where d.refclassid = 'pg_extension'::regclass and d.deptype = 'e'
+      and d.refobjid = (select oid from pg_extension where extname = 'pg_permissions')
+      and p.pronamespace = 'permissions'::regnamespace \gset
     select set_config('permissions.subject_id', :'alice', false);
     select permissions.create_role('tle_reader', '{tle.read}');
     select permissions.assign_role(:'alice', 'tle_reader');
@@ -103,8 +111,9 @@ select tap.is(:'smoke_not'::text, 'false', 'smoke: has_permission is false for a
 select tap.is(:'c_funcs'::text, '0', 'no function in the schema is written in C or internal');
 
 \if :tle_avail
-    select tap.ok(:'tle_installed'::text = '1' and :'tle_has'::text = 'true',
-                  'pgtle.install_extension + create extension works as a non-superuser and has_permission works');
+    select tap.ok(:'tle_installed'::text = '1' and :'tle_members'::text ~ '^[1-9]' and :'tle_has'::text = 'true',
+                  'pgtle.install_extension + create extension works as a non-superuser and has_permission works (extension functions: '
+                  || :'tle_members'::text || ', has_permission: ' || :'tle_has'::text || ')');
 \else
     \echo '# pg_tle is not available on this server (not in pg_available_extensions or shared_preload_libraries)'
     \echo '# only the non-superuser plain install was checked; the pgtle.install_extension path was NOT tested'

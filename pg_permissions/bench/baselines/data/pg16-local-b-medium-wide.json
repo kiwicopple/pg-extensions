@@ -1,0 +1,33 @@
+{
+  "run_id": "pg16-local-b-medium-wide",
+  "date": "2026-10-28T16:04:00Z",
+  "environment": "local",
+  "host": "Apple M4, 10 CPU, 24 GB",
+  "pg_version": "16.4",
+  "design": "b",
+  "scale": "medium", "shape": "wide", "clients": 4, "duration_s": 10,
+  "workloads": [
+    {"name": "rbac_check", "p50_ms": 0.33, "p95_ms": 0.51, "tps": 11449, "budget_ms": null},
+    {"name": "rbac_select_page", "p50_ms": 0.47, "p95_ms": 0.56, "tps": 8264, "budget_ms": null},
+    {"name": "rbac_select_count", "p50_ms": 0.41, "p95_ms": 0.49, "tps": 9464, "budget_ms": null},
+    {"name": "rbac_update_one", "p50_ms": 0.8, "p95_ms": 0.87, "tps": 5388, "budget_ms": null},
+    {"name": "write_assign_role", "p50_ms": 0.14, "p95_ms": 0.24, "tps": 26040, "budget_ms": null},
+    {"name": "share_list_objects", "p50_ms": 25.65, "p95_ms": 28.17, "tps": 155, "budget_ms": null},
+    {"name": "share_select_page", "p50_ms": 70.19, "p95_ms": 75.74, "tps": 56, "budget_ms": null},
+    {"name": "write_share", "p50_ms": 0.14, "p95_ms": 0.23, "tps": 26206, "budget_ms": null},
+    {"name": "parents_proj_select_page", "p50_ms": 73.24, "p95_ms": 79.81, "tps": 54, "budget_ms": null},
+    {"name": "parents_proj_select_count", "p50_ms": 67.96, "p95_ms": 73.22, "tps": 58, "budget_ms": null},
+    {"name": "parents_select_page", "p50_ms": 88.44, "p95_ms": 95.22, "tps": 44, "budget_ms": null},
+    {"name": "parents_select_count", "p50_ms": 86.21, "p95_ms": 92.25, "tps": 46, "budget_ms": null},
+    {"name": "write_nest_team", "p50_ms": 320.82, "p95_ms": 344.09, "tps": 12, "budget_ms": null},
+    {"name": "nest_check", "p50_ms": 2.8, "p95_ms": 3.08, "tps": 1419, "budget_ms": null}
+  ],
+  "seeds": [
+    {"phase": "rbac", "seconds": 0.67, "size_mb": 2.9},
+    {"phase": "sharing", "seconds": 35.45, "size_mb": 225.9},
+    {"phase": "parents_proj", "seconds": 0.14, "size_mb": 226.4},
+    {"phase": "parents", "seconds": 15.81, "size_mb": 300},
+    {"phase": "nesting", "seconds": 0.12, "size_mb": 301.1}
+  ],
+  "checksums": {"rbac": "d394663f", "sharing": "6f7c008d", "parents_proj": "f2867b7f", "parents": "f2867b7f"}
+}
