@@ -95,7 +95,7 @@ for f in "${SPECS[@]}"; do
 
     db="pgperm_t_${name}"
     psql_admin -c "drop database if exists \"$db\"" -c "create database \"$db\" template $TEMPLATE"
-    out=$("$PGBIN/psql" -X -q -tA -v ON_ERROR_STOP=0 -d "$db" -f "$f" 2>&1 || true)
+    out=$("$PGBIN/psql" -X -q -tA -v ON_ERROR_STOP=0 -v impl_path="$IMPL" -d "$db" -f "$f" 2>&1 || true)
     psql_admin -c "drop database if exists \"$db\"" 2>/dev/null || true
 
     planned=$(printf '%s\n' "$out" | sed -n 's/^1\.\.\([0-9][0-9]*\)$/\1/p' | head -1)

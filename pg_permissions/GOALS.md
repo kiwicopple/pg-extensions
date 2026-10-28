@@ -21,7 +21,7 @@ Status as of 2026-10-28, from `test/run.sh --impl <implementation>`:
 | G11 | Public access (`user:*`); null subject is denied | §10 | `<design>/51_public` | ❌ | ❌ | ❌ |
 | G12 | Forbid beats grants, including parent-derived ones | §10 | `<design>/52_forbid` | ❌ | ❌ | ❌ |
 | G13 | Conditions: document status, expired grants | §10 | `<design>/53_conditions` | ❌ | ❌ | ❌ |
-| G14 | Installs as a non-superuser; via `pgtle.install_extension` if pg_tle is available | §10 | `03_tle_install` | ❌ | ❌ | ❌ |
+| G14 | Installs as a non-superuser; via `pgtle.install_extension` if pg_tle is available | §10 | `03_tle_install` | ❌ | ✅ 9/9 non-superuser install (pg_tle path not tested: not available locally) | ✅ 9/9 non-superuser install (pg_tle not tested); C: ✅ 9/9 (same) |
 
 Zanzibar-level spec files (`30`+, in `test/spec/<design>/`) are per-design: each design has its own copy of the same scenario written in its native API, with the same assertions, so results compare one to one. G10-G14 are the v0.0.2 scenarios from PLAN.md §10; none are written yet.
 
