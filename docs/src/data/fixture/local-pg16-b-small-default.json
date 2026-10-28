@@ -1,0 +1,151 @@
+{
+ "run_id": "local-pg16-b-small-default",
+ "date": "2026-10-29T00:23:00Z",
+ "environment": "local",
+ "host": "Apple Silicon laptop, Postgres.app (fixture from bench/baselines reports)",
+ "pg_version": "16.4",
+ "design": "b",
+ "scale": "small",
+ "shape": "default",
+ "clients": 4,
+ "duration_s": 10,
+ "workloads": [
+  {
+   "name": "rbac_check",
+   "p50_ms": 0.32,
+   "p95_ms": 0.39,
+   "tps": 12206,
+   "budget_ms": 1
+  },
+  {
+   "name": "rbac_select_page",
+   "p50_ms": 0.39,
+   "p95_ms": 0.47,
+   "tps": 10047,
+   "budget_ms": 2
+  },
+  {
+   "name": "rbac_select_count",
+   "p50_ms": 0.34,
+   "p95_ms": 0.42,
+   "tps": 11292,
+   "budget_ms": 2
+  },
+  {
+   "name": "rbac_update_one",
+   "p50_ms": 0.79,
+   "p95_ms": 0.87,
+   "tps": 5412,
+   "budget_ms": 4
+  },
+  {
+   "name": "write_assign_role",
+   "p50_ms": 0.15,
+   "p95_ms": 0.25,
+   "tps": 25180,
+   "budget_ms": 1
+  },
+  {
+   "name": "share_list_objects",
+   "p50_ms": 0.28,
+   "p95_ms": 0.36,
+   "tps": 13931,
+   "budget_ms": 2
+  },
+  {
+   "name": "share_select_page",
+   "p50_ms": 0.69,
+   "p95_ms": 0.82,
+   "tps": 5629,
+   "budget_ms": 5
+  },
+  {
+   "name": "write_share",
+   "p50_ms": 0.14,
+   "p95_ms": 0.24,
+   "tps": 26471,
+   "budget_ms": 1
+  },
+  {
+   "name": "parents_proj_select_page",
+   "p50_ms": 0.79,
+   "p95_ms": 1.04,
+   "tps": 4886,
+   "budget_ms": null
+  },
+  {
+   "name": "parents_proj_select_count",
+   "p50_ms": 0.73,
+   "p95_ms": 0.89,
+   "tps": 5306,
+   "budget_ms": null
+  },
+  {
+   "name": "parents_select_page",
+   "p50_ms": 5.88,
+   "p95_ms": 6.31,
+   "tps": 675,
+   "budget_ms": null
+  },
+  {
+   "name": "parents_select_count",
+   "p50_ms": 5.8,
+   "p95_ms": 6.25,
+   "tps": 683,
+   "budget_ms": null
+  },
+  {
+   "name": "write_nest_team",
+   "p50_ms": 134.09,
+   "p95_ms": 161.47,
+   "tps": 29,
+   "budget_ms": null
+  },
+  {
+   "name": "nest_check",
+   "p50_ms": 1.16,
+   "p95_ms": 1.29,
+   "tps": 3429,
+   "budget_ms": null
+  }
+ ],
+ "seeds": [
+  {
+   "phase": "rbac",
+   "seconds": 0.11,
+   "size_mb": 0.9,
+   "rows": 2028
+  },
+  {
+   "phase": "sharing",
+   "seconds": 0.21,
+   "size_mb": 3,
+   "rows": 10055
+  },
+  {
+   "phase": "parents_proj",
+   "seconds": 0.07,
+   "size_mb": 3.2,
+   "rows": 10659
+  },
+  {
+   "phase": "parents",
+   "seconds": 1.49,
+   "size_mb": 10.5,
+   "rows": 40659
+  },
+  {
+   "phase": "nesting",
+   "seconds": 0.07,
+   "size_mb": 11.2,
+   "rows": 43663
+  }
+ ],
+ "checksums": {
+  "rbac": "422703c2057e0adefa202fe2ba9838e1",
+  "sharing": "4dfe00ff5af368776b37f6a3a7daac0b",
+  "parents_proj": "a91b9ad68d9dd452eb2d502386a3c861",
+  "parents": "a91b9ad68d9dd452eb2d502386a3c861"
+ },
+ "report": "bench/baselines/b-small-default.md"
+}

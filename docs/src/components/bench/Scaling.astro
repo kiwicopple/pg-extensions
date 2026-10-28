@@ -1,0 +1,80 @@
+---
+import Frame from '../viz/Frame.astro';
+import Legend from '../viz/Legend.astro';
+import LinePanel from '../viz/LinePanel.astro';
+import { primary, workloadInfo, p50s, times, comparisonLink, SCALE_DOCS } from '../../lib/bench';
+import { engine, fmt } from '../../lib/chart';
+import type { Design } from '../../lib/chart';
+
+const s = primary;
+const KEY = ['rbac_check', 'share_select_page', 'parents_proj_select_page', 'parents_select_page', 'write_nest_team', 'nest_check'];
+const scales = ['small', 'medium', 'large'].filter((sc) => s?.configs.some((c) => c.scale === sc && c.shape === 'default'));
+const cats = scales.map((sc) => `${SCALE_DOCS[sc]}`);
+const designs = (['a', 'b', 'c'] as Design[]).filter((d) => scales.some((sc) => s?.get(d, sc, 'default')));
+
+const panels = KEY.filter((n) => scales.some((sc) => Object.keys(p50s(s!, sc, 'default', n)).length)).map((name) => ({
+	name,
+	info: workloadInfo(name),
+	series: designs.map((d) => ({ design: d, values: scales.map((sc) => p50s(s!, sc, 'default', name)[d] ?? null) })),
+}));
+
+let takeaway = '';
+if (scales.length >= 2) {
+	const first = scales[0];
+	const last = scales[scales.length - 1];
+	const g = (name: string, d: Design) => {
+		const a = p50s(s!, first, 'default', name)[d];
+		const b = p50s(s!, last, 'default', name)[d];
+		return a && b ? `${engine(d).letter} ${fmt(a)} to ${fmt(b)} ms (${times(b / a)})` : '';
+	};
+	const sh = designs.map((d) => g('share_select_page', d)).filter(Boolean).join(', ');
+	const pg = designs.map((d) => g('parents_select_page', d)).filter(Boolean).join(', ');
+	takeaway = `From ${SCALE_DOCS[first]} to ${SCALE_DOCS[last]} documents, the sharing page grows slowly (${sh}). The single-branch parents page tracks the number of visible ids and grows with it (${pg}). RBAC and nest_check stay close to flat.`;
+}
+---
+
+{
+	panels.length && scales.length >= 2 ? (
+		<Frame
+			title="Scaling from 10k to 1M documents"
+			subtitle="p50 latency, default shape, log axis. x = documents in the table."
+			takeaway={takeaway}
+			source={[
+				{ href: comparisonLink('large', 'default'), label: 'COMPARISON.md' },
+			]}
+		>
+			<Legend slot="legend" designs={designs} kind="line" />
+			<div class="viz-panels">
+				{panels.map((p) => (
+					<div>
+						<p class="viz-panel-title">{p.info.title}</p>
+						<p class="viz-panel-sub">{p.name}</p>
+						<LinePanel categories={cats} series={p.series} unit="ms" title={`${p.info.title}, p50 by data scale`} catNote={scales.map((sc) => `${sc}, documents`)} />
+					</div>
+				))}
+			</div>
+			<Fragment slot="table">
+				<table>
+					<thead>
+						<tr>
+							<th>Workload (p50 ms)</th>
+							{designs.flatMap((d) => scales.map((sc) => <th>{engine(d).letter} {sc}</th>))}
+						</tr>
+					</thead>
+					<tbody>
+						{panels.map((p) => (
+							<tr>
+								<td>{p.info.title}</td>
+								{p.series.flatMap((se) => se.values.map((v) => <td>{fmt(v)}</td>))}
+							</tr>
+						))}
+					</tbody>
+				</table>
+			</Fragment>
+		</Frame>
+	) : (
+		<div class="viz-note">
+			<p>Scaling needs default-shape runs at two or more scales; not available in the current data.</p>
+		</div>
+	)
+}

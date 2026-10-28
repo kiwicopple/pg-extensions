@@ -1,0 +1,22 @@
+---
+// A pill row that switches between pre-rendered panels. Panels are the slot children and carry
+// data-tab="<key>". Without JavaScript the row is hidden and every panel is shown, each under its own title.
+interface Props {
+	tabs: { key: string; label: string }[];
+	label?: string;
+}
+const { tabs, label = 'Configuration' } = Astro.props;
+---
+
+<div data-tabgroup>
+	<div class="viz-tabs" role="tablist" aria-label={label}>
+		{
+			tabs.map((t) => (
+				<button type="button" role="tab" data-tab-target={t.key} aria-selected="false">
+					{t.label}
+				</button>
+			))
+		}
+	</div>
+	<slot />
+</div>

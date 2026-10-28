@@ -1,6 +1,6 @@
 REPO_DIR=$(shell pwd)
 
-.PHONY: help install install.one install.two
+.PHONY: help install install.one install.two docs docs.dev docs.sync
 
 help:
 	@echo "\nSCRIPTS\n"
@@ -9,6 +9,9 @@ help:
 	@echo "make dbdev.publish.XXX  		# publish XXX extension"
 	@echo "make test.pg_permissions  		# run the pg_permissions test suite (IMPL=... to pick an implementation)"
 	@echo "make bench.pg_permissions 		# benchmark pg_permissions (IMPL=..., SCALE=small|medium|large)"
+	@echo "make docs  				# build the documentation site (docs/dist)"
+	@echo "make docs.dev  				# run the documentation site locally with hot reload"
+	@echo "make docs.sync  			# re-sync pg_permissions markdown and benchmark data into docs/"
 
 reset:
 	supabase db reset
@@ -42,3 +45,16 @@ test.pg_permissions:
 
 bench.pg_permissions:
 	cd $(REPO_DIR)/pg_permissions && ./bench/run.sh --impl $(IMPL) --scale $(SCALE)
+
+# Documentation site (Astro + Starlight). See docs/README.md.
+docs/node_modules: docs/package.json
+	cd docs && npm install
+
+docs: docs/node_modules
+	cd docs && npm run build
+
+docs.dev: docs/node_modules
+	cd docs && npm run dev
+
+docs.sync: docs/node_modules
+	cd docs && npm run sync

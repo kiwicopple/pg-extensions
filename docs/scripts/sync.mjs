@@ -1,0 +1,243 @@
+#!/usr/bin/env node
+// Sync the pg_permissions docs and benchmark data into the Starlight site.
+//
+//   npm run sync     (also runs automatically before `npm run dev` and `npm run build`)
+//
+// Everything this script writes is generated and gitignored; edit the sources in ../pg_permissions.
+//   1. Markdown   -> src/content/docs/<route>.md  (frontmatter added, relative links rewritten)
+//   2. Bench data -> src/data/bench/*.json        (copied from pg_permissions/bench/baselines/data)
+//   3. Workloads  -> src/data/workloads.generated.json (description = first sentence of each
+//                    workload SQL file header))
+//
+// Hand-written pages are .mdx; generated pages are .md, so cleaning the .md files is safe.
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const DOCS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const SRC_ROOT = path.resolve(DOCS, '..', 'pg_permissions');
+const OUT_DOCS = path.join(DOCS, 'src', 'content', 'docs');
+const OUT_DATA = path.join(DOCS, 'src', 'data');
+const REPO = process.env.DOCS_REPO_URL ?? 'https://github.com/kiwicopple/pg-extensions';
+const REF = process.env.DOCS_REPO_REF ?? 'main';
+const REPO_PREFIX = 'pg_permissions'; // where SRC_ROOT lives inside the repo
+
+/** source file (relative to pg_permissions) -> route (no leading or trailing slash) and sidebar label. */
+const PAGES = [
+	{ src: 'README.md', route: 'overview/readme', label: 'README' },
+	{ src: 'PLAN.md', route: 'overview/plan', label: 'Plan' },
+	{ src: 'GOALS.md', route: 'overview/goals', label: 'Goals' },
+	{ src: 'DECISION.md', route: 'decision/guide', label: 'Decision guide' },
+	{ src: 'bench/baselines/COMPARISON.md', route: 'benchmarks/comparison', label: 'Engine comparison (report)' },
+	{ src: 'designs/a-tuple-core.md', route: 'designs/a-tuple-core', label: 'A: tuple core' },
+	{ src: 'designs/b-policy-first.md', route: 'designs/b-policy-first', label: 'B: policy first' },
+	{ src: 'designs/c-compiled-model.md', route: 'designs/c-compiled-model', label: 'C: compiled model' },
+	{ src: 'prototypes/README.md', route: 'designs/prototypes', label: 'Prototypes' },
+	{ src: 'test/README.md', route: 'testing/test-suite', label: 'Test suite and bench harness' },
+	{ src: 'JOURNAL.md', route: 'journal/build-journal', label: 'Build journal' },
+];
+
+/** Directories (and a few files) that have a better home on the site than GitHub. */
+const DIR_ROUTES = {
+	prototypes: 'designs/prototypes',
+	test: 'testing/test-suite',
+	'test/README.md': 'testing/test-suite',
+};
+
+const warnings = [];
+const warn = (m) => {
+	warnings.push(m);
+	console.warn(`sync: warning: ${m}`);
+};
+
+const bySrc = new Map(PAGES.map((p) => [p.src, p]));
+const posix = (p) => p.split(path.sep).join('/');
+
+function rmGenerated(dir) {
+	if (!fs.existsSync(dir)) return;
+	for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+		const p = path.join(dir, e.name);
+		if (e.isDirectory()) {
+			rmGenerated(p);
+			if (!fs.readdirSync(p).length) fs.rmdirSync(p);
+		} else if (e.name.endsWith('.md')) fs.rmSync(p);
+	}
+}
+
+/** Relative URL between two routes, e.g. designs/a -> decision/guide gives ../../decision/guide/. */
+function routeLink(fromRoute, toRoute) {
+	const up = fromRoute.split('/').length;
+	return '../'.repeat(up) + toRoute + '/';
+}
+
+function githubUrl(relToRoot, isDir) {
+	const p = [REPO_PREFIX, relToRoot].filter(Boolean).join('/').replace(/\/+$/, '');
+	return `${REPO}/${isDir ? 'tree' : 'blob'}/${REF}/${p}${isDir ? '' : ''}`;
+}
+
+/** Rewrite one link target found in `srcFile`. Returns {url} or {code} (render as plain code). */
+function rewriteTarget(target, srcFile, fromRoute) {
+	if (/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(target) || target.startsWith('#')) return { url: target };
+	const m = target.match(/^([^#?]*)([?#].*)?$/);
+	const pathPart = m[1];
+	const tail = m[2] ?? '';
+	const abs = path.resolve(SRC_ROOT, path.dirname(srcFile), decodeURI(pathPart));
+	const rel = posix(path.relative(SRC_ROOT, abs));
+	if (rel.startsWith('..')) return { code: target };
+	if (bySrc.has(rel)) return { url: routeLink(fromRoute, bySrc.get(rel).route) + tail.replace(/^\?[^#]*/, '') };
+	const key = rel.replace(/\/$/, '');
+	if (DIR_ROUTES[key]) return { url: routeLink(fromRoute, DIR_ROUTES[key]) + tail };
+	if (!fs.existsSync(abs)) {
+		warn(`${srcFile}: link target not found: ${target}`);
+		return { code: target };
+	}
+	const isDir = fs.statSync(abs).isDirectory();
+	return { url: githubUrl(rel, isDir) + (isDir ? '' : tail) };
+}
+
+/** Rewrite links in markdown, leaving fenced code blocks and inline code untouched. */
+function rewriteLinks(body, srcFile, fromRoute) {
+	const lines = body.split('\n');
+	let fence = null;
+	return lines
+		.map((line) => {
+			const f = line.match(/^\s*(`{3,}|~{3,})/);
+			if (f) {
+				if (!fence) fence = f[1][0].repeat(f[1].length);
+				else if (f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
+				return line;
+			}
+			if (fence) return line;
+			// inline code spans are matched first so their contents are never rewritten;
+			// link text may itself contain code spans.
+			const re = /(`+[^`]*`+)|(!?)\[((?:[^\]`]|`[^`]*`)*)\]\(([^)\s]+)(\s+"[^"]*")?\)/g;
+			line = line.replace(re, (all, code, bang, text, target, title) => {
+				if (code) return all;
+				const r = rewriteTarget(target, srcFile, fromRoute);
+				if (r.code) return bang ? all : `${text} (\`${r.code}\`)`;
+				return `${bang}[${text}](${r.url}${title ?? ''})`;
+			});
+			return line.replace(/^(\s*\[[^\]]+\]:\s*)(\S+)/, (all, pre, target) => {
+				const r = rewriteTarget(target, srcFile, fromRoute);
+				return r.url ? pre + r.url : all;
+			});
+		})
+		.join('\n');
+}
+
+function stripInline(s) {
+	return s
+		.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+		.replace(/`/g, '')
+		.replace(/\*\*/g, '')
+		.replace(/\s+/g, ' ')
+		.trim();
+}
+
+function firstParagraph(body) {
+	const paras = body.split(/\n\s*\n/);
+	for (const p of paras) {
+		const t = p.trim();
+		if (!t || /^(#|```|~~~|\||[-*]\s|\d+\.\s|>|<)/.test(t)) continue;
+		let s = stripInline(t);
+		if (s.length > 180) s = s.slice(0, 177).replace(/\s+\S*$/, '') + '...';
+		return s;
+	}
+	return '';
+}
+
+const yaml = (s) => JSON.stringify(s);
+
+function syncMarkdown() {
+	rmGenerated(OUT_DOCS);
+	let n = 0;
+	for (const page of PAGES) {
+		const file = path.join(SRC_ROOT, page.src);
+		if (!fs.existsSync(file)) {
+			warn(`source missing, skipped: ${page.src}`);
+			continue;
+		}
+		let text = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+		const h1 = text.match(/^# (.+)\n/m);
+		let title = page.label;
+		if (h1) {
+			title = stripInline(h1[1]);
+			text = text.replace(h1[0], ''); // Starlight renders the title as the page H1
+		}
+		const description = firstParagraph(text);
+		const body = rewriteLinks(text, page.src, page.route);
+		const front = [
+			'---',
+			`title: ${yaml(title)}`,
+			description ? `description: ${yaml(description)}` : null,
+			`editUrl: ${yaml(`${REPO}/edit/${REF}/${REPO_PREFIX}/${page.src}`)}`,
+			`sidebar:\n  label: ${yaml(page.label)}`,
+			'---',
+		]
+			.filter(Boolean)
+			.join('\n');
+		const out = `${front}\n\n<!-- GENERATED by docs/scripts/sync.mjs from pg_permissions/${page.src}. Do not edit. -->\n\n${body.replace(/^\n+/, '')}`;
+		const dest = path.join(OUT_DOCS, page.route + '.md');
+		fs.mkdirSync(path.dirname(dest), { recursive: true });
+		fs.writeFileSync(dest, out);
+		n++;
+	}
+	console.log(`sync: ${n}/${PAGES.length} markdown pages -> src/content/docs`);
+}
+
+function syncData() {
+	const from = path.join(SRC_ROOT, 'bench', 'baselines', 'data');
+	const to = path.join(OUT_DATA, 'bench');
+	fs.rmSync(to, { recursive: true, force: true });
+	if (!fs.existsSync(from)) {
+		console.log('sync: no bench/baselines/data yet, the site will use src/data/fixture');
+		return;
+	}
+	fs.mkdirSync(to, { recursive: true });
+	let n = 0;
+	for (const f of fs.readdirSync(from)) {
+		if (!f.endsWith('.json')) continue;
+		try {
+			JSON.parse(fs.readFileSync(path.join(from, f), 'utf8'));
+		} catch (e) {
+			warn(`bench data ${f} is not valid JSON, skipped (${e.message})`);
+			continue;
+		}
+		fs.copyFileSync(path.join(from, f), path.join(to, f));
+		n++;
+	}
+	console.log(`sync: ${n} bench data file(s) -> src/data/bench${n ? '' : ' (empty: using fixture)'}`);
+}
+
+function syncWorkloads() {
+	const dirs = [path.join(SRC_ROOT, 'bench', 'workloads'), path.join(SRC_ROOT, 'bench', 'designs', 'c', 'workloads')];
+	const out = {};
+	for (const dir of dirs) {
+		if (!fs.existsSync(dir)) continue;
+		for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.sql'))) {
+			const name = f.replace(/\.sql$/, '');
+			const header = [];
+			for (const line of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) {
+				const m = line.match(/^--\s?(.*)$/);
+				if (!m) break;
+				header.push(m[1].trim());
+			}
+			const joined = header.join(' ').replace(/\s+/g, ' ');
+			const sentence = joined.match(/^(.*?[.!?])(\s|$)/)?.[1] ?? joined;
+			out[name] = { description: sentence, source: posix(path.relative(SRC_ROOT, path.join(dir, f))) };
+		}
+	}
+	fs.mkdirSync(OUT_DATA, { recursive: true });
+	fs.writeFileSync(path.join(OUT_DATA, 'workloads.generated.json'), JSON.stringify(out, null, 2) + '\n');
+	console.log(`sync: ${Object.keys(out).length} workload descriptions -> src/data/workloads.generated.json`);
+}
+
+if (!fs.existsSync(SRC_ROOT)) {
+	console.error(`sync: ${SRC_ROOT} not found`);
+	process.exit(1);
+}
+syncMarkdown();
+syncData();
+syncWorkloads();
+if (warnings.length) console.warn(`sync: ${warnings.length} warning(s)`);

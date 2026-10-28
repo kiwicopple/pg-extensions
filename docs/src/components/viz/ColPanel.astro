@@ -1,0 +1,121 @@
+---
+// Vertical grouped columns (one panel). Groups on x, one column per engine. Log or linear y.
+import { ENGINES, engine, fmt, fmtShort, fmtTick, linDomain, logAxisTicks, logDomain, scaleLinear, scaleLog, tip } from '../../lib/chart';
+
+export interface Col {
+	design: string;
+	value: number;
+	extra?: string;
+}
+interface Props {
+	groups: { label: string; cols: Col[] }[];
+	/** unit shown in tooltips, e.g. "ms", "s", "MB" */
+	unit: string;
+	/** title for the tooltip subtitle and aria label */
+	title: string;
+	log?: boolean;
+	/** shared y domain across panels, so small multiples are comparable */
+	domain?: [number, number];
+	width?: number;
+	height?: number;
+	/** y-axis caption */
+	axis?: string;
+}
+const { groups, unit, title, log = true, domain, width = 360, height = 230, axis } = Astro.props;
+
+const mL = 38;
+const mR = 8;
+const mT = 16;
+const mB = 36;
+const pw = width - mL - mR;
+const ph = height - mT - mB;
+const vals = groups.flatMap((g) => g.cols.map((c) => c.value));
+let sy: ReturnType<typeof scaleLog>;
+let ticks: number[];
+if (log) {
+	const d = domain ?? logDomain(vals);
+	sy = scaleLog(d[0], d[1], mT + ph, mT);
+	ticks = logAxisTicks(d);
+} else {
+	const d = linDomain(Math.max(...vals, 0));
+	sy = scaleLinear(0, d.domain[1], mT + ph, mT);
+	ticks = d.ticks;
+}
+const band = pw / Math.max(groups.length, 1);
+const n = Math.max(...groups.map((g) => g.cols.length), 1);
+const gap = 2;
+const barW = Math.min(24, (band * 0.84 - gap * (n - 1)) / n);
+
+function colPath(bx: number, by: number, w: number, h: number) {
+	const r = Math.min(4, w / 2, h);
+	return `M${bx},${by + h}V${by + r}a${r},${r} 0 0 1 ${r},${-r}h${w - 2 * r}a${r},${r} 0 0 1 ${r},${r}V${by + h}z`;
+}
+const baseY = mT + ph;
+---
+
+<svg viewBox={`0 0 ${width} ${height}`} role="group" aria-label={title}>
+	{
+		ticks.map((t) => (
+			<g>
+				<line class="grid" x1={mL} x2={width - mR} y1={sy(t)} y2={sy(t)} />
+				<text class="t-muted" x={mL - 6} y={sy(t) + 3.5} text-anchor="end">
+					{fmtTick(t)}
+				</text>
+			</g>
+		))
+	}
+	<line class="axis" x1={mL} x2={width - mR} y1={baseY} y2={baseY} />
+	{axis && <text class="t-muted" x={mL - 6} y={9} text-anchor="end">{axis}</text>}
+	{
+		groups.map((g, gi) => {
+			const gx = mL + gi * band;
+			const total = g.cols.length * barW + (g.cols.length - 1) * gap;
+			const start = gx + (band - total) / 2;
+			return (
+				<g class="cell">
+					<rect class="row-wash" x={gx + 2} y={mT - 8} width={band - 4} height={ph + 8} rx="4" />
+					{g.cols.map((c, i) => {
+						const bx = start + i * (barW + gap);
+						const top = sy(c.value);
+						const h = Math.max(2, baseY - top);
+						const label = fmtShort(c.value);
+						const fits = label.length * 5.6 <= barW + gap + 4;
+						return (
+							<g>
+								<path class={`bar eng-${c.design}`} d={colPath(bx, baseY - h, barW, h)} />
+								{fits && (
+									<text class="t-val" x={bx + barW / 2} y={baseY - h - 4} text-anchor="middle">
+										{label}
+									</text>
+								)}
+							</g>
+						);
+					})}
+					<text class="t-ink" x={gx + band / 2} y={baseY + 16} text-anchor="middle">
+						{g.label}
+					</text>
+					<rect
+						class="hit"
+						x={gx}
+						y={mT - 8}
+						width={band}
+						height={ph + 8 + mB}
+						tabindex="0"
+						role="img"
+						aria-label={`${title}, ${g.label}: ${g.cols.map((c) => `${engine(c.design).letter} ${fmt(c.value)} ${unit}`).join('; ')}`}
+						data-tip={tip({
+							t: g.label,
+							s: title,
+							r: g.cols.map((c) => ({
+								c: engine(c.design).css,
+								k: `${engine(c.design).letter} ${engine(c.design).name}`,
+								v: `${fmt(c.value)} ${unit}`,
+								x: c.extra,
+							})),
+						})}
+					/>
+				</g>
+			);
+		})
+	}
+</svg>

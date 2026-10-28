@@ -1,0 +1,98 @@
+---
+import Frame from '../viz/Frame.astro';
+import Legend from '../viz/Legend.astro';
+import TabGroup from '../viz/TabGroup.astro';
+import HBars from '../viz/HBars.astro';
+import { primary, workloadNames, workload, workloadInfo, p50s, extremes, times, comparisonLink, BASELINES_URL } from '../../lib/bench';
+import { engine, fmt } from '../../lib/chart';
+import type { Design } from '../../lib/chart';
+
+const s = primary;
+const configs = s?.configs ?? [];
+
+function rowsFor(scale: string, shape: string) {
+	const rs = (['a', 'b', 'c'] as Design[]).map((d) => s!.get(d, scale, shape)).filter((r) => !!r);
+	return workloadNames(rs as any).map((name) => ({
+		name,
+		bars: (['a', 'b', 'c'] as Design[])
+			.map((d) => ({ d, w: workload(s!.get(d, scale, shape), name) }))
+			.filter((x) => x.w?.p50_ms != null)
+			.map((x) => ({
+				design: x.d,
+				p50: x.w!.p50_ms as number,
+				p95: (x.w!.p95_ms ?? undefined) as number | undefined,
+				tps: (x.w!.tps ?? undefined) as number | undefined,
+				budget: (x.w!.budget_ms ?? undefined) as number | undefined,
+			})),
+	}));
+}
+
+// Takeaway, from the first configuration that has all three engines.
+const ref = configs.find((c) => c.designs.length === 3) ?? configs[0];
+let takeaway = '';
+if (ref) {
+	const bits: string[] = [];
+	const rb = extremes(p50s(s!, ref.scale, ref.shape, 'rbac_check'));
+	const ps = p50s(s!, ref.scale, ref.shape, 'parents_select_page');
+	const pse = extremes(ps);
+	const nt = p50s(s!, ref.scale, ref.shape, 'write_nest_team');
+	const nte = extremes(nt);
+	if (rb) bits.push(`RBAC is a wash (rbac_check p50 ${fmt(rb.min.v)} to ${fmt(rb.max.v)} ms across engines)`);
+	if (pse && pse.max.v / pse.min.v > 2)
+		bits.push(
+			`the single-branch parents page spans ${fmt(pse.min.v)} ms on ${engine(pse.min.d).letter} to ${fmt(pse.max.v)} ms on ${engine(pse.max.d).letter} (${times(pse.max.v / pse.min.v)})`,
+		);
+	if (nte && nte.max.v / nte.min.v > 2)
+		bits.push(
+			`nesting a team is ${fmt(nte.min.v)} ms on ${engine(nte.min.d).letter} but ${fmt(nte.max.v)} ms on ${engine(nte.max.d).letter}`,
+		);
+	if (bits.length) takeaway = `At ${ref.scale}/${ref.shape}: ${bits.join('; ')}. The engines separate on sharing, parents and nesting, not on RBAC.`;
+}
+---
+
+{
+	s ? (
+		<Frame
+			title="Latency by workload and engine"
+			subtitle="Bar = p50, whisker = p95, milliseconds on a log axis. Pick a data scale and team shape."
+			takeaway={takeaway}
+			source={[
+				{ href: comparisonLink(ref?.scale, ref?.shape), label: 'COMPARISON.md' },
+				{ href: BASELINES_URL, label: 'per-run reports' },
+			]}
+		>
+			<Legend slot="legend" designs={['a', 'b', 'c']} extra={[{ label: 'p95 whisker', kind: 'whisker' }]} />
+			<TabGroup tabs={configs.map((c) => ({ key: `${c.scale}-${c.shape}`, label: c.label }))} label="Scale and shape">
+				{configs.map((c) => (
+					<div data-tab={`${c.scale}-${c.shape}`}>
+						<p class="viz-tabpanel-title">{c.label}</p>
+						<HBars rows={rowsFor(c.scale, c.shape)} context={c.label} />
+						<details>
+							<summary>Table view: {c.label}</summary>
+							<div class="tbl-wrap">
+								<table>
+									<thead>
+										<tr>
+											<th>Workload</th>
+											{c.designs.map((d) => <th>{engine(d).letter} p50</th>)}
+											{c.designs.map((d) => <th>{engine(d).letter} p95</th>)}
+										</tr>
+									</thead>
+									<tbody>
+										{rowsFor(c.scale, c.shape).map((r) => (
+											<tr>
+												<td>{workloadInfo(r.name).title}</td>
+												{c.designs.map((d) => <td>{fmt(r.bars.find((b) => b.design === d)?.p50)}</td>)}
+												{c.designs.map((d) => <td>{fmt(r.bars.find((b) => b.design === d)?.p95)}</td>)}
+											</tr>
+										))}
+									</tbody>
+								</table>
+							</div>
+						</details>
+					</div>
+				))}
+			</TabGroup>
+		</Frame>
+	) : null
+}

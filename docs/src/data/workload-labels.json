@@ -1,0 +1,16 @@
+{
+  "rbac_check":               { "group": "RBAC", "label": "Single check", "title": "RBAC: single check", "kind": "read" },
+  "rbac_select_page":         { "group": "RBAC", "label": "First page", "title": "RBAC: first page", "kind": "read" },
+  "rbac_select_count":        { "group": "RBAC", "label": "Count visible", "title": "RBAC: count visible", "kind": "read" },
+  "rbac_update_one":          { "group": "RBAC", "label": "Update one row", "title": "RBAC: update one row", "kind": "write" },
+  "write_assign_role":        { "group": "RBAC", "label": "Assign a role", "title": "RBAC: assign a role", "kind": "write" },
+  "share_list_objects":       { "group": "Sharing", "label": "List visible ids", "title": "Sharing: list visible ids", "kind": "read" },
+  "share_select_page":        { "group": "Sharing", "label": "First page", "title": "Sharing: first page", "kind": "read" },
+  "write_share":              { "group": "Sharing", "label": "Share one document", "title": "Sharing: share one document", "kind": "write" },
+  "parents_proj_select_page": { "group": "Parents, projection policy", "label": "First page", "title": "Parents, projection: first page", "kind": "read" },
+  "parents_proj_select_count":{ "group": "Parents, projection policy", "label": "Count visible", "title": "Parents, projection: count visible", "kind": "read" },
+  "parents_select_page":      { "group": "Parents, single-branch policy", "label": "First page", "title": "Parents, single branch: first page", "kind": "read" },
+  "parents_select_count":     { "group": "Parents, single-branch policy", "label": "Count visible", "title": "Parents, single branch: count visible", "kind": "read" },
+  "write_nest_team":          { "group": "Nesting", "label": "Nest a team", "title": "Nesting: nest a team", "kind": "write" },
+  "nest_check":               { "group": "Nesting", "label": "Check through nested team", "title": "Nesting: check through a nested team", "kind": "read" }
+}

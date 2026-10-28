@@ -1,0 +1,31 @@
+---
+import { ENGINES } from '../../lib/chart';
+// Engine legend (identity channel). `extra` adds non-engine keys, e.g. the p95 whisker.
+interface Props {
+	designs?: string[];
+	kind?: 'bar' | 'line';
+	extra?: { label: string; kind: 'whisker' }[];
+}
+const { designs = ['a', 'b', 'c'], kind = 'bar', extra = [] } = Astro.props;
+---
+
+<ul class="viz-legend" aria-label="Engines">
+	{
+		ENGINES.filter((e) => designs.includes(e.id)).map((e) => (
+			<li>
+				<span class={`viz-key ${kind === 'line' ? 'line' : ''}`} style={`background:${e.css}`} />
+				<span>
+					<strong>{e.letter}</strong> {e.name}
+				</span>
+			</li>
+		))
+	}
+	{
+		extra.map((x) => (
+			<li>
+				<span class={`viz-key ${x.kind}`} />
+				<span>{x.label}</span>
+			</li>
+		))
+	}
+</ul>

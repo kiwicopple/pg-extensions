@@ -1,0 +1,52 @@
+---
+import Runtime from './Runtime.astro';
+// Card around one chart: title, takeaway (written from the data by the caller), table view, raw-report link.
+interface Props {
+	title: string;
+	subtitle?: string;
+	takeaway?: string;
+	/** extra context after the takeaway, e.g. what the axes are */
+	source?: { href: string; label: string }[];
+}
+const { title, subtitle, takeaway, source = [] } = Astro.props;
+---
+
+<figure class="viz">
+	<figcaption>
+		<p class="viz-title">{title}</p>
+		{subtitle && <p class="viz-sub">{subtitle}</p>}
+	</figcaption>
+	<slot name="legend" />
+	<div class="viz-body"><slot /></div>
+	{
+		takeaway && (
+			<p class="viz-takeaway">
+				<strong>Takeaway.</strong> {takeaway}
+			</p>
+		)
+	}
+	{
+		Astro.slots.has('table') && (
+			<details>
+				<summary>Table view</summary>
+				<div class="tbl-wrap">
+					<slot name="table" />
+				</div>
+			</details>
+		)
+	}
+	{
+		source.length > 0 && (
+			<p class="viz-source">
+				Raw report:{' '}
+				{source.map((s, i) => (
+					<>
+						{i > 0 && ', '}
+						<a href={s.href}>{s.label}</a>
+					</>
+				))}
+			</p>
+		)
+	}
+	<Runtime />
+</figure>

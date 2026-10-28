@@ -1,0 +1,63 @@
+---
+import Frame from '../viz/Frame.astro';
+import Legend from '../viz/Legend.astro';
+import ColPanel from '../viz/ColPanel.astro';
+import { primary, p50s, times, comparisonLink, SCALE_DOCS } from '../../lib/bench';
+import { engine, fmt, logDomain } from '../../lib/chart';
+import type { Design } from '../../lib/chart';
+
+const s = primary;
+const scales = ['small', 'medium', 'large'].filter((sc) => s?.configs.some((c) => c.scale === sc && c.shape === 'default'));
+const panels = scales
+	.map((sc) => {
+		const proj = p50s(s!, sc, 'default', 'parents_proj_select_page');
+		const single = p50s(s!, sc, 'default', 'parents_select_page');
+		const mk = (v: Partial<Record<Design, number>>) =>
+			(['a', 'b', 'c'] as Design[]).filter((d) => v[d] != null).map((d) => ({ design: d, value: v[d]! }));
+		return { sc, proj, single, groups: [{ label: 'Projection', cols: mk(proj) }, { label: 'Single branch', cols: mk(single) }] };
+	})
+	.filter((p) => p.groups.every((g) => g.cols.length));
+const domain = logDomain(panels.flatMap((p) => p.groups.flatMap((g) => g.cols.map((c) => c.value))));
+
+const lg = panels[panels.length - 1];
+let takeaway = '';
+if (lg && lg.proj.a && lg.single.a && lg.proj.c && lg.single.c) {
+	takeaway = `The policy shape costs more than the engine. At ${SCALE_DOCS[lg.sc]} documents the single-branch page is ${times(lg.single.a / lg.proj.a)} slower than the projection on A (${fmt(lg.proj.a)} to ${fmt(lg.single.a)} ms)${lg.proj.b && lg.single.b ? `, ${times(lg.single.b / lg.proj.b)} on B` : ''} and ${times(lg.single.c / lg.proj.c)} on C (${fmt(lg.proj.c)} to ${fmt(lg.single.c)} ms), because the engine has to materialise every visible id.`;
+}
+---
+
+{
+	panels.length ? (
+		<Frame
+			title="Parents: two-arm projection against single-branch policy"
+			subtitle="First page p50, default shape, ms on a log axis shared by the three panels."
+			takeaway={takeaway}
+			source={[{ href: comparisonLink('large', 'default'), label: 'COMPARISON.md (policy shape)' }]}
+		>
+			<Legend slot="legend" />
+			<div class="viz-panels">
+				{panels.map((p) => (
+					<div>
+						<p class="viz-panel-title">{p.sc[0].toUpperCase() + p.sc.slice(1)} ({SCALE_DOCS[p.sc]} documents)</p>
+						<ColPanel groups={p.groups} unit="ms" title={`Parents first page, ${p.sc}`} domain={domain} />
+					</div>
+				))}
+			</div>
+			<Fragment slot="table">
+				<table>
+					<thead>
+						<tr><th>Scale</th><th>Policy</th>{(['a', 'b', 'c'] as Design[]).map((d) => <th>{engine(d).letter} p50</th>)}</tr>
+					</thead>
+					<tbody>
+						{panels.flatMap((p) => [
+							<tr><td>{p.sc}</td><td>projection</td>{(['a', 'b', 'c'] as Design[]).map((d) => <td>{fmt(p.proj[d])}</td>)}</tr>,
+							<tr><td>{p.sc}</td><td>single branch</td>{(['a', 'b', 'c'] as Design[]).map((d) => <td>{fmt(p.single[d])}</td>)}</tr>,
+						])}
+					</tbody>
+				</table>
+			</Fragment>
+		</Frame>
+	) : (
+		<div class="viz-note"><p>Parents comparison needs default-shape runs with both parents workloads; not available in the current data.</p></div>
+	)
+}
