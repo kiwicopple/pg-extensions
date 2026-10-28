@@ -113,16 +113,19 @@ See `bench/run.sh --help`. In short:
 ./bench/run.sh --impl ... --check                                  # exit 1 if any p95 is over budget
 ```
 
-A run has four phases. Each loads a seed, times it, runs `VACUUM FULL ANALYZE` on the non-empty tables, records the size and row count of every table in schema `permissions`, and checksums what sample users see. Then it runs the phase's workloads:
+A run has five phases. Each loads a seed, times it, runs `VACUUM FULL ANALYZE` on the non-empty tables, records the size and row count of every table in schema `permissions`, and checksums what sample users see. Then it runs the phase's workloads:
 
 | Phase | Seed | Workloads |
 | --- | --- | --- |
 | rbac | `seed_rbac.sql`: tenant-scoped roles through the preset API (any engine) | `rbac_*`, `write_assign_role` |
 | sharing | `designs/<design>/seed_sharing.sql`: per-document sharing with nested teams, native API | `share_list_objects`, `share_select_page`, `write_share` |
-| parents | `designs/<design>/seed_parents.sql`: about 10 folders per org, documents in folders, org roles inherited through the folder chain, every 5th user a folder viewer; replaces the select policy with a parent-aware one (no `org_id` branch) | `parents_select_page`, `parents_select_count` |
+| parents_proj | `designs/<design>/seed_parents.sql`: about 10 folders per org, org roles inherited by folders, every 5th user a folder viewer. Documents point at folders only through the app column `documents.folder_id`. Two-arm projection policy: `id = any(<documents shared with me>) or folder_id = any(<folders I can view>)` | `parents_proj_select_page`, `parents_proj_select_count` |
+| parents | `designs/<design>/seed_parent_docs.sql`: a parent link per document in the engine's tables. Single-branch policy: one engine call returns every visible document id | `parents_select_page`, `parents_select_count` |
 | nesting | `designs/<design>/seed_nest.sql`, loaded after `write_nest_team`: a 1,000-member team nested in the deepest team for good | `write_nest_team` (rolled back), `nest_check` (a check that needs the nesting) |
 
-The design is inferred from the `--impl` file name like in `test/run.sh`, or set with `--design a|b|c|none`. Phases 2 to 4 are skipped when the design has no files for them. Workloads in `bench/workloads/` are shared; the rest are in the design's `workloads/`. Each runs with pgbench as `authenticated` under RLS. Writes roll back, so a faster engine doesn't end up with more rows in later phases.
+Both parents policies have no `org_id` branch, and they see the same documents. The projection shape measures the engine on a few folder ids; the single-branch shape measures it on every visible document, and the per-document link it needs is counted in the parents seed time and storage.
+
+The design is inferred from the `--impl` file name like in `test/run.sh`, or set with `--design a|b|c|none`. Phases 2 to 5 are skipped when the design has no files for them. Workloads in `bench/workloads/` are shared; the rest are in the design's `workloads/`. Each runs with pgbench as `authenticated` under RLS. Writes roll back, so a faster engine doesn't end up with more rows in later phases.
 
 **Same data for every engine.** `bench/seed_shape.sql` generates the teams, memberships, shares, folders and folder viewers as integer tables in schema `bench`. Each design's seed reads them and writes the same facts through its own API. `--shape` changes them: `default` (one team per user, 5 shares per team, 4-ary team tree), `deep` (teams in chains 9 deep, users in the leaf teams, so `write_nest_team` reaches depth 10, the most B and C accept), `wide` (4x the teams, each user in 50, 50 shares per team).
 

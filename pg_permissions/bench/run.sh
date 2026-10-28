@@ -29,10 +29,15 @@
 # `permissions`, and a checksum of the documents that sample users see:
 #   1. rbac     bench/seed_rbac.sql (preset API, any engine); rbac_* and write_assign_role
 #   2. sharing  designs/<design>/seed_sharing.sql (native API); share_* and write_share
-#   3. parents  designs/<design>/seed_parents.sql (folders; replaces the select policy);
+#   3. parents_proj  designs/<design>/seed_parents.sql (folders; documents linked
+#               only by the app column documents.folder_id; two-arm policy
+#               `id = any(shares) or folder_id = any(viewable folders)`);
+#               parents_proj_select_page and parents_proj_select_count
+#   4. parents  designs/<design>/seed_parent_docs.sql (a parent link per document;
+#               single-branch policy, one engine call returns every visible id);
 #               parents_select_page and parents_select_count
-#   4. nesting  write_nest_team, then designs/<design>/seed_nest.sql, then nest_check
-# Phases 2-4 are skipped if the design has no files for them. All designs read
+#   5. nesting  write_nest_team, then designs/<design>/seed_nest.sql, then nest_check
+# Phases 2-5 are skipped if the design has no files for them. All designs read
 # the same data from the shape tables (bench/seed_shape.sql). Checksums are
 # saved to bench/results/equivalence-<scale>-<shape>-<design>.tsv (complete
 # runs only, not --only) and compared with the other designs' latest files: identical data and correct engines
@@ -107,8 +112,9 @@ DESIGN_DIR="$HERE/designs/$DESIGN"
 
 PHASE1="rbac_check rbac_select_page rbac_select_count rbac_update_one write_assign_role"
 PHASE2="share_list_objects share_select_page write_share"
-PHASE3="parents_select_page parents_select_count"
-PHASE4="write_nest_team nest_check"
+PHASE3="parents_proj_select_page parents_proj_select_count"
+PHASE4="parents_select_page parents_select_count"
+PHASE5="write_nest_team nest_check"
 # users whose visible documents are checksummed (every 5th user is a folder viewer)
 SAMPLE_USERS="1 2 3 5 10 77 500 $USERS"
 
@@ -152,7 +158,7 @@ selected() {
 # so phase N must be seeded if so.
 phase_needed() {
     local p w list
-    for p in 1 2 3 4; do
+    for p in 1 2 3 4 5; do
         [ "$p" -ge "$1" ] || continue
         eval "list=\$PHASE$p"
         for w in $list; do selected "$w" && return 0; done
@@ -276,7 +282,8 @@ SQL
     fi
     printf '%s\n' "$lines" >>"$WORK/equiv.tsv"
     echo "  visible documents: $(printf '%s\n' "$lines" | awk -F'\t' '{ printf "%suser %s: %s", (NR > 1 ? ", " : ""), $2, $3 }')"
-    echo "  checksum ($policy): $(printf '%s\n' "$lines" | md5 -q 2>/dev/null || printf '%s\n' "$lines" | md5sum | cut -c1-32)"
+    # over user, count and digest only, so equal visible sets give equal checksums across policies
+    echo "  checksum ($policy): $(printf '%s\n' "$lines" | cut -f2- | { md5 -q 2>/dev/null || md5sum | cut -c1-32; })"
     case "$(printf '%s\n' "$lines" | awk -F'\t' '$3 == 0' | head -1)" in
         "") ;;
         *) echo "  warning: a sample user sees no documents; check the seed" >&2 ;;
@@ -340,7 +347,7 @@ if phase_needed 2; then
     echo
     if [ ! -f "$DESIGN_DIR/seed_sharing.sql" ]; then
         echo "Sharing skipped: no sharing benchmark for design $DESIGN (bench/designs/$DESIGN/)"
-        skip_workloads "$PHASE2 $PHASE3 $PHASE4"
+        skip_workloads "$PHASE2 $PHASE3 $PHASE4 $PHASE5"
     elif seed sharing "$DESIGN_DIR/seed_sharing.sql"; then
         SHARED=1
         checksums sharing
@@ -348,27 +355,45 @@ if phase_needed 2; then
         for w in $PHASE2; do run_workload "$w"; done
     else
         echo "  skipped: this implementation doesn't support the sharing API"
-        skip_workloads "$PHASE2 $PHASE3 $PHASE4"
+        skip_workloads "$PHASE2 $PHASE3 $PHASE4 $PHASE5"
     fi
 fi
 
-# ---- 3. parents (after the share workloads: it replaces the select policy)
+# ---- 3. parents, two-arm projection (after the share workloads: it replaces
+#      the select policy). Documents point at folders only through folder_id.
+PARENTS=0
 if [ $SHARED = 1 ] && phase_needed 3; then
     echo
     if [ ! -f "$DESIGN_DIR/seed_parents.sql" ]; then
         echo "Parents skipped: no parents benchmark for design $DESIGN"
-        skip_workloads "$PHASE3"
-    elif seed parents "$DESIGN_DIR/seed_parents.sql"; then
-        checksums parents
-        explain_as_user "parents_select_page (parent-aware policy, user 1)"
+        skip_workloads "$PHASE3 $PHASE4"
+    elif seed parents_proj "$DESIGN_DIR/seed_parents.sql"; then
+        PARENTS=1
+        checksums parents_proj
+        explain_as_user "parents_proj_select_page (two-arm projection policy, user 1)"
         for w in $PHASE3; do run_workload "$w"; done
     else
-        skip_workloads "$PHASE3"
+        skip_workloads "$PHASE3 $PHASE4"
     fi
 fi
 
-# ---- 4. nesting: the write, then one nest for good, then the read side
-if [ $SHARED = 1 ] && phase_needed 4; then
+# ---- 4. parents, single branch: a parent link per document, one engine call
+if [ $PARENTS = 1 ] && phase_needed 4; then
+    echo
+    if [ ! -f "$DESIGN_DIR/seed_parent_docs.sql" ]; then
+        echo "Single-branch parents skipped: no seed_parent_docs.sql for design $DESIGN"
+        skip_workloads "$PHASE4"
+    elif seed parents "$DESIGN_DIR/seed_parent_docs.sql"; then
+        checksums parents
+        explain_as_user "parents_select_page (single-branch policy, user 1)"
+        for w in $PHASE4; do run_workload "$w"; done
+    else
+        skip_workloads "$PHASE4"
+    fi
+fi
+
+# ---- 5. nesting: the write, then one nest for good, then the read side
+if [ $SHARED = 1 ] && phase_needed 5; then
     echo
     echo "Nesting (team md5('nest-src'), 1,000 members):"
     run_workload write_nest_team
@@ -466,7 +491,7 @@ report="$HERE/results/$(date +%Y%m%d-%H%M%S)-$IMPL_NAME-$suffix.md"
     echo
     echo "## Equivalence"
     echo
-    echo "Documents each sample user sees through RLS after each seed, and the md5 of their sorted ids. Every 5th user is also a folder viewer, so for users not divisible by 5 parents must equal sharing."
+    echo "Documents each sample user sees through RLS after each seed, and the md5 of their sorted ids. Every 5th user is also a folder viewer, so for users not divisible by 5 parents_proj and parents must equal sharing, and parents_proj must always equal parents."
     echo
     echo "| policy | user | visible | md5 |"
     echo "| --- | --- | --- | --- |"
