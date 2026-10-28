@@ -6,12 +6,17 @@
 #   bench/run.sh --impl ... --check                              # exit 1 if any p95 is over budget
 #
 # Options: --scale small|medium|large  --duration SECONDS  --clients N
-#          --only PATTERN  --external  --check
+#          --only PATTERN  --design a|b|c|none  --external  --check
+#
+# --design defaults to the first letter of the --impl file name before a dash
+# (a-tuple-core.sql -> a); anything else (the extension) is "none".
 #
 # Seeds tenant-scoped RBAC (preset API, any engine), runs the rbac_* and
-# write_assign_role workloads, then seeds per-document sharing (provisional
-# zanzibar API) and runs the share_* and write_share workloads. Results are
-# printed as a markdown table and saved to bench/results/.
+# write_assign_role workloads, then, if bench/designs/<design>/ exists, seeds
+# that design's per-document sharing (its native API) and runs its share_* and
+# write_share workloads from bench/designs/<design>/workloads/. Otherwise
+# sharing is skipped. Results are printed as a markdown table and saved to
+# bench/results/.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -25,6 +30,7 @@ CLIENTS=4
 ONLY=
 CHECK=0
 EXTERNAL=0
+DESIGN=
 while [ $# -gt 0 ]; do
     case "$1" in
         --impl) IMPL=$2; shift 2 ;;
@@ -32,9 +38,11 @@ while [ $# -gt 0 ]; do
         --duration) DURATION=$2; shift 2 ;;
         --clients) CLIENTS=$2; shift 2 ;;
         --only) ONLY=$2; shift 2 ;;
+        --design) DESIGN=$2; shift 2 ;;
+        --design=*) DESIGN=${1#--design=}; shift ;;
         --check) CHECK=1; shift ;;
         --external) EXTERNAL=1; shift ;;
-        -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -49,6 +57,18 @@ esac
 IMPL=$(resolve_impl "$IMPL")
 [ -f "$IMPL" ] || { echo "error: implementation not found: $IMPL" >&2; exit 2; }
 IMPL_NAME=$(basename "$IMPL" .sql)
+
+if [ -z "$DESIGN" ]; then
+    case "$IMPL_NAME" in
+        [abc]-*) DESIGN=${IMPL_NAME%%-*} ;;
+        *) DESIGN=none ;;
+    esac
+fi
+case "$DESIGN" in
+    a|b|c|none) ;;
+    *) echo "unknown design: $DESIGN (expected a, b, c or none)" >&2; exit 2 ;;
+esac
+DESIGN_DIR="$HERE/designs/$DESIGN"
 
 start_cluster
 ensure_roles
@@ -119,12 +139,14 @@ SQL
 run_workload() {
     local name=$1
     if [ -n "$ONLY" ]; then case "$name" in *"$ONLY"*) ;; *) return ;; esac; fi
+    local wfile="$HERE/workloads/$name.sql"
+    [ -f "$wfile" ] || wfile="$DESIGN_DIR/workloads/$name.sql"
     local dir="$WORK/$name"
     mkdir -p "$dir"
     printf '  %-22s ' "$name"
     local out
     if ! out=$(cd "$dir" && "$PGBIN/pgbench" -n -T "$DURATION" -c "$CLIENTS" -j "$CLIENTS" -l \
-                 "${PGB_VARS[@]}" -f "$HERE/workloads/$name.sql" "$DB" 2>&1); then
+                 "${PGB_VARS[@]}" -f "$wfile" "$DB" 2>&1); then
         echo "ERROR"
         printf '%s\n' "$out" | grep -iE 'error|abort' | head -3 | sed 's/^/      /'
         RESULTS+=("| $name | error | | | | | |")
@@ -144,7 +166,7 @@ run_workload() {
     RESULTS+=("| $name | $p50 | $p95 | $avg | ${tps%.*} | ${budget:--} | $status |")
 }
 
-echo "Implementation: ${IMPL#$EXT_DIR/}"
+echo "Implementation: ${IMPL#$EXT_DIR/} (design: $DESIGN)"
 echo "Scale:          $SCALE ($DOCS documents, $USERS users, $ORGS orgs, $TEAMS teams)"
 echo "pgbench:        ${DURATION}s per workload, $CLIENTS clients"
 echo "Postgres:       $("$PGBIN/psql" -X -tA -d "$DB" -c 'show server_version')"
@@ -163,20 +185,26 @@ for w in rbac_check rbac_select_page rbac_select_count rbac_update_one write_ass
 done
 
 echo
-echo "Seeding sharing (provisional zanzibar API)..."
+SHARE_WORKLOADS=(share_list_objects share_select_page write_share)
+echo "Seeding sharing (design $DESIGN)..."
 start=$(date +%s)
-if seed_out=$("$PGBIN/psql" -X -q -v ON_ERROR_STOP=1 "${VARS[@]}" -d "$DB" -f "$HERE/seed_sharing.sql" 2>&1 >/dev/null); then
+if [ ! -f "$DESIGN_DIR/seed_sharing.sql" ]; then
+    echo "  skipped: no sharing benchmark for design $DESIGN (bench/designs/$DESIGN/)"
+    for w in "${SHARE_WORKLOADS[@]}"; do
+        RESULTS+=("| $w | skipped | | | | | |")
+    done
+elif seed_out=$("$PGBIN/psql" -X -q -v ON_ERROR_STOP=1 "${VARS[@]}" -d "$DB" -f "$DESIGN_DIR/seed_sharing.sql" 2>&1 >/dev/null); then
     "$PGBIN/psql" -X -q -d "$DB" -c "vacuum analyze"
     echo "  done in $(( $(date +%s) - start ))s"
     sanity_check
     explain_as_user "share_select_page (two-branch policy, user 1)"
-    for w in share_list_objects share_select_page write_share; do
+    for w in "${SHARE_WORKLOADS[@]}"; do
         run_workload "$w"
     done
 else
     echo "  skipped: this implementation doesn't support the sharing API"
     printf '%s\n' "$seed_out" | grep ERROR | head -1 | sed 's/^/  /'
-    for w in share_list_objects share_select_page write_share; do
+    for w in "${SHARE_WORKLOADS[@]}"; do
         RESULTS+=("| $w | skipped | | | | | |")
     done
 fi
@@ -184,7 +212,7 @@ fi
 mkdir -p "$HERE/results"
 report="$HERE/results/$(date +%Y%m%d-%H%M%S)-$IMPL_NAME-$SCALE.md"
 {
-    echo "# Benchmark: $IMPL_NAME, $SCALE scale"
+    echo "# Benchmark: $IMPL_NAME (design $DESIGN), $SCALE scale"
     echo
     echo "- Date: $(date '+%Y-%m-%d %H:%M')"
     echo "- Postgres: $("$PGBIN/psql" -X -tA -d "$DB" -c 'show server_version')"

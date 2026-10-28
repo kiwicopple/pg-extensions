@@ -1,6 +1,6 @@
 -- Goal: groups, nesting, cycles, revocation, expiry and cleanup (PLAN.md §2 Model 2, §3)
 -- PROVISIONAL: uses Design A's zanzibar-level API. See 30_zanzibar_reference.sql.
-\ir ../fixtures/ids.sql
+\ir ../../fixtures/ids.sql
 
 select permissions.define_type('user');
 select permissions.define_type('team');

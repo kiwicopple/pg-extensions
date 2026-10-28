@@ -1,7 +1,7 @@
 -- Goal: an rbac app adds per-object sharing without migrating anything (PLAN.md §6, RBAC scenario step 4)
 -- PROVISIONAL: the sharing half uses Design A's zanzibar-level API.
-\ir ../fixtures/ids.sql
-\ir ../fixtures/rbac_roles.sql
+\ir ../../fixtures/ids.sql
+\ir ../../fixtures/rbac_roles.sql
 
 create table public.documents (id uuid primary key, org_id uuid not null, title text not null);
 insert into public.documents values

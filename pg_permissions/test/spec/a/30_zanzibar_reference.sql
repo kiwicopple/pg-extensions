@@ -2,7 +2,7 @@
 -- PROVISIONAL: the zanzibar-level API isn't settled. These tests use Design A's
 -- function names (define_type, define_relation, grant, check_for, list_objects_for,
 -- list_subjects). Update them when the engine is chosen; keep the assertions.
-\ir ../fixtures/ids.sql
+\ir ../../fixtures/ids.sql
 
 select permissions.define_type('user');
 select permissions.define_type('team');
