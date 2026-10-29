@@ -54,6 +54,7 @@ export default defineConfig({
 						{ label: 'Engine comparison (report)', slug: 'benchmarks/comparison' },
 						{ label: 'Postgres versions (report)', slug: 'benchmarks/versions-report' },
 						{ label: 'Optimizations (report)', slug: 'benchmarks/optimizations-report' },
+						{ label: 'Design D (report)', slug: 'benchmarks/design-d-report' },
 					],
 				},
 				{
@@ -62,6 +63,7 @@ export default defineConfig({
 						{ label: 'A: tuple core', slug: 'designs/a-tuple-core' },
 						{ label: 'B: policy first', slug: 'designs/b-policy-first' },
 						{ label: 'C: compiled model', slug: 'designs/c-compiled-model' },
+						{ label: 'D: per-model tables', slug: 'designs/d-per-model' },
 						{ label: 'Prototypes', slug: 'designs/prototypes' },
 					],
 				},

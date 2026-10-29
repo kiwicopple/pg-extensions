@@ -3,7 +3,7 @@ import Frame from '../viz/Frame.astro';
 import Legend from '../viz/Legend.astro';
 import ColPanel from '../viz/ColPanel.astro';
 import { primary, p50s, times, comparisonLink, SCALE_DOCS } from '../../lib/bench';
-import { engine, fmt, logDomain } from '../../lib/chart';
+import { engine, fmt, logDomain, DESIGN_IDS } from '../../lib/chart';
 import type { Design } from '../../lib/chart';
 
 const s = primary;
@@ -13,7 +13,7 @@ const panels = scales
 		const proj = p50s(s!, sc, 'default', 'parents_proj_select_page');
 		const single = p50s(s!, sc, 'default', 'parents_select_page');
 		const mk = (v: Partial<Record<Design, number>>) =>
-			(['a', 'b', 'c'] as Design[]).filter((d) => v[d] != null).map((d) => ({ design: d, value: v[d]! }));
+			DESIGN_IDS.filter((d) => v[d] != null).map((d) => ({ design: d, value: v[d]! }));
 		return { sc, proj, single, groups: [{ label: 'Projection', cols: mk(proj) }, { label: 'Single branch', cols: mk(single) }] };
 	})
 	.filter((p) => p.groups.every((g) => g.cols.length));
@@ -46,12 +46,12 @@ if (lg && lg.proj.a && lg.single.a && lg.proj.c && lg.single.c) {
 			<Fragment slot="table">
 				<table>
 					<thead>
-						<tr><th>Scale</th><th>Policy</th>{(['a', 'b', 'c'] as Design[]).map((d) => <th>{engine(d).letter} p50</th>)}</tr>
+						<tr><th>Scale</th><th>Policy</th>{DESIGN_IDS.map((d) => <th>{engine(d).letter} p50</th>)}</tr>
 					</thead>
 					<tbody>
 						{panels.flatMap((p) => [
-							<tr><td>{p.sc}</td><td>projection</td>{(['a', 'b', 'c'] as Design[]).map((d) => <td>{fmt(p.proj[d])}</td>)}</tr>,
-							<tr><td>{p.sc}</td><td>single branch</td>{(['a', 'b', 'c'] as Design[]).map((d) => <td>{fmt(p.single[d])}</td>)}</tr>,
+							<tr><td>{p.sc}</td><td>projection</td>{DESIGN_IDS.map((d) => <td>{fmt(p.proj[d])}</td>)}</tr>,
+							<tr><td>{p.sc}</td><td>single branch</td>{DESIGN_IDS.map((d) => <td>{fmt(p.single[d])}</td>)}</tr>,
 						])}
 					</tbody>
 				</table>

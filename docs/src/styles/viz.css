@@ -1,5 +1,7 @@
 /* Chart tokens. Engine colours are fixed everywhere: A blue, B orange, C aqua (categorical slots 1-3,
-   validated all-pairs in light and dark with the dataviz skill's validate_palette.js). */
+   validated all-pairs in light and dark with the dataviz skill's validate_palette.js), D yellow
+   (slot 4: passes adjacent pairs in both modes; all-pairs it is close to B's orange, so D is always
+   letter-labelled in legends and table views). */
 :root {
 	--viz-surface: #fcfcfb;
 	--viz-ink: #0b0b0b;
@@ -12,6 +14,7 @@
 	--eng-a: #2a78d6;
 	--eng-b: #eb6834;
 	--eng-c: #1baf7a;
+	--eng-d: #eda100;
 }
 :root[data-theme='dark'] {
 	--viz-surface: #1a1a19;
@@ -25,6 +28,7 @@
 	--eng-a: #3987e5;
 	--eng-b: #d95926;
 	--eng-c: #199e70;
+	--eng-d: #c98500;
 }
 
 .viz {
@@ -141,9 +145,11 @@
 .viz-body .eng-a { fill: var(--eng-a); }
 .viz-body .eng-b { fill: var(--eng-b); }
 .viz-body .eng-c { fill: var(--eng-c); }
+.viz-body .eng-d { fill: var(--eng-d); }
 .viz-body .ln-a { stroke: var(--eng-a); }
 .viz-body .ln-b { stroke: var(--eng-b); }
 .viz-body .ln-c { stroke: var(--eng-c); }
+.viz-body .ln-d { stroke: var(--eng-d); }
 .viz-body .line {
 	fill: none;
 	stroke-width: 2;

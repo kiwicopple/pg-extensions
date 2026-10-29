@@ -1,4 +1,5 @@
 ---
+import { DESIGN_IDS } from '../../lib/chart';
 import { allSeries, primary, runs, scalingSeries, seriesVersionLabel, usingFixture, DATA_URL } from '../../lib/bench';
 // What data the dashboard is showing, plus a stat strip and the cross-engine checksum result.
 const s = primary;
@@ -6,13 +7,13 @@ const dates = s ? s.runs.map((r) => r.date.slice(0, 10)).sort() : [];
 const scaling = scalingSeries();
 const hosts = s ? [...new Set(s.runs.map((r) => r.host).filter(Boolean))] : [];
 
-// Checksum agreement: for every configuration where all three engines ran, do the per-policy checksums match?
+// Checksum agreement: for every configuration where two or more engines ran, do the per-policy checksums match?
 let agree = 0;
 let total = 0;
 if (s) {
 	for (const c of s.configs) {
-		const rs = (['a', 'b', 'c'] as const).map((d) => s.get(d, c.scale, c.shape));
-		if (rs.some((r) => !r?.checksums)) continue;
+		const rs = DESIGN_IDS.map((d) => s.get(d, c.scale, c.shape)).filter((r) => !!r);
+		if (rs.length < 2 || rs.some((r) => !r?.checksums)) continue;
 		const policies = Object.keys(rs[0]!.checksums!);
 		total++;
 		if (policies.every((p) => rs.every((r) => r!.checksums![p] === rs[0]!.checksums![p]))) agree++;

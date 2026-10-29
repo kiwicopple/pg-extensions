@@ -11,7 +11,8 @@ import { engine, fmt } from '../../lib/chart';
 import type { Design } from '../../lib/chart';
 
 const KEY = ['rbac_check', 'share_select_page', 'parents_proj_select_page', 'parents_select_page', 'write_nest_team', 'nest_check'];
-const DESIGNS = ['a', 'b', 'c'] as Design[];
+// Design D has runs on PG 18 only (bench/baselines/D.md), so it has no version comparison yet.
+const DESIGNS: Design[] = ['a', 'b', 'c'];
 const order = ['large-default', 'medium-default', 'small-default', 'medium-deep', 'medium-wide'];
 
 // Series are only compared with series of the same environment AND tag: local against Docker, or optimized against

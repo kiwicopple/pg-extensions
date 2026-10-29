@@ -3,7 +3,7 @@ import Frame from '../viz/Frame.astro';
 import Legend from '../viz/Legend.astro';
 import LinePanel from '../viz/LinePanel.astro';
 import { primary, scalingSeries, workloadInfo, p50s, times, comparisonLink, SCALE_DOCS } from '../../lib/bench';
-import { engine, fmt } from '../../lib/chart';
+import { engine, fmt, DESIGN_IDS } from '../../lib/chart';
 import type { Design } from '../../lib/chart';
 
 const s = scalingSeries();
@@ -11,7 +11,7 @@ const otherThanPrimary = !!s && s !== primary;
 const KEY = ['rbac_check', 'share_select_page', 'parents_proj_select_page', 'parents_select_page', 'write_nest_team', 'nest_check'];
 const scales = ['small', 'medium', 'large'].filter((sc) => s?.configs.some((c) => c.scale === sc && c.shape === 'default'));
 const cats = scales.map((sc) => `${SCALE_DOCS[sc]}`);
-const designs = (['a', 'b', 'c'] as Design[]).filter((d) => scales.some((sc) => s?.get(d, sc, 'default')));
+const designs = DESIGN_IDS.filter((d) => scales.some((sc) => s?.get(d, sc, 'default')));
 
 const panels = KEY.filter((n) => scales.some((sc) => Object.keys(p50s(s!, sc, 'default', n)).length)).map((name) => ({
 	name,

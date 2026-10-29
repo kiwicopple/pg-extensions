@@ -3,7 +3,7 @@ import Frame from '../viz/Frame.astro';
 import Legend from '../viz/Legend.astro';
 import ScatterPanel from '../viz/ScatterPanel.astro';
 import { primary, p50s, times, comparisonLink } from '../../lib/bench';
-import { engine, fmt, logDomain } from '../../lib/chart';
+import { engine, fmt, logDomain, DESIGN_IDS } from '../../lib/chart';
 import type { Design } from '../../lib/chart';
 
 const s = primary;
@@ -18,7 +18,7 @@ const panels = CANDIDATES.map((c) => {
 	const w = p50s(s!, c.scale, c.shape, WRITE);
 	return {
 		...c,
-		points: (['a', 'b', 'c'] as Design[]).filter((d) => r[d] != null && w[d] != null).map((d) => ({ design: d, x: r[d]!, y: w[d]! })),
+		points: DESIGN_IDS.filter((d) => r[d] != null && w[d] != null).map((d) => ({ design: d, x: r[d]!, y: w[d]! })),
 	};
 }).filter((p) => p.points.length >= 2);
 

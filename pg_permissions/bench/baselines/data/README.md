@@ -1,6 +1,6 @@
 # Benchmark results as JSON
 
-One file per benchmark run, for charting (the docs site reads this directory). Written by [`../../report_to_json.sh`](../../report_to_json.sh) from a `bench/run.sh` markdown report; `bench/run.sh` calls it after every complete run (not `--only` runs). The `pg16-local-*` files are the 15 serial runs of 2026-10-28/29 in `bench/baselines/<design>-<scale>-<shape>.md`, backfilled. The `pg1[678]-docker-*` files are the Docker runs of 2026-10-29 (`bench/baselines/pg<NN>-docker-<design>-<scale>-<shape>.md`, analysed in [`../VERSIONS.md`](../VERSIONS.md)); their JSON was regenerated from the copied report to add `report`, keeping the run's `date` and `host`. The `*-opt` files are the same 27 configurations with the session 3 optimized engines (`tag: "opt"`); four of them are repeat runs that replaced disturbed originals (OPTIMIZATIONS.md, Repeatability).
+One file per benchmark run, for charting (the docs site reads this directory). Written by [`../../report_to_json.sh`](../../report_to_json.sh) from a `bench/run.sh` markdown report; `bench/run.sh` calls it after every complete run (not `--only` runs). The `pg16-local-*` files are the 15 serial runs of 2026-10-28/29 in `bench/baselines/<design>-<scale>-<shape>.md`, backfilled. The `pg1[678]-docker-*` files are the Docker runs of 2026-10-29 (`bench/baselines/pg<NN>-docker-<design>-<scale>-<shape>.md`, analysed in [`../VERSIONS.md`](../VERSIONS.md)); their JSON was regenerated from the copied report to add `report`, keeping the run's `date` and `host`. The `*-opt` files are the same 27 configurations with the session 3 optimized engines (`tag: "opt"`); four of them are repeat runs that replaced disturbed originals (OPTIMIZATIONS.md, Repeatability). `pg18-docker-d-*-opt` are design D (unoptimized prototype) in the same three configurations, tagged `opt` so they sit in the same primary series ([`../D.md`](../D.md)).
 
 File name: `<run_id>.json`. A later run with the same settings replaces the file.
 
@@ -27,7 +27,7 @@ File name: `<run_id>.json`. A later run with the same settings replaces the file
 | `environment` | `local` (throwaway cluster from `test/lib/cluster.sh` on the host) or `docker` (`docker/compose.yaml`) |
 | `host` | Machine CPU, CPU count and memory; for `docker`, plus the container's CPU and memory limits |
 | `pg_version` | `server_version` up to the first space (`16.4`, `17.11`) |
-| `design` | `a`, `b` or `c` (`none` for the extension file) |
+| `design` | `a`, `b`, `c` or `d` (`none` for the extension file) |
 | `scale` | `small` (10k documents), `medium` (100k), `large` (1M) |
 | `shape` | `default`, `deep` or `wide` (see `bench/run.sh --help`) |
 | `clients`, `duration_s` | pgbench clients and seconds per workload |

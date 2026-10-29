@@ -3,7 +3,7 @@ import Frame from '../viz/Frame.astro';
 import Legend from '../viz/Legend.astro';
 import ColPanel from '../viz/ColPanel.astro';
 import { primary, workloadInfo, p50s, times, comparisonLink } from '../../lib/bench';
-import { engine, fmt } from '../../lib/chart';
+import { engine, fmt, DESIGN_IDS } from '../../lib/chart';
 import type { Design } from '../../lib/chart';
 
 const s = primary;
@@ -15,7 +15,7 @@ const panels = KEY.map((name) => ({
 	info: workloadInfo(name),
 	groups: shapes.map((sh) => {
 		const v = p50s(s!, SCALE, sh, name);
-		return { label: sh, cols: (['a', 'b', 'c'] as Design[]).filter((d) => v[d] != null).map((d) => ({ design: d, value: v[d]! })) };
+		return { label: sh, cols: DESIGN_IDS.filter((d) => v[d] != null).map((d) => ({ design: d, value: v[d]! })) };
 	}),
 })).filter((p) => p.groups.some((g) => g.cols.length));
 
@@ -65,14 +65,14 @@ if (shapes.length >= 2) {
 					<thead>
 						<tr>
 							<th>Workload (p50 ms)</th>
-							{shapes.flatMap((sh) => (['a', 'b', 'c'] as Design[]).map((d) => <th>{engine(d).letter} {sh}</th>))}
+							{shapes.flatMap((sh) => DESIGN_IDS.map((d) => <th>{engine(d).letter} {sh}</th>))}
 						</tr>
 					</thead>
 					<tbody>
 						{panels.map((p) => (
 							<tr>
 								<td>{p.info.title}</td>
-								{p.groups.flatMap((gr) => (['a', 'b', 'c'] as Design[]).map((d) => <td>{fmt(gr.cols.find((c) => c.design === d)?.value)}</td>))}
+								{p.groups.flatMap((gr) => DESIGN_IDS.map((d) => <td>{fmt(gr.cols.find((c) => c.design === d)?.value)}</td>))}
 							</tr>
 						))}
 					</tbody>

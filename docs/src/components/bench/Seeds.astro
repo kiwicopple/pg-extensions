@@ -5,7 +5,7 @@ import TabGroup from '../viz/TabGroup.astro';
 import ColPanel from '../viz/ColPanel.astro';
 import LinePanel from '../viz/LinePanel.astro';
 import { primary, PHASES, PHASE_LABELS, comparisonLink } from '../../lib/bench';
-import { engine, fmt } from '../../lib/chart';
+import { engine, fmt, DESIGN_IDS } from '../../lib/chart';
 import type { Design } from '../../lib/chart';
 
 const s = primary;
@@ -13,7 +13,7 @@ const configs = s?.configs ?? [];
 const SHORT: Record<string, string> = { rbac: 'RBAC', sharing: 'Sharing', parents_proj: 'Proj.', parents: 'Links', nesting: 'Nesting' };
 
 function data(scale: string, shape: string) {
-	const designs = (['a', 'b', 'c'] as Design[]).filter((d) => s!.get(d, scale, shape));
+	const designs = DESIGN_IDS.filter((d) => s!.get(d, scale, shape));
 	const phases = PHASES.filter((p) => designs.some((d) => s!.get(d, scale, shape)?.seeds.some((x) => x.phase === p)));
 	const get = (d: Design, p: string) => s!.get(d, scale, shape)?.seeds.find((x) => x.phase === p);
 	return { designs, phases, get };

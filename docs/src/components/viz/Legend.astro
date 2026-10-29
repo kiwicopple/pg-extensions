@@ -1,12 +1,12 @@
 ---
-import { ENGINES } from '../../lib/chart';
+import { ENGINES, DESIGN_IDS } from '../../lib/chart';
 // Engine legend (identity channel). `extra` adds non-engine keys, e.g. the p95 whisker.
 interface Props {
 	designs?: string[];
 	kind?: 'bar' | 'line';
 	extra?: { label: string; kind: 'whisker' | 'before' | 'after' }[];
 }
-const { designs = ['a', 'b', 'c'], kind = 'bar', extra = [] } = Astro.props;
+const { designs = DESIGN_IDS as string[], kind = 'bar', extra = [] } = Astro.props;
 ---
 
 <ul class="viz-legend" aria-label="Engines">

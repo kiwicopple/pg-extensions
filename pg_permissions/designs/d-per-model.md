@@ -1,6 +1,6 @@
 # Design D: Per-model tables (`rbac_*` and OpenFGA `fga_*`)
 
-> Status: prototype, [`prototypes/d-per-model.sql`](../prototypes/d-per-model.sql). Built in session 4 after the direction change in [`PLAN.md`](../PLAN.md) ("Current plan (session 4): per-model tables") and [`DECISION.md`](../DECISION.md) ("Session 4 direction"). Passes every shared spec unchanged and OpenFGA's own consolidated test suite: all 138 cases, 933 assertions with stored tuples and 746 with contextual tuples (section 9). Not benchmarked yet.
+> Status: prototype, [`prototypes/d-per-model.sql`](../prototypes/d-per-model.sql). Built in session 4 after the direction change in [`PLAN.md`](../PLAN.md) ("Current plan (session 4): per-model tables") and [`DECISION.md`](../DECISION.md) ("Session 4 direction"). Passes every shared spec unchanged and OpenFGA's own consolidated test suite: all 138 cases, 933 assertions with stored tuples and 746 with contextual tuples (section 9). Benchmarked (unoptimized) against A, B and C in [`bench/baselines/D.md`](../bench/baselines/D.md).
 
 ## 1. Idea
 
@@ -166,7 +166,7 @@ Mutants confirm the suite bites: ignoring wildcards fails 13 assertions, no dept
 - `d/40_rbac_fga_rls`: one table, RBAC and FGA policies (section 6).
 - `d/41_no_plan_time_eval`: the FGA list functions are STABLE, not run while planning, run once per query.
 
-## 10. Performance notes (not benchmarked yet)
+## 10. Performance notes (written before benchmarking; measured in [`bench/baselines/D.md`](../bench/baselines/D.md))
 
 What to watch in the benchmark:
 

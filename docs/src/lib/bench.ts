@@ -54,7 +54,7 @@ const fixture = import.meta.glob<Omit<Run, 'file'>>('/src/data/fixture/*.json', 
 export const usingFixture = Object.keys(real).length === 0;
 const source = usingFixture ? fixture : real;
 
-const DESIGNS = ['a', 'b', 'c'];
+const DESIGNS = ['a', 'b', 'c', 'd'];
 const SCALES = ['small', 'medium', 'large'];
 const SHAPES = ['default', 'deep', 'wide'];
 
@@ -299,7 +299,7 @@ export type ByEngine = Partial<Record<Design, number>>;
 /** p50 of one workload for each engine at one configuration. */
 export function p50s(s: Series, scale: string, shape: string, name: string): ByEngine {
 	const out: ByEngine = {};
-	for (const d of ['a', 'b', 'c'] as Design[]) {
+	for (const d of ['a', 'b', 'c', 'd'] as Design[]) {
 		const v = p50(s.get(d, scale, shape), name);
 		if (v != null) out[d] = v;
 	}

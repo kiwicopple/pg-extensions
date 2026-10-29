@@ -4,17 +4,17 @@ import Legend from '../viz/Legend.astro';
 import TabGroup from '../viz/TabGroup.astro';
 import HBars from '../viz/HBars.astro';
 import { primary, workloadNames, workload, workloadInfo, p50s, extremes, times, comparisonLink, BASELINES_URL } from '../../lib/bench';
-import { engine, fmt } from '../../lib/chart';
+import { engine, fmt, DESIGN_IDS } from '../../lib/chart';
 import type { Design } from '../../lib/chart';
 
 const s = primary;
 const configs = s?.configs ?? [];
 
 function rowsFor(scale: string, shape: string) {
-	const rs = (['a', 'b', 'c'] as Design[]).map((d) => s!.get(d, scale, shape)).filter((r) => !!r);
+	const rs = DESIGN_IDS.map((d) => s!.get(d, scale, shape)).filter((r) => !!r);
 	return workloadNames(rs as any).map((name) => ({
 		name,
-		bars: (['a', 'b', 'c'] as Design[])
+		bars: DESIGN_IDS
 			.map((d) => ({ d, w: workload(s!.get(d, scale, shape), name) }))
 			.filter((x) => x.w?.p50_ms != null)
 			.map((x) => ({
@@ -27,8 +27,9 @@ function rowsFor(scale: string, shape: string) {
 	}));
 }
 
-// Takeaway, from the first configuration that has all three engines.
-const ref = configs.find((c) => c.designs.length === 3) ?? configs[0];
+// Takeaway, from the first configuration that has the most engines.
+const most = Math.max(0, ...configs.map((c) => c.designs.length));
+const ref = configs.find((c) => c.designs.length === most) ?? configs[0];
 let takeaway = '';
 if (ref) {
 	const bits: string[] = [];
@@ -61,7 +62,7 @@ if (ref) {
 				{ href: BASELINES_URL, label: 'per-run reports' },
 			]}
 		>
-			<Legend slot="legend" designs={['a', 'b', 'c']} extra={[{ label: 'p95 whisker', kind: 'whisker' }]} />
+			<Legend slot="legend" designs={DESIGN_IDS.filter((d) => configs.some((c) => c.designs.includes(d)))} extra={[{ label: 'p95 whisker', kind: 'whisker' }]} />
 			<TabGroup tabs={configs.map((c) => ({ key: `${c.scale}-${c.shape}`, label: c.label }))} label="Scale and shape">
 				{configs.map((c) => (
 					<div data-tab={`${c.scale}-${c.shape}`}>

@@ -21,6 +21,11 @@ const info: Record<Design, { line: string; pick: string; link: string }> = {
 		pick: 'Read-heavy apps with wide or deep groups, where nesting a team is rare.',
 		link: './designs/c-compiled-model/',
 	},
+	d: {
+		line: 'First-class rbac_* tables plus OpenFGA-compatible fga_* tables, composed in RLS. Passes OpenFGA\'s own test suite.',
+		pick: 'Teams that want OpenFGA\'s model and API inside Postgres next to plain RBAC. Benchmarked, not yet optimized.',
+		link: './designs/d-per-model/',
+	},
 };
 const metrics = [
 	{ label: 'Sharing page, 1M docs', scale: 'large', shape: 'default', name: 'share_select_page' },
