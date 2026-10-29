@@ -169,6 +169,8 @@ The script [`openfga-cycle-but-not-repro.sh`](openfga-cycle-but-not-repro.sh) ru
 
 All queries ask about `user:jon` and `document:1` (ListObjects over type `document`, ListUsers with filter `user`).
 
+Every value in the table, and in the cycle-breaking variants below, is reproduced by the attached script at both `MINIMIZE_LATENCY` (the default) and `HIGHER_CONSISTENCY`.
+
 | Query | Original model | Control model |
 |---|---|---|
 | Check(`blocked`, `document:1`) | `false` | `false` |
@@ -185,9 +187,9 @@ Two inconsistencies follow:
 
 Further observations:
 
-- The results were identical with `consistency: HIGHER_CONSISTENCY`.
+- The results were identical with `consistency: HIGHER_CONSISTENCY` (`CONSISTENCY=HIGHER_CONSISTENCY ./openfga-cycle-but-not-repro.sh`).
 - The original-model results were identical in every run: more than 600 runs, each against a fresh container and a fresh store. They were also identical with the server's default settings, with `--experimentals enable-check-optimizations`, and with `--listObjects-pipeline-enabled=false`. We also tried `enable-list-objects-optimizations`, but the container did not start with that flag in our setup and we did not find out why, so that setting is untested.
-- 1,000 consecutive Check calls for `viewer` on `document:1` on the original model all returned `true`. We did not observe the answer flipping over time. That it could change over time is a hypothesis from the planner's probabilistic strategy selection (`internal/planner/plan.go`, see below), not something we saw.
+- 1,000 consecutive Check calls for `viewer` on `document:1` on the original model all returned `true` (a separate shell loop against one fresh container, not part of the script). We did not observe the answer flipping over time. That it could change over time is a hypothesis from the planner's probabilistic strategy selection (`internal/planner/plan.go`, see below), not something we saw.
 
 ### Cycle-breaking variants (original model)
 
@@ -202,7 +204,7 @@ Under least-fixed-point set semantics, the set `blocked(document:1)` = `blocked(
 
 The closest upstream test, `true_butnot_cycle_return_false` (`assets/tests/consolidated_1_1_tests.yaml`, around line 8133 at v1.22.1), uses `define restricted: [user, document#viewer]` and `define viewer: [user] but not restricted`, with `document:1#viewer` as a `restricted` userset on `document:1`. There the loop goes back through `viewer` itself (`viewer` -> subtract `restricted` -> `viewer`), which is recursion through negation. It therefore does not settle the shape in this report, where the loop is inside the subtracted relation only. We searched the YAML for a case where the subtracted relation is self-referencing (`define X: [..., T#X]` with `but not X`) and found none (a text match, not a parse of the models).
 
-OpenFGA's own blog post distinguishes pure recursion from circular dependencies through an exclusion: https://openfga.dev/blog/weighted-graph-upcoming-changes
+OpenFGA's blog post on upcoming weighted-graph changes (https://openfga.dev/blog/weighted-graph-upcoming-changes) treats a recursive relation that carries the exclusion itself (`define member: [user, group#member] but not blocked`) as a "circular dependency" that cannot be resolved deterministically. Its recommended pattern keeps the recursion a pure union and puts the exclusion on a separate non-recursive relation (`# Pure union recursion (allowed)`, `define allowed_member: member but not blocked  # Exclusion at leaf level only`). The model in this report has the second shape (`blocked` is recursive, `viewer` applies the exclusion and is not), so the post does not call it broken, but it does not say what the answer should be for it either. The post describes upcoming changes, not v1.22.1.
 
 ## Expected
 
