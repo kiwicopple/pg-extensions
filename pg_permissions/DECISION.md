@@ -122,3 +122,39 @@ Cross-engine observations from OPT worth keeping: Docker and local numbers diffe
 - **A user who sees most of 1M documents,** and a 1M-element array from `accessible()` (C §11). Sample users see about 20k at large.
 - **Large model changes.** C's full `memberships` rebuild at millions of rows (C §12.5); runtime `create_role` churn.
 - **B's InitPlan count at scale** (5-7 function calls per table; B, Performance).
+
+## Findings from writing the usage docs
+
+Writing a usage guide for each engine, with every example run as a spec (`test/spec/90_usage_rbac.sql`, `a/90`, `b/90`, `c/90`), turned up these. None of them is fixed in the prototypes; each one is documented on the relevant usage page.
+
+**The `rbac` preset isn't fully identical across engines** (PLAN §6 says it should be):
+- `current_subject_id()` returns `text` on A and B but `uuid` on C. On C, a non-UUID JWT `sub` (e.g. `user_2abc`) means no subject.
+- C raises `22P02` in `assign_role` for a non-UUID user or scope; A and B accept any text.
+- `scopes_with_permission` takes `(text, boolean)` on A and C but `(text, jsonb)` on B, because of the dummy argument. C also has `uuid` overloads of `has_permission` and `has_role`.
+- There's no common cleanup call: `delete_subject` (A), `delete_entity` (B), `forget_subject` (C).
+- Under `repeatable read`, B refuses `create_role` and `drop_role`; A and C allow them.
+
+**Security-relevant RLS footguns:**
+- **A:** the recommended two-arm projection policy ignores a forbid on an individual document, because the folder arm never visits the document. A document-level forbid needs the single-branch shape or a folder-level forbid. Whether C's two-arm policy behaves the same hasn't been checked.
+- **B:** a conditioned forbid isn't enforced by RLS until `apply_rls` is re-run, and `lint()` doesn't flag a new `via` type or column.
+- **B:** a row with a null parent column is hidden when the user has any denied parent (`not (null = any(...))` is null). Here `can()` says yes while RLS says no.
+- **B:** conditions are only partly validated on write. An unknown operator raises at evaluation time, and `rls_expression` then emits broken SQL.
+- **B:** the depth cap drops a path after a delete (open question 8), reproduced in `b/90`, which asserts the current behaviour.
+
+**API gaps and quirks:**
+- **A:**
+  - `grant` is an upsert, so leaving out `p_expires_at` clears the expiry.
+  - `grant` doesn't validate the subject type.
+  - `revoke` without the subject relation silently returns false.
+  - A typo in `from_parent` gives silent no-access.
+- **B:**
+  - No API to undefine a role, remove an implication or disable a policy.
+  - `apply_rls` can't handle non-uuid keys.
+  - `explain` can return duplicate rows.
+- **C:**
+  - `apply_model` loses some rows from its returned plan.
+  - Dry runs consume version numbers.
+  - `apply_model` skips the `repeatable read` check.
+  - No API to list raw grants or purge expired ones.
+
+These are prototype-level issues. Whichever engine is chosen, its list becomes the first hardening work.

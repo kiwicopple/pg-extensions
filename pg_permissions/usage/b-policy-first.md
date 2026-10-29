@@ -184,7 +184,7 @@ create policy documents_update on public.documents_hand for update to authentica
     using (permissions.can('update', 'document', id::text, jsonb_build_object('org', org_id)));
 ```
 
-Use the `id = any (array(select unnest(...)::uuid))` form exactly (the shared guide explains why). For text or bigint keys pass `id_type` to `rls_expression` ([API](#rls-tooling)).
+Use the `id = any (array(select unnest(...)::uuid))` form exactly (the shared guide explains why). For text or bigint keys pass `id_type` to `rls_expression` ([API](#rls-tooling-admin)).
 
 **5. The three questions.**
 

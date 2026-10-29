@@ -579,3 +579,17 @@ The rules: keep each engine's character, keep every test green, keep cross-engin
 - Plan-time fold: planning went from 12 ms and 3,564 buffers to 0.2 ms.
 - Collation: B's wide list went from 25 to 6.8 ms on that change alone.
 - Suites: A 199, B 189, C 229 assertions; all green on 16, 17 and 18.
+
+### 7. Usage docs, written as tests
+
+Copple asked for usage docs: how they'd actually use the extension under each engine, plus the API. Four light-implementers worked in parallel: a shared guide (install, identity, privileges, the `rbac` preset and RLS patterns) and one page per engine (mental model, quick start, how-tos, full API reference, performance notes and gotchas).
+
+- **Every example with a result is also an assertion:** `90_usage_rbac` (86 assertions, passes on all three engines), `a/90` (141), `b/90` (229) and `c/90` (196). Each agent also checked by script that every public function in `pg_proc` appears in its API reference (A 24, B 38, C 31).
+- **Writing docs as a newcomer found more than any review had.** The "identical" `rbac` preset isn't quite identical across engines:
+  - `current_subject_id()` is uuid on C, so a Clerk-style `user_2abc` subject is "no subject";
+  - cleanup functions differ;
+  - B refuses role changes under `repeatable read`.
+
+  There were also security-relevant RLS footguns: A's recommended two-arm policy ignores document-level forbids; B's null parent column hides rows; B's conditioned forbids aren't enforced until RLS is regenerated. All of these are now in DECISION.md as "first hardening work".
+- One broken anchor (`#rls-tooling` vs Starlight's `#rls-tooling-admin` slug) was caught by the link validator. The site now has 22 pages and 1,911 internal links, all resolving.
+- **Blog angle: "Write the docs to find the bugs."** Explaining the API to a newcomer, with every example executed, surfaced inconsistencies that 500+ assertions per engine hadn't.
