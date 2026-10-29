@@ -7,7 +7,7 @@ A flexible authorization extension for Postgres: one schema that supports multip
 
 ## Status
 
-The extension file, [`pg_permissions--0.0.1.sql`](./pg_permissions--0.0.1.sql), is intentionally empty. The engine hasn't been chosen. Three candidate engines are built as prototypes in [`prototypes/`](./prototypes/), pass the same test suite (A 14/14 spec files, B 15/15, C 17/17) and have been benchmarked on identical data. They all expose the same simple `rbac` preset. [`DECISION.md`](./DECISION.md) lays out the trade-offs so one can be picked.
+The extension file, [`pg_permissions--0.0.1.sql`](./pg_permissions--0.0.1.sql), is intentionally empty. The engine hasn't been chosen. Three candidate engines are built as prototypes in [`prototypes/`](./prototypes/), pass the same test suite (A 18/18 spec files, B 18/18, C 21/21) and have been benchmarked on identical data, before and after an optimization pass, on Postgres 16, 17 and 18 (Docker, with pg_tle). They all expose the same simple `rbac` preset. [`DECISION.md`](./DECISION.md) lays out the trade-offs so one can be picked. The current numbers are in [`bench/baselines/OPTIMIZATIONS.md`](./bench/baselines/OPTIMIZATIONS.md) (optimized engines, before and after) and [`bench/baselines/VERSIONS.md`](./bench/baselines/VERSIONS.md) (Postgres 16, 17 and 18).
 
 ## Where to look
 
@@ -16,7 +16,9 @@ The extension file, [`pg_permissions--0.0.1.sql`](./pg_permissions--0.0.1.sql), 
 | [`PLAN.md`](./PLAN.md) | Goals, requirements, the `rbac` preset API, evaluation criteria, and a summary comparison of the three designs |
 | [`GOALS.md`](./GOALS.md) | Each goal as an executable spec, with pass counts per prototype and the performance budgets |
 | [`DECISION.md`](./DECISION.md) | Decision guide: scorecard, when each engine wins, hybrids, open questions, what wasn't measured |
-| [`bench/baselines/COMPARISON.md`](./bench/baselines/COMPARISON.md) | The measured numbers for all three engines (the source of truth for DECISION.md) |
+| [`bench/baselines/OPTIMIZATIONS.md`](./bench/baselines/OPTIMIZATIONS.md) | The current numbers: all three engines after the session 3 optimizations, before and after, on PG 16-18 (the source of truth for DECISION.md) |
+| [`bench/baselines/VERSIONS.md`](./bench/baselines/VERSIONS.md) | The pre-optimization engines on PG 16, 17 and 18 in Docker, and the Docker versus local calibration |
+| [`bench/baselines/COMPARISON.md`](./bench/baselines/COMPARISON.md) | The pre-optimization comparison of the three engines (local PG 16.4, all scales and shapes) |
 | [`designs/`](./designs/) | One design doc per engine: [A tuple core](./designs/a-tuple-core.md), [B policy first](./designs/b-policy-first.md), [C compiled model](./designs/c-compiled-model.md) |
 | [`prototypes/`](./prototypes/) | The three working implementations, as single SQL files |
 | [`test/`](./test/) | The spec suite and runner; see [`test/README.md`](./test/README.md) |
