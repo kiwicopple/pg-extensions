@@ -1,6 +1,6 @@
 # Benchmark results as JSON
 
-One file per benchmark run, for charting (the docs site reads this directory). Written by [`../../report_to_json.sh`](../../report_to_json.sh) from a `bench/run.sh` markdown report; `bench/run.sh` calls it after every complete run (not `--only` runs). The `pg16-local-*` files are the 15 serial runs of 2026-10-28/29 in `bench/baselines/<design>-<scale>-<shape>.md`, backfilled. The `pg1[678]-docker-*` files are the Docker runs of 2026-10-29 (`bench/baselines/pg<NN>-docker-<design>-<scale>-<shape>.md`, analysed in [`../VERSIONS.md`](../VERSIONS.md)); their JSON was regenerated from the copied report to add `report`, keeping the run's `date` and `host`.
+One file per benchmark run, for charting (the docs site reads this directory). Written by [`../../report_to_json.sh`](../../report_to_json.sh) from a `bench/run.sh` markdown report; `bench/run.sh` calls it after every complete run (not `--only` runs). The `pg16-local-*` files are the 15 serial runs of 2026-10-28/29 in `bench/baselines/<design>-<scale>-<shape>.md`, backfilled. The `pg1[678]-docker-*` files are the Docker runs of 2026-10-29 (`bench/baselines/pg<NN>-docker-<design>-<scale>-<shape>.md`, analysed in [`../VERSIONS.md`](../VERSIONS.md)); their JSON was regenerated from the copied report to add `report`, keeping the run's `date` and `host`. The `*-opt` files are the same 27 configurations with the session 3 optimized engines (`tag: "opt"`); four of them are repeat runs that replaced disturbed originals (OPTIMIZATIONS.md, Repeatability).
 
 File name: `<run_id>.json`. A later run with the same settings replaces the file.
 
@@ -22,6 +22,7 @@ File name: `<run_id>.json`. A later run with the same settings replaces the file
 | Field | Meaning |
 | --- | --- |
 | `run_id` | `pg<major>-<environment>-<design>-<scale>-<shape>`, plus `-<tag>` if the run had `--tag` (e.g. `-smoke`; tagged runs aren't reference data) |
+| `tag` | Optional. Present only for tagged runs, equal to the run_id suffix (`opt`: the session 3 optimized engines, see [`../OPTIMIZATIONS.md`](../OPTIMIZATIONS.md)). Untagged and tagged runs of the same configuration are different series; don't treat a tagged run as a newer version of an untagged one |
 | `date` | When the run started measuring, UTC. Backfilled files use the report's minute-precision local time, converted to UTC |
 | `environment` | `local` (throwaway cluster from `test/lib/cluster.sh` on the host) or `docker` (`docker/compose.yaml`) |
 | `host` | Machine CPU, CPU count and memory; for `docker`, plus the container's CPU and memory limits |

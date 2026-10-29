@@ -12,7 +12,8 @@
 #   --environment local|docker   default: $BENCH_ENVIRONMENT, else local
 #   --host TEXT                  default: $BENCH_HOST, else the machine's CPU,
 #                                CPU count and memory (sysctl or /proc)
-#   --tag NAME                   appended to the run_id (e.g. smoke)
+#   --tag NAME                   appended to the run_id (e.g. smoke, opt) and
+#                                written as a "tag" field
 #   --date ISO-8601              default: the report's "Date:" line, read as
 #                                local time of this machine, converted to UTC
 #   --out DIR                    default: bench/baselines/data
@@ -104,7 +105,8 @@ for report in "${REPORTS[@]}"; do
         -v env="$(json_str "$ENVIRONMENT")" -v host="$(json_str "$HOST_DESC")" \
         -v pgv="$(json_str "$pg_version")" -v design="$(json_str "$design")" \
         -v scale="$(json_str "$scale")" -v shape="$(json_str "$shape")" \
-        -v clients="$clients" -v duration="$duration" -v checksums="$checksums" -v report="$report_field" '
+        -v clients="$clients" -v duration="$duration" -v checksums="$checksums" -v report="$report_field" \
+        -v tag="${TAG:+$(json_str "$TAG")}" '
         function num(v) { return (v ~ /^[0-9]+(\.[0-9]+)?$/) ? v + 0 : "null" }
         function cell(s) { gsub(/^ +| +$/, "", s); return s }
         /^\| workload \| p50 ms/ { tbl = "w"; next }
@@ -125,7 +127,9 @@ for report in "${REPORTS[@]}"; do
         }
         END {
             print "{"
-            printf "  \"run_id\": %s,\n  \"date\": %s,\n  \"environment\": %s,\n  \"host\": %s,\n", run_id, date, env, host
+            printf "  \"run_id\": %s,\n", run_id
+            if (tag != "") printf "  \"tag\": %s,\n", tag
+            printf "  \"date\": %s,\n  \"environment\": %s,\n  \"host\": %s,\n", date, env, host
             printf "  \"pg_version\": %s,\n  \"design\": %s,\n", pgv, design
             printf "  \"scale\": %s, \"shape\": %s, \"clients\": %d, \"duration_s\": %d,\n", scale, shape, clients, duration
             print "  \"workloads\": ["

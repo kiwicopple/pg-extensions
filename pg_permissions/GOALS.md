@@ -37,32 +37,34 @@ The extension (`pg_permissions--0.0.1.sql`) is still empty, so every goal is red
 
 p95 budgets per workload, enforced by `bench/run.sh --check`. Budgets live in [`bench/budgets.tsv`](./bench/budgets.tsv). Session-1 budgets (small and large `rbac_*`, `share_*`, `write_*`) were set at about 2–3× Design A's measured p95. The rest, added on 2026-10-29, are 3× the p95 of the fastest engine on that workload, rounded up to a whole ms. Stress-shape budgets (`medium-deep`, `medium-wide`) are only in `budgets.tsv`. Full results, seed times, storage and the analysis are in [`bench/baselines/COMPARISON.md`](./bench/baselines/COMPARISON.md).
 
-Large-scale p95 (ms) from the serial runs of 2026-10-28 (`bench/baselines/<design>-large-default.md`). ❌ = over the large budget.
+Large-scale p95 (ms) of the optimized engines (session 3), Postgres 18.6 in Docker, 2026-10-29 (`bench/baselines/pg18-docker-<design>-large-default-opt.md`; before/after, all versions and medium deep/wide in [`bench/baselines/OPTIMIZATIONS.md`](./bench/baselines/OPTIMIZATIONS.md)). ❌ = over the large budget. The pre-optimization numbers are in `bench/baselines/<design>-large-default.md` (local 16.4), `pg<NN>-docker-<design>-large-default.md` (Docker), [`COMPARISON.md`](./bench/baselines/COMPARISON.md) and [`VERSIONS.md`](./bench/baselines/VERSIONS.md).
 
 | Workload | What it measures | Small budget | Medium budget | Large budget | A, large p95 | B, large p95 | C, large p95 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `rbac_check` | One `has_permission` call | 1 ms | 1 ms | 1 ms | 0.35 | 0.48 | 0.34 |
-| `rbac_select_page` | First 50 documents through the RBAC policy | 2 ms | 2 ms | 3 ms | 0.77 | 0.99 | 0.80 |
-| `rbac_select_count` | Count all visible documents (20k at large) | 2 ms | 2 ms | 3 ms | 0.92 | 0.82 | 0.87 |
-| `rbac_update_one` | Update one document by id under RLS | 4 ms | 3 ms | 3 ms | 1.06 | 0.86 | 0.80 |
-| `write_assign_role` | `assign_role` as admin (rolled back) | 1 ms | 1 ms | 1 ms | 0.28 | 0.24 | 0.34 |
-| `share_list_objects` | All documents shared with a user via nested teams | 2 ms | 1 ms | 2 ms | 0.84 | 0.38 | 0.35 |
-| `share_select_page` | First 50 documents through the two-branch policy (org roles or shares) | 5 ms | 3 ms | 6 ms | 2.28 | 1.41 | 1.22 |
-| `write_share` | Share a document with a user (rolled back) | 1 ms | 1 ms | 1 ms | 0.25 | 0.25 | 0.28 |
-| `parents_proj_select_page` | First 50 documents, parents via the `folder_id` column: shared ids or viewable folders | 2 ms | 3 ms | 4 ms | 3.71 | 1.66 | 1.29 |
-| `parents_proj_select_count` | Count through the same two-arm projection policy | 2 ms | 3 ms | 9 ms | 5.58 | 3.39 | 2.90 |
-| `parents_select_page` | First 50 documents through the single-branch parents policy (one call returns every visible id) | 4 ms | 16 ms | 32 ms | 560.66 ❌ | 251.96 ❌ | 10.34 |
-| `parents_select_count` | Count through the single-branch parents policy | 4 ms | 14 ms | 70 ms | 579.85 ❌ | 266.63 ❌ | 23.25 |
-| `write_nest_team` | Nest a 1,000-member team into a random team (rolled back) | 1 ms | 1 ms | 1 ms | 0.24 | 325.98 ❌ | 384.19 ❌ |
-| `nest_check` | One check for a user who reaches a document only through a nested team | 1 ms | 1 ms | 2 ms | 0.79 | 2.83 ❌ | 0.34 |
+| `rbac_check` | One `has_permission` call | 1 ms | 1 ms | 1 ms | 0.56 | 0.41 | 0.33 |
+| `rbac_select_page` | First 50 documents through the RBAC policy | 2 ms | 2 ms | 3 ms | 1.44 | 1.1 | 0.91 |
+| `rbac_select_count` | Count all visible documents (20k at large) | 2 ms | 2 ms | 3 ms | 1.07 | 0.99 | 0.93 |
+| `rbac_update_one` | Update one document by id under RLS | 4 ms | 3 ms | 3 ms | 0.65 | 0.68 | 0.5 |
+| `write_assign_role` | `assign_role` as admin (rolled back) | 1 ms | 1 ms | 1 ms | 0.23 | 0.22 | 0.24 |
+| `share_list_objects` | All documents shared with a user via nested teams | 2 ms | 1 ms | 2 ms | 0.38 | 0.43 | 0.36 |
+| `share_select_page` | First 50 documents through the two-branch policy (org roles or shares) | 5 ms | 3 ms | 6 ms | 1.35 | 1.29 | 1.27 |
+| `write_share` | Share a document with a user (rolled back) | 1 ms | 1 ms | 1 ms | 0.23 | 0.21 | 0.25 |
+| `parents_proj_select_page` | First 50 documents, parents via the `folder_id` column: shared ids or viewable folders | 2 ms | 3 ms | 4 ms | 2.62 | 1.55 | 1.57 |
+| `parents_proj_select_count` | Count through the same two-arm projection policy | 2 ms | 3 ms | 9 ms | 14.66 ❌ | 12.36 ❌ | 9.97 ❌ |
+| `parents_select_page` | First 50 documents through the single-branch parents policy (one call returns every visible id) | 4 ms | 16 ms | 32 ms | 66.27 ❌ | 16.82 | 6.55 |
+| `parents_select_count` | Count through the single-branch parents policy | 4 ms | 14 ms | 70 ms | 92.44 ❌ | 27.61 | 15.53 |
+| `write_nest_team` | Nest a 1,000-member team into a random team (rolled back) | 1 ms | 1 ms | 1 ms | 0.27 | 0.78 | 77.18 ❌ |
+| `nest_check` | One check for a user who reaches a document only through a nested team | 1 ms | 1 ms | 2 ms | 0.48 | 0.42 | 0.45 |
 
-`bench/run.sh --check` at small scale (2026-10-29): A fails 4 (`parents_proj_select_page`, `parents_proj_select_count`, `parents_select_page`, `parents_select_count`), B fails 4 (`parents_select_page`, `parents_select_count`, `write_nest_team`, `nest_check`), C fails 1 (`write_nest_team`). Every engine passes every session-1 budget.
+Optimized, PG 18.6 Docker: at large A fails 3 (`parents_proj_select_count`, both single-branch `parents_*`), B fails 1 (`parents_proj_select_count`), C fails 2 (`parents_proj_select_count`, `write_nest_team`). At medium deep only C fails (`write_nest_team`). At medium wide, A passes everything, B fails `share_list_objects` and `write_nest_team`, and C fails `write_nest_team`. `parents_proj_select_count` at large fails for every engine at about 8 ms p50 because current minor releases read every heap page for that bitmap count, while 16.4 (where the budget was set) skipped them (VERSIONS.md, Calibration). Results on 16 and 17 are the same except for borderline B values (OPTIMIZATIONS.md, Budgets).
 
-On Postgres 16.15, 17.11 and 18.6 in Docker (2026-10-29, [`bench/baselines/VERSIONS.md`](./bench/baselines/VERSIONS.md)), the large-scale budget results are the same as the table above, with two exceptions. First, `parents_proj_select_count` (9 ms) is over or within 10% of the budget for every engine on every version: A 10.3-12.1 ms p95; B 9.97, 9.15 and 8.46 on 16, 17 and 18; C 9.50, 8.94 and 8.50. The cause is that current minor releases read every heap page for that bitmap count, while 16.4 skipped them (VERSIONS.md, Calibration). Second, B's `nest_check` passes (1.4-1.7 ms). Between versions, the only budget that flips is that borderline `parents_proj_select_count`.
+Before the optimizations, `bench/run.sh --check` at small scale (2026-10-29, not rerun since): A fails 4 (`parents_proj_select_page`, `parents_proj_select_count`, `parents_select_page`, `parents_select_count`), B fails 4 (`parents_select_page`, `parents_select_count`, `write_nest_team`, `nest_check`), C fails 1 (`write_nest_team`). Every engine passes every session-1 budget.
+
+Pre-optimization, on Postgres 16.15, 17.11 and 18.6 in Docker ([`bench/baselines/VERSIONS.md`](./bench/baselines/VERSIONS.md)): the large budget results matched local 16.4, except that `parents_proj_select_count` was over or within 10% of its budget for every engine, and B passed `nest_check`.
 
 The `share_*`, `parents*`, `write_share`, `write_nest_team` and `nest_check` workloads are per-design (`bench/designs/<design>/`, native API) over identical data (`bench/seed_shape.sql`); the budgets are shared. All three engines return identical visible-document checksums for every read policy at every scale and shape measured.
 
-Large scale is 1M documents, 10k users, 100 orgs and 500 teams nested about 5 levels deep; medium is 100k documents, 5k users, 50 orgs, 200 teams. Measured on Postgres 16 on an Apple Silicon laptop with 4 pgbench clients, one run per configuration; Postgres 16, 17 and 18 in Docker on the same laptop in [`bench/baselines/VERSIONS.md`](./bench/baselines/VERSIONS.md). Writes roll back and run on a throwaway cluster with `fsync` off, so they're optimistic.
+Large scale is 1M documents, 10k users, 100 orgs and 500 teams nested about 5 levels deep; medium is 100k documents, 5k users, 50 orgs, 200 teams. The table above is Postgres 18.6 in Docker (`cpus: 4`) on an Apple Silicon laptop with 4 pgbench clients, one run per configuration. The pre-optimization reference runs are local Postgres 16.4 ([`COMPARISON.md`](./bench/baselines/COMPARISON.md)) and Docker 16-18 ([`VERSIONS.md`](./bench/baselines/VERSIONS.md)). Writes roll back and run on a throwaway cluster with `fsync` off, so they're optimistic.
 
 ## Not yet covered by tests
 
