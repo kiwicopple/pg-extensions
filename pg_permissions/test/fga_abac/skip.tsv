@@ -1,0 +1,19 @@
+# OpenFGA ABAC suite cases not run, with the reason. Tab-separated:
+# case	mode (both|stored|contextual)	reason	note
+# Never edit an expectation to make a case pass; list it here with the reason.
+#
+# inline-expression: the case uses the $expression inline condition, an
+#   experimental OpenFGA feature behind the inline_expressions flag (off by
+#   default; pkg/server/config/config.go:124). Upstream's harness turns it on
+#   (tests/check/check_test.go:99); OpenFGA v1.22.1 with default flags rejects
+#   these models with 2000 (test/fga_lang/cases.json). Not in phase 4 scope:
+#   designs/d-conditions.md, open question 1.
+inline_expression_exclusion_subtract_missing_param	both	inline-expression	
+inline_expression_basic	both	inline-expression	
+inline_expression_inferred_string_param	both	inline-expression	
+inline_expression_alongside_named_condition	both	inline-expression	
+inline_expression_int_param	both	inline-expression	
+inline_expression_timestamp_param	both	inline-expression	
+inline_expression_ipaddress_param	both	inline-expression	
+inline_expression_userset_subject	both	inline-expression	
+inline_expression_ttu	both	inline-expression	
