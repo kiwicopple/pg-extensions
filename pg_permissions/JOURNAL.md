@@ -851,3 +851,14 @@ Orchestrator choices: fixed constant caps (OpenFGA makes them configurable; here
 ### Numbers worth quoting (session 5)
 - Phase 1: 37/2,164 before and after the move, on three PG versions.
 - Phase 2: 59 raise sites, 63 error assertions, 49 limit assertions; suite 39 files, 2,276 assertions; OpenFGA 933/746 unchanged.
+
+### 4. Phase 3: a second oracle for model validation, usage docs for D (commit 8b56eed)
+
+- **The pin:** openfga/language `f558baa` (`pkg/go/v0.3.2`), the version both openfga v1.22.1 and openfga/cli v0.8.2 require. Of its 93 semantic validation cases, 66 run and 66 pass (33 passed before the new checks). 27 are skipped, each with a reason: 14 the server accepts, 8 conditions (phase 4), 2 modular models (schema 1.2), and 3 the language repo expects to pass but the server rejects.
+- **The decisive move was asking the real server.** The vendor script writes every case's model to a pinned `openfga/openfga:v1.22.1` container and records its answer. The language validator turned out stricter than the server (14 duplicate-restriction cases the server accepts with 201). The language repo's own skipped cases contradict each other ("cycle 3–6 should fail" against "union does not require all children to have entry"). The server settles it: `x: [user] or y` with `y: [user] or x` is rejected as a cycle even though both relations have entrypoints. And the CLI transformer validates nothing (schema "0.9", duplicate types and modular models all convert).
+- **D had been returning the wrong codes for model writes:** 2005 and 2057, which OpenFGA's WriteAuthorizationModel never returns (`write_authzmodel.go:84-86` maps every validation error to 2056). Our own specs were corrected to match the server.
+- **New checks:** entrypoints (least fixpoint), no cycles of computed relations through any operator, reserved type names `self` and `this` (D had accepted them; the oracle caught it), name patterns 2047 and 2050. Mutants: each disabled check fails 1 to 11 oracle assertions. No model in the consolidated suite was newly rejected (still 933/746).
+- **Usage docs for D:** `usage/fga.md` (54 spec assertions) and `usage/rls.md` (32), README rewritten, A/B/C pages labelled history. Every example is a spec.
+- **Old findings closed:** 22 bullets, 13 not applicable to D, 6 fixed (each cites a spec), 3 carried: the nullable-column restrictive policy, changing a role's permissions without `drop_role`, and RLS-only row attributes.
+- **Wrong turn:** the first manual server probe used a one-character store name (it needs 3 to 64), and the resulting validation error hid every model answer.
+- **Numbers:** 43 spec files, 2,463 assertions on PG 16, 17 and 18.
