@@ -25,13 +25,13 @@ select permissions.fga_write('[{"user":"document:1#viewer","relation":"editor","
 select tap.is(fga_test.check('user:jon', 'viewer', 'document:1', null, false, null, :'model_id'), 'ok', 'stored:immediate_cycle_through_computed_userset:s0:check0');
 select tap.is(fga_test.list_objects('user:jon', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:immediate_cycle_through_computed_userset:s0:lo0');
 
--- immediate_cycle_through_computed_userset
+-- immediate_cycle_through_computed_userset~2
 select permissions.fga_delete_store();
 -- stage 0
 select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"editor":{"directly_related_user_types":[{"type":"user"},{"relation":"viewer","type":"document"}]},"viewer":{}}},"relations":{"editor":{"this":{}},"viewer":{"computedUserset":{"relation":"editor"}}},"type":"document"}]}'::jsonb) as model_id \gset
 select permissions.fga_write('[{"user":"document:1#viewer","relation":"editor","object":"document:1"}]'::jsonb);
-select tap.is(fga_test.check('user:jon', 'viewer', 'document:1', null, false, null, :'model_id'), 'ok', 'stored:immediate_cycle_through_computed_userset:s0:check0');
-select tap.is(fga_test.list_objects('user:jon', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:immediate_cycle_through_computed_userset:s0:lo0');
+select tap.is(fga_test.check('user:jon', 'viewer', 'document:1', null, false, null, :'model_id'), 'ok', 'stored:immediate_cycle_through_computed_userset~2:s0:check0');
+select tap.is(fga_test.list_objects('user:jon', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:immediate_cycle_through_computed_userset~2:s0:lo0');
 
 -- immediate_cycle_return_false
 select permissions.fga_delete_store();

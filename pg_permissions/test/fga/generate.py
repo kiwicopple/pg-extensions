@@ -37,8 +37,14 @@ FILE_PREFIX = {'stored': '60_fga_oracle', 'contextual': '61_fga_oracle_ctx'}
 
 
 def load_cases():
+    """Upstream repeats one case name; the second one is tested as <name>~2."""
     with open(os.path.join(HERE, 'cases.json')) as f:
-        return [json.loads(line) for line in f if line.strip()]
+        cases = [json.loads(line) for line in f if line.strip()]
+    seen = Counter()
+    for c in cases:
+        seen[c['name']] += 1
+        c['id'] = c['name'] if seen[c['name']] == 1 else f"{c['name']}~{seen[c['name']]}"
+    return cases
 
 
 def load_skips():
@@ -111,7 +117,7 @@ def case_sql(case, mode):
     by_stage = defaultdict(list)
     for s, kind, i, expr in asserts:
         by_stage[s].append((kind, i, expr))
-    out.append(f"\n-- {case['name']}")
+    out.append(f"\n-- {case['id']}")
     out.append('select permissions.fga_delete_store();')
     for s, stage in enumerate(case['stages']):
         out.append(f"-- stage {s}")
@@ -120,7 +126,7 @@ def case_sql(case, mode):
         if tuples and mode == 'stored':
             out.append('select permissions.fga_write(%s);' % jlit(tuples))
         for kind, i, expr in by_stage.get(s, []):
-            name = f"{mode}:{case['name']}:s{s}:{kind}{i}"
+            name = f"{mode}:{case['id']}:s{s}:{kind}{i}"
             out.append(f"select tap.is({expr}, 'ok', {lit(name)});")
             n += 1
     return out, n
@@ -153,7 +159,7 @@ def generate():
                     reason, note = skips[case['name']][mode]
                     by_reason[reason] += 1
                     by_reason_assertions[reason] += na
-                    skipped_lines.append(f"\\echo '# SKIP {case['name']}: {reason}'")
+                    skipped_lines.append(f"\\echo '# SKIP {case['id']}: {reason}'")
                     continue
                 lines, n = case_sql(case, mode)
                 body += lines
@@ -202,7 +208,7 @@ def report(path):
                 res[m.group(2)].setdefault(m.group(3), []).append(m.group(1) == 'ok')
     for mode in MODES:
         eligible = [c for c in cases if mode == 'stored' or contextual_eligible(c)]
-        expected = {c['name']: len(list(assertions(c, mode))) for c in eligible
+        expected = {c['id']: len(list(assertions(c, mode))) for c in eligible
                     if mode not in skips.get(c['name'], {})}
         got = res[mode]
         a_pass = sum(sum(v) for v in got.values())
