@@ -2,12 +2,30 @@
 -- OpenFGA consolidated_1_1_tests.yaml, Apache-2.0: see test/fga/upstream/SOURCE.
 \set ON_ERROR_STOP off
 \ir ../../fixtures/fga_suite.sql
-\echo '# SKIP exclusion_under_wildcard_in_intersection_only_wildcard: stage2'
-\echo '# SKIP exclusion_under_wildcard_in_three_operand_intersection: stage2'
-\echo '# SKIP relation_with_userset_involving_exclusion: stage2'
-\echo '# SKIP list_objects_with_subcheck_encounters_cycle: stage2'
-\echo '# SKIP direct_relationships_with_intersection: stage2'
-select tap.plan(17);
+select tap.plan(30);
+
+-- exclusion_under_wildcard_in_intersection_only_wildcard
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"active":{"directly_related_user_types":[{"type":"user","wildcard":{}},{"type":"user"}]},"banned":{"directly_related_user_types":[{"type":"user"}]},"org_member":{"directly_related_user_types":[{"type":"user","wildcard":{}},{"type":"user"}]},"viewer":{}}},"relations":{"active":{"this":{}},"banned":{"this":{}},"org_member":{"this":{}},"viewer":{"intersection":{"child":[{"difference":{"base":{"computedUserset":{"relation":"org_member"}},"subtract":{"computedUserset":{"relation":"banned"}}}},{"computedUserset":{"relation":"active"}}]}}},"type":"document"}]}'::jsonb) as model_id \gset
+select tap.is(fga_test.check('user:eve', 'viewer', 'document:1', '[{"user":"user:*","relation":"org_member","object":"document:1"},{"user":"user:eve","relation":"banned","object":"document:1"},{"user":"user:*","relation":"active","object":"document:1"}]'::jsonb, false, null, :'model_id'), 'ok', 'contextual:exclusion_under_wildcard_in_intersection_only_wildcard:s0:check0');
+select tap.is(fga_test.check('user:alice', 'viewer', 'document:1', '[{"user":"user:*","relation":"org_member","object":"document:1"},{"user":"user:eve","relation":"banned","object":"document:1"},{"user":"user:*","relation":"active","object":"document:1"}]'::jsonb, true, null, :'model_id'), 'ok', 'contextual:exclusion_under_wildcard_in_intersection_only_wildcard:s0:check1');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['user']::text[], '[{"user":"user:*","relation":"org_member","object":"document:1"},{"user":"user:eve","relation":"banned","object":"document:1"},{"user":"user:*","relation":"active","object":"document:1"}]'::jsonb, array['user:*']::text[], null, :'model_id'), 'ok', 'contextual:exclusion_under_wildcard_in_intersection_only_wildcard:s0:lu0');
+
+-- exclusion_under_wildcard_in_three_operand_intersection
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"active":{"directly_related_user_types":[{"type":"user"}]},"banned":{"directly_related_user_types":[{"type":"user"}]},"org_member":{"directly_related_user_types":[{"type":"user","wildcard":{}},{"type":"user"}]},"verified":{"directly_related_user_types":[{"type":"user"}]},"viewer":{}}},"relations":{"active":{"this":{}},"banned":{"this":{}},"org_member":{"this":{}},"verified":{"this":{}},"viewer":{"intersection":{"child":[{"difference":{"base":{"computedUserset":{"relation":"org_member"}},"subtract":{"computedUserset":{"relation":"banned"}}}},{"computedUserset":{"relation":"active"}},{"computedUserset":{"relation":"verified"}}]}}},"type":"document"}]}'::jsonb) as model_id \gset
+select tap.is(fga_test.check('user:alice', 'viewer', 'document:1', '[{"user":"user:*","relation":"org_member","object":"document:1"},{"user":"user:eve","relation":"banned","object":"document:1"},{"user":"user:alice","relation":"active","object":"document:1"},{"user":"user:eve","relation":"active","object":"document:1"},{"user":"user:alice","relation":"verified","object":"document:1"},{"user":"user:eve","relation":"verified","object":"document:1"}]'::jsonb, true, null, :'model_id'), 'ok', 'contextual:exclusion_under_wildcard_in_three_operand_intersection:s0:check0');
+select tap.is(fga_test.check('user:eve', 'viewer', 'document:1', '[{"user":"user:*","relation":"org_member","object":"document:1"},{"user":"user:eve","relation":"banned","object":"document:1"},{"user":"user:alice","relation":"active","object":"document:1"},{"user":"user:eve","relation":"active","object":"document:1"},{"user":"user:alice","relation":"verified","object":"document:1"},{"user":"user:eve","relation":"verified","object":"document:1"}]'::jsonb, false, null, :'model_id'), 'ok', 'contextual:exclusion_under_wildcard_in_three_operand_intersection:s0:check1');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['user']::text[], '[{"user":"user:*","relation":"org_member","object":"document:1"},{"user":"user:eve","relation":"banned","object":"document:1"},{"user":"user:alice","relation":"active","object":"document:1"},{"user":"user:eve","relation":"active","object":"document:1"},{"user":"user:alice","relation":"verified","object":"document:1"},{"user":"user:eve","relation":"verified","object":"document:1"}]'::jsonb, array['user:alice']::text[], null, :'model_id'), 'ok', 'contextual:exclusion_under_wildcard_in_three_operand_intersection:s0:lu0');
+
+-- relation_with_userset_involving_exclusion
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"member":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"member":{"this":{}}},"type":"group"},{"metadata":{"relations":{"can_view":{},"restricted":{"directly_related_user_types":[{"type":"user"}]},"viewer":{"directly_related_user_types":[{"relation":"member","type":"group"}]}}},"relations":{"can_view":{"computedUserset":{"relation":"viewer"}},"restricted":{"this":{}},"viewer":{"difference":{"base":{"this":{}},"subtract":{"computedUserset":{"relation":"restricted"}}}}},"type":"document"}]}'::jsonb) as model_id \gset
+select tap.is(fga_test.list_users('document:1', 'can_view', array['user']::text[], '[{"user":"user:maria","relation":"member","object":"group:fga"},{"user":"user:will","relation":"member","object":"group:fga"},{"user":"group:fga#member","relation":"viewer","object":"document:1"},{"user":"user:will","relation":"restricted","object":"document:1"}]'::jsonb, array['user:maria']::text[], null, :'model_id'), 'ok', 'contextual:relation_with_userset_involving_exclusion:s0:lu0');
+select tap.is(fga_test.list_users('document:1', 'can_view', array['group#member']::text[], '[{"user":"user:maria","relation":"member","object":"group:fga"},{"user":"user:will","relation":"member","object":"group:fga"},{"user":"group:fga#member","relation":"viewer","object":"document:1"},{"user":"user:will","relation":"restricted","object":"document:1"}]'::jsonb, array['group:fga#member']::text[], null, :'model_id'), 'ok', 'contextual:relation_with_userset_involving_exclusion:s0:lu1');
 
 -- resolution_too_complex_throws_error
 select permissions.fga_delete_store();
@@ -33,6 +51,21 @@ select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_
 select tap.is(fga_test.list_objects('user:alex', 'repo', 'admin', '[{"user":"user:alex","relation":"member","object":"organization:openfga"},{"user":"user:alex","relation":"member","object":"organization:acme"},{"user":"organization:openfga","relation":"owner","object":"repo:openfga/openfga"},{"user":"organization:acme","relation":"owner","object":"repo:acme/acme"}]'::jsonb, array[]::text[], null, :'model_id'), 'ok', 'contextual:follows_correct_graph_edges:s0:lo0');
 select tap.is(fga_test.list_users('repo:openfga/openfga', 'admin', array['user']::text[], '[{"user":"user:alex","relation":"member","object":"organization:openfga"},{"user":"user:alex","relation":"member","object":"organization:acme"},{"user":"organization:openfga","relation":"owner","object":"repo:openfga/openfga"},{"user":"organization:acme","relation":"owner","object":"repo:acme/acme"}]'::jsonb, array[]::text[], null, :'model_id'), 'ok', 'contextual:follows_correct_graph_edges:s0:lu0');
 select tap.is(fga_test.list_users('repo:acme/acme', 'admin', array['user']::text[], '[{"user":"user:alex","relation":"member","object":"organization:openfga"},{"user":"user:alex","relation":"member","object":"organization:acme"},{"user":"organization:openfga","relation":"owner","object":"repo:openfga/openfga"},{"user":"organization:acme","relation":"owner","object":"repo:acme/acme"}]'::jsonb, array[]::text[], null, :'model_id'), 'ok', 'contextual:follows_correct_graph_edges:s0:lu1');
+
+-- list_objects_with_subcheck_encounters_cycle
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"allowed":{"directly_related_user_types":[{"type":"user"},{"relation":"viewer","type":"document"}]},"viewer":{"directly_related_user_types":[{"type":"user"},{"relation":"allowed","type":"document"}]}}},"relations":{"allowed":{"this":{}},"viewer":{"intersection":{"child":[{"this":{}},{"computedUserset":{"relation":"allowed"}}]}}},"type":"document"}]}'::jsonb) as model_id \gset
+select tap.is(fga_test.check('user:jon', 'viewer', 'document:1', '[{"user":"user:jon","relation":"viewer","object":"document:1"},{"user":"document:1#viewer","relation":"allowed","object":"document:1"},{"user":"document:1#allowed","relation":"viewer","object":"document:1"}]'::jsonb, false, null, :'model_id'), 'ok', 'contextual:list_objects_with_subcheck_encounters_cycle:s0:check0');
+select tap.is(fga_test.list_objects('user:jon', 'document', 'viewer', '[{"user":"user:jon","relation":"viewer","object":"document:1"},{"user":"document:1#viewer","relation":"allowed","object":"document:1"},{"user":"document:1#allowed","relation":"viewer","object":"document:1"}]'::jsonb, array[]::text[], null, :'model_id'), 'ok', 'contextual:list_objects_with_subcheck_encounters_cycle:s0:lo0');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['user']::text[], '[{"user":"user:jon","relation":"viewer","object":"document:1"},{"user":"document:1#viewer","relation":"allowed","object":"document:1"},{"user":"document:1#allowed","relation":"viewer","object":"document:1"}]'::jsonb, array[]::text[], null, :'model_id'), 'ok', 'contextual:list_objects_with_subcheck_encounters_cycle:s0:lu0');
+
+-- direct_relationships_with_intersection
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"allowed":{"directly_related_user_types":[{"type":"user"}]},"viewer":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"allowed":{"this":{}},"viewer":{"intersection":{"child":[{"this":{}},{"computedUserset":{"relation":"allowed"}}]}}},"type":"document"}]}'::jsonb) as model_id \gset
+select tap.is(fga_test.list_objects('user:jon', 'document', 'viewer', '[{"user":"user:jon","relation":"viewer","object":"document:1"},{"user":"user:jon","relation":"allowed","object":"document:1"}]'::jsonb, array['document:1']::text[], null, :'model_id'), 'ok', 'contextual:direct_relationships_with_intersection:s0:lo0');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['user']::text[], '[{"user":"user:jon","relation":"viewer","object":"document:1"},{"user":"user:jon","relation":"allowed","object":"document:1"}]'::jsonb, array['user:jon']::text[], null, :'model_id'), 'ok', 'contextual:direct_relationships_with_intersection:s0:lu0');
 
 -- nested_usersets_are_recursively_expanded
 select permissions.fga_delete_store();

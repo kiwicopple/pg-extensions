@@ -2,11 +2,7 @@
 -- OpenFGA consolidated_1_1_tests.yaml, Apache-2.0: see test/fga/upstream/SOURCE.
 \set ON_ERROR_STOP off
 \ir ../../fixtures/fga_suite.sql
-\echo '# SKIP this_and_intersection: stage2'
-\echo '# SKIP this_and_exclusion_base: stage2'
-\echo '# SKIP computed_userset_and_intersection: stage2'
-\echo '# SKIP computed_userset_and_exclusion: stage2'
-select tap.plan(46);
+select tap.plan(76);
 
 -- this
 select permissions.fga_delete_store();
@@ -59,6 +55,33 @@ select tap.is(fga_test.list_objects('user:badger', 'document', 'viewer', null, a
 select tap.is(fga_test.list_users('document:1', 'viewer', array['user']::text[], null, array['user:aardvark']::text[], null, :'model_id'), 'ok', 'stored:this_and_union:s0:lu0');
 select tap.is(fga_test.list_users('document:2', 'viewer', array['user']::text[], null, array['user:badger']::text[], null, :'model_id'), 'ok', 'stored:this_and_union:s0:lu1');
 
+-- this_and_intersection
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"viewer":{"directly_related_user_types":[{"type":"user"}]},"writer":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"viewer":{"intersection":{"child":[{"this":{}},{"computedUserset":{"relation":"writer"}}]}},"writer":{"this":{}}},"type":"document"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"object":"document:1","relation":"viewer","user":"user:aardvark"},{"object":"document:1","relation":"writer","user":"user:aardvark"},{"object":"document:2","relation":"viewer","user":"user:badger"},{"object":"document:3","relation":"writer","user":"user:cheetah"}]'::jsonb);
+select tap.is(fga_test.check('user:aardvark', 'viewer', 'document:1', null, true, null, :'model_id'), 'ok', 'stored:this_and_intersection:s0:check0');
+select tap.is(fga_test.check('user:badger', 'viewer', 'document:2', null, false, null, :'model_id'), 'ok', 'stored:this_and_intersection:s0:check1');
+select tap.is(fga_test.check('user:cheetah', 'viewer', 'document:2', null, false, null, :'model_id'), 'ok', 'stored:this_and_intersection:s0:check2');
+select tap.is(fga_test.list_objects('user:aardvark', 'document', 'viewer', null, array['document:1']::text[], null, :'model_id'), 'ok', 'stored:this_and_intersection:s0:lo0');
+select tap.is(fga_test.list_objects('user:badger', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:this_and_intersection:s0:lo1');
+select tap.is(fga_test.list_objects('user:cheetah', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:this_and_intersection:s0:lo2');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['user']::text[], null, array['user:aardvark']::text[], null, :'model_id'), 'ok', 'stored:this_and_intersection:s0:lu0');
+
+-- this_and_exclusion_base
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"viewer":{"directly_related_user_types":[{"type":"user"}]},"writer":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"viewer":{"difference":{"base":{"this":{}},"subtract":{"computedUserset":{"relation":"writer"}}}},"writer":{"this":{}}},"type":"document"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"object":"document:1","relation":"viewer","user":"user:aardvark"},{"object":"document:1","relation":"writer","user":"user:aardvark"},{"object":"document:2","relation":"viewer","user":"user:badger"},{"object":"document:3","relation":"writer","user":"user:cheetah"}]'::jsonb);
+select tap.is(fga_test.check('user:aardvark', 'viewer', 'document:1', null, false, null, :'model_id'), 'ok', 'stored:this_and_exclusion_base:s0:check0');
+select tap.is(fga_test.check('user:badger', 'viewer', 'document:2', null, true, null, :'model_id'), 'ok', 'stored:this_and_exclusion_base:s0:check1');
+select tap.is(fga_test.check('user:cheetah', 'viewer', 'document:2', null, false, null, :'model_id'), 'ok', 'stored:this_and_exclusion_base:s0:check2');
+select tap.is(fga_test.list_objects('user:aardvark', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:this_and_exclusion_base:s0:lo0');
+select tap.is(fga_test.list_objects('user:badger', 'document', 'viewer', null, array['document:2']::text[], null, :'model_id'), 'ok', 'stored:this_and_exclusion_base:s0:lo1');
+select tap.is(fga_test.list_objects('user:cheetah', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:this_and_exclusion_base:s0:lo2');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['user']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:this_and_exclusion_base:s0:lu0');
+select tap.is(fga_test.list_users('document:2', 'viewer', array['user']::text[], null, array['user:badger']::text[], null, :'model_id'), 'ok', 'stored:this_and_exclusion_base:s0:lu1');
+
 -- computed_userset_and_computed_userset
 select permissions.fga_delete_store();
 -- stage 0
@@ -91,6 +114,33 @@ select tap.is(fga_test.list_objects('user:anne', 'folder', 'can_view', null, arr
 select tap.is(fga_test.list_users('folder:a', 'can_view', array['user']::text[], null, array['user:anne']::text[], null, :'model_id'), 'ok', 'stored:simple_computeduserset_indirect_ref:s0:lu0');
 select tap.is(fga_test.list_users('folder:b', 'can_view', array['user']::text[], null, array['user:anne']::text[], null, :'model_id'), 'ok', 'stored:simple_computeduserset_indirect_ref:s0:lu1');
 select tap.is(fga_test.list_users('folder:a', 'can_view', array['folder']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:simple_computeduserset_indirect_ref:s0:lu2');
+
+-- computed_userset_and_intersection
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"editor":{"directly_related_user_types":[{"type":"user"}]},"viewer":{},"writer":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"editor":{"this":{}},"viewer":{"intersection":{"child":[{"computedUserset":{"relation":"writer"}},{"computedUserset":{"relation":"editor"}}]}},"writer":{"this":{}}},"type":"document"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"object":"document:1","relation":"writer","user":"user:aardvark"},{"object":"document:1","relation":"editor","user":"user:aardvark"},{"object":"document:2","relation":"writer","user":"user:badger"},{"object":"document:3","relation":"editor","user":"user:cheetah"}]'::jsonb);
+select tap.is(fga_test.check('user:aardvark', 'viewer', 'document:1', null, true, null, :'model_id'), 'ok', 'stored:computed_userset_and_intersection:s0:check0');
+select tap.is(fga_test.check('user:badger', 'viewer', 'document:2', null, false, null, :'model_id'), 'ok', 'stored:computed_userset_and_intersection:s0:check1');
+select tap.is(fga_test.check('user:cheetah', 'viewer', 'document:3', null, false, null, :'model_id'), 'ok', 'stored:computed_userset_and_intersection:s0:check2');
+select tap.is(fga_test.list_objects('user:aardvark', 'document', 'viewer', null, array['document:1']::text[], null, :'model_id'), 'ok', 'stored:computed_userset_and_intersection:s0:lo0');
+select tap.is(fga_test.list_objects('user:badger', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:computed_userset_and_intersection:s0:lo1');
+select tap.is(fga_test.list_objects('user:cheetah', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:computed_userset_and_intersection:s0:lo2');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['user']::text[], null, array['user:aardvark']::text[], null, :'model_id'), 'ok', 'stored:computed_userset_and_intersection:s0:lu0');
+
+-- computed_userset_and_exclusion
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"editor":{"directly_related_user_types":[{"type":"user"}]},"viewer":{},"writer":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"editor":{"this":{}},"viewer":{"difference":{"base":{"computedUserset":{"relation":"writer"}},"subtract":{"computedUserset":{"relation":"editor"}}}},"writer":{"this":{}}},"type":"document"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"object":"document:1","relation":"writer","user":"user:aardvark"},{"object":"document:1","relation":"editor","user":"user:aardvark"},{"object":"document:2","relation":"writer","user":"user:badger"},{"object":"document:3","relation":"editor","user":"user:cheetah"}]'::jsonb);
+select tap.is(fga_test.check('user:aardvark', 'viewer', 'document:1', null, false, null, :'model_id'), 'ok', 'stored:computed_userset_and_exclusion:s0:check0');
+select tap.is(fga_test.check('user:badger', 'viewer', 'document:2', null, true, null, :'model_id'), 'ok', 'stored:computed_userset_and_exclusion:s0:check1');
+select tap.is(fga_test.check('user:cheetah', 'viewer', 'document:3', null, false, null, :'model_id'), 'ok', 'stored:computed_userset_and_exclusion:s0:check2');
+select tap.is(fga_test.list_objects('user:aardvark', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:computed_userset_and_exclusion:s0:lo0');
+select tap.is(fga_test.list_objects('user:badger', 'document', 'viewer', null, array['document:2']::text[], null, :'model_id'), 'ok', 'stored:computed_userset_and_exclusion:s0:lo1');
+select tap.is(fga_test.list_objects('user:cheetah', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:computed_userset_and_exclusion:s0:lo2');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['user']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:computed_userset_and_exclusion:s0:lu0');
+select tap.is(fga_test.list_users('document:2', 'viewer', array['user']::text[], null, array['user:badger']::text[], null, :'model_id'), 'ok', 'stored:computed_userset_and_exclusion:s0:lu1');
 
 -- tuple_to_userset_and_computed_userset
 select permissions.fga_delete_store();

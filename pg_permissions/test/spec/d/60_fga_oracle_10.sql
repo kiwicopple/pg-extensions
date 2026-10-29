@@ -2,12 +2,7 @@
 -- OpenFGA consolidated_1_1_tests.yaml, Apache-2.0: see test/fga/upstream/SOURCE.
 \set ON_ERROR_STOP off
 \ir ../../fixtures/fga_suite.sql
-\echo '# SKIP true_butnot_cycle_return_false: stage2'
-\echo '# SKIP cycle_and_cycle_return_false: stage2'
-\echo '# SKIP cycle_and_true_return_false: stage2'
-\echo '# SKIP cycle_butnot_false_return_false: stage2'
-\echo '# SKIP false_butnot_cycle_return_false: stage2'
-select tap.plan(95);
+select tap.plan(105);
 
 -- cycle_or_cycle_return_false
 select permissions.fga_delete_store();
@@ -33,12 +28,51 @@ select permissions.fga_write('[{"user":"document:1#viewer","relation":"editor","
 select tap.is(fga_test.check('user:jon', 'viewer', 'document:1', null, false, null, :'model_id'), 'ok', 'stored:immediate_cycle_through_computed_userset~2:s0:check0');
 select tap.is(fga_test.list_objects('user:jon', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:immediate_cycle_through_computed_userset~2:s0:lo0');
 
+-- true_butnot_cycle_return_false
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"restricted":{"directly_related_user_types":[{"type":"user"},{"relation":"viewer","type":"document"}]},"viewer":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"restricted":{"this":{}},"viewer":{"difference":{"base":{"this":{}},"subtract":{"computedUserset":{"relation":"restricted"}}}}},"type":"document"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"user":"user:jon","relation":"viewer","object":"document:1"},{"user":"document:1#viewer","relation":"restricted","object":"document:1"}]'::jsonb);
+select tap.is(fga_test.check('user:jon', 'viewer', 'document:1', null, false, null, :'model_id'), 'ok', 'stored:true_butnot_cycle_return_false:s0:check0');
+select tap.is(fga_test.list_objects('user:jon', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:true_butnot_cycle_return_false:s0:lo0');
+
+-- cycle_and_cycle_return_false
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"editor":{"directly_related_user_types":[{"type":"user"},{"relation":"viewer","type":"document"}]},"viewer":{"directly_related_user_types":[{"type":"user"},{"relation":"editor","type":"document"}]}}},"relations":{"editor":{"this":{}},"viewer":{"intersection":{"child":[{"this":{}},{"computedUserset":{"relation":"editor"}}]}}},"type":"document"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"user":"document:1#editor","relation":"viewer","object":"document:1"},{"user":"document:1#viewer","relation":"editor","object":"document:1"}]'::jsonb);
+select tap.is(fga_test.check('user:jon', 'viewer', 'document:1', null, false, null, :'model_id'), 'ok', 'stored:cycle_and_cycle_return_false:s0:check0');
+select tap.is(fga_test.list_objects('user:jon', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:cycle_and_cycle_return_false:s0:lo0');
+
+-- cycle_and_true_return_false
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"allowed":{"directly_related_user_types":[{"type":"user"}]},"viewer":{"directly_related_user_types":[{"type":"user"},{"relation":"viewer","type":"document"}]}}},"relations":{"allowed":{"this":{}},"viewer":{"intersection":{"child":[{"this":{}},{"computedUserset":{"relation":"allowed"}}]}}},"type":"document"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"user":"user:jon","relation":"allowed","object":"document:1"}]'::jsonb);
+select tap.is(fga_test.check('user:jon', 'viewer', 'document:1', null, false, null, :'model_id'), 'ok', 'stored:cycle_and_true_return_false:s0:check0');
+select tap.is(fga_test.list_objects('user:jon', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:cycle_and_true_return_false:s0:lo0');
+
 -- immediate_cycle_return_false
 select permissions.fga_delete_store();
 -- stage 0
 select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"viewer":{"directly_related_user_types":[{"type":"user"},{"relation":"viewer","type":"document"}]}}},"relations":{"viewer":{"this":{}}},"type":"document"}]}'::jsonb) as model_id \gset
 select tap.is(fga_test.check('user:jon', 'viewer', 'document:1', null, false, null, :'model_id'), 'ok', 'stored:immediate_cycle_return_false:s0:check0');
 select tap.is(fga_test.list_objects('user:jon', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:immediate_cycle_return_false:s0:lo0');
+
+-- cycle_butnot_false_return_false
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"restricted":{"directly_related_user_types":[{"type":"user"}]},"viewer":{"directly_related_user_types":[{"type":"user"},{"relation":"viewer","type":"document"}]}}},"relations":{"restricted":{"this":{}},"viewer":{"difference":{"base":{"this":{}},"subtract":{"computedUserset":{"relation":"restricted"}}}}},"type":"document"}]}'::jsonb) as model_id \gset
+select tap.is(fga_test.check('user:jon', 'viewer', 'document:1', null, false, null, :'model_id'), 'ok', 'stored:cycle_butnot_false_return_false:s0:check0');
+select tap.is(fga_test.list_objects('user:jon', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:cycle_butnot_false_return_false:s0:lo0');
+
+-- false_butnot_cycle_return_false
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"restricted":{"directly_related_user_types":[{"type":"user"},{"relation":"viewer","type":"document"}]},"viewer":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"restricted":{"this":{}},"viewer":{"difference":{"base":{"this":{}},"subtract":{"computedUserset":{"relation":"restricted"}}}}},"type":"document"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"user":"document:1#viewer","relation":"restricted","object":"document:1"}]'::jsonb);
+select tap.is(fga_test.check('user:jon', 'viewer', 'document:1', null, false, null, :'model_id'), 'ok', 'stored:false_butnot_cycle_return_false:s0:check0');
+select tap.is(fga_test.list_objects('user:jon', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:false_butnot_cycle_return_false:s0:lo0');
 
 -- ttu_mix_with_userset
 select permissions.fga_delete_store();

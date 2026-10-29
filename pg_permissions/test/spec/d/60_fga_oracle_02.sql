@@ -2,15 +2,7 @@
 -- OpenFGA consolidated_1_1_tests.yaml, Apache-2.0: see test/fga/upstream/SOURCE.
 \set ON_ERROR_STOP off
 \ir ../../fixtures/fga_suite.sql
-\echo '# SKIP tuple_to_userset_and_intersection: stage2'
-\echo '# SKIP tuple_to_userset_and_exclusion: stage2'
-\echo '# SKIP union_and_intersection: stage2'
-\echo '# SKIP union_and_exclusion: stage2'
-\echo '# SKIP intersection_and_tuple_to_userset: stage2'
-\echo '# SKIP intersection_and_union: stage2'
-\echo '# SKIP intersection_and_intersection: stage2'
-\echo '# SKIP intersection_and_exclusion: stage2'
-select tap.plan(30);
+select tap.plan(133);
 
 -- tuple_to_userset_and_tuple_to_userset
 select permissions.fga_delete_store();
@@ -39,6 +31,39 @@ select tap.is(fga_test.list_users('document:1', 'viewer', array['folder#writer']
 select tap.is(fga_test.list_users('document:1', 'viewer', array['folder#viewer']::text[], null, array['folder:X#viewer']::text[], null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_union:s0:lu4');
 select tap.is(fga_test.list_users('document:1', 'viewer', array['folder']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_union:s0:lu5');
 
+-- tuple_to_userset_and_intersection
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"editor":{"directly_related_user_types":[{"type":"user"}]},"viewer":{},"writer":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"editor":{"this":{}},"viewer":{"intersection":{"child":[{"computedUserset":{"relation":"writer"}},{"computedUserset":{"relation":"editor"}}]}},"writer":{"this":{}}},"type":"folder"},{"metadata":{"relations":{"parent":{"directly_related_user_types":[{"type":"folder"}]},"viewer":{}}},"relations":{"parent":{"this":{}},"viewer":{"tupleToUserset":{"computedUserset":{"relation":"viewer"},"tupleset":{"relation":"parent"}}}},"type":"document"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"object":"document:1","relation":"parent","user":"folder:X"},{"object":"folder:X","relation":"writer","user":"user:aardvark"},{"object":"folder:X","relation":"editor","user":"user:aardvark"},{"object":"folder:X","relation":"writer","user":"user:badger"},{"object":"folder:X","relation":"editor","user":"user:cheetah"}]'::jsonb);
+select tap.is(fga_test.check('user:aardvark', 'viewer', 'document:1', null, true, null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_intersection:s0:check0');
+select tap.is(fga_test.check('user:badger', 'viewer', 'document:1', null, false, null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_intersection:s0:check1');
+select tap.is(fga_test.check('user:cheetah', 'viewer', 'document:1', null, false, null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_intersection:s0:check2');
+select tap.is(fga_test.list_objects('user:aardvark', 'document', 'viewer', null, array['document:1']::text[], null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_intersection:s0:lo0');
+select tap.is(fga_test.list_objects('user:badger', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_intersection:s0:lo1');
+select tap.is(fga_test.list_objects('user:cheetah', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_intersection:s0:lo2');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['user']::text[], null, array['user:aardvark']::text[], null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_intersection:s0:lu0');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['folder#editor']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_intersection:s0:lu1');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['folder#writer']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_intersection:s0:lu2');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['folder#viewer']::text[], null, array['folder:X#viewer']::text[], null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_intersection:s0:lu3');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['folder']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_intersection:s0:lu4');
+
+-- tuple_to_userset_and_exclusion
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"editor":{"directly_related_user_types":[{"type":"user"}]},"viewer":{},"writer":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"editor":{"this":{}},"viewer":{"difference":{"base":{"computedUserset":{"relation":"writer"}},"subtract":{"computedUserset":{"relation":"editor"}}}},"writer":{"this":{}}},"type":"folder"},{"metadata":{"relations":{"parent":{"directly_related_user_types":[{"type":"folder"}]},"viewer":{}}},"relations":{"parent":{"this":{}},"viewer":{"tupleToUserset":{"computedUserset":{"relation":"viewer"},"tupleset":{"relation":"parent"}}}},"type":"document"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"object":"document:1","relation":"parent","user":"folder:X"},{"object":"folder:X","relation":"writer","user":"user:aardvark"},{"object":"folder:X","relation":"editor","user":"user:aardvark"},{"object":"folder:X","relation":"writer","user":"user:badger"},{"object":"folder:X","relation":"editor","user":"user:cheetah"}]'::jsonb);
+select tap.is(fga_test.check('user:aardvark', 'viewer', 'document:1', null, false, null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_exclusion:s0:check0');
+select tap.is(fga_test.check('user:badger', 'viewer', 'document:1', null, true, null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_exclusion:s0:check1');
+select tap.is(fga_test.check('user:cheetah', 'viewer', 'document:1', null, false, null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_exclusion:s0:check2');
+select tap.is(fga_test.list_objects('user:aardvark', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_exclusion:s0:lo0');
+select tap.is(fga_test.list_objects('user:badger', 'document', 'viewer', null, array['document:1']::text[], null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_exclusion:s0:lo1');
+select tap.is(fga_test.list_objects('user:cheetah', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_exclusion:s0:lo2');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['user']::text[], null, array['user:badger']::text[], null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_exclusion:s0:lu0');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['folder#editor']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_exclusion:s0:lu1');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['folder#writer']::text[], null, array['folder:X#writer']::text[], null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_exclusion:s0:lu2');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['folder#viewer']::text[], null, array['folder:X#viewer']::text[], null, :'model_id'), 'ok', 'stored:tuple_to_userset_and_exclusion:s0:lu3');
+
 -- union_and_tuple_to_userset
 select permissions.fga_delete_store();
 -- stage 0
@@ -65,5 +90,123 @@ select tap.is(fga_test.list_objects('user:cheetah', 'document', 'viewer', null, 
 select tap.is(fga_test.list_users('document:1', 'viewer', array['user']::text[], null, array['user:aardvark']::text[], null, :'model_id'), 'ok', 'stored:union_and_union:s0:lu0');
 select tap.is(fga_test.list_users('document:2', 'viewer', array['user']::text[], null, array['user:badger']::text[], null, :'model_id'), 'ok', 'stored:union_and_union:s0:lu1');
 select tap.is(fga_test.list_users('document:3', 'viewer', array['user']::text[], null, array['user:cheetah']::text[], null, :'model_id'), 'ok', 'stored:union_and_union:s0:lu2');
+
+-- union_and_intersection
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"editor":{"directly_related_user_types":[{"type":"user"}]},"owner":{"directly_related_user_types":[{"type":"user"}]},"viewer":{},"writer":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"editor":{"this":{}},"owner":{"this":{}},"viewer":{"union":{"child":[{"computedUserset":{"relation":"writer"}},{"intersection":{"child":[{"computedUserset":{"relation":"editor"}},{"computedUserset":{"relation":"owner"}}]}}]}},"writer":{"this":{}}},"type":"document"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"object":"document:1","relation":"writer","user":"user:aardvark"},{"object":"document:2","relation":"editor","user":"user:badger"},{"object":"document:2","relation":"owner","user":"user:badger"},{"object":"document:3","relation":"editor","user":"user:cheetah"},{"object":"document:4","relation":"owner","user":"user:duck"}]'::jsonb);
+select tap.is(fga_test.check('user:aardvark', 'viewer', 'document:1', null, true, null, :'model_id'), 'ok', 'stored:union_and_intersection:s0:check0');
+select tap.is(fga_test.check('user:badger', 'viewer', 'document:2', null, true, null, :'model_id'), 'ok', 'stored:union_and_intersection:s0:check1');
+select tap.is(fga_test.check('user:cheetah', 'viewer', 'document:3', null, false, null, :'model_id'), 'ok', 'stored:union_and_intersection:s0:check2');
+select tap.is(fga_test.check('user:duck', 'viewer', 'document:4', null, false, null, :'model_id'), 'ok', 'stored:union_and_intersection:s0:check3');
+select tap.is(fga_test.list_objects('user:aardvark', 'document', 'viewer', null, array['document:1']::text[], null, :'model_id'), 'ok', 'stored:union_and_intersection:s0:lo0');
+select tap.is(fga_test.list_objects('user:badger', 'document', 'viewer', null, array['document:2']::text[], null, :'model_id'), 'ok', 'stored:union_and_intersection:s0:lo1');
+select tap.is(fga_test.list_objects('user:cheetah', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:union_and_intersection:s0:lo2');
+select tap.is(fga_test.list_objects('user:duck', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:union_and_intersection:s0:lo3');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['user']::text[], null, array['user:aardvark']::text[], null, :'model_id'), 'ok', 'stored:union_and_intersection:s0:lu0');
+select tap.is(fga_test.list_users('document:2', 'viewer', array['user']::text[], null, array['user:badger']::text[], null, :'model_id'), 'ok', 'stored:union_and_intersection:s0:lu1');
+select tap.is(fga_test.list_users('document:3', 'viewer', array['user']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:union_and_intersection:s0:lu2');
+select tap.is(fga_test.list_users('document:4', 'viewer', array['user']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:union_and_intersection:s0:lu3');
+
+-- union_and_exclusion
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"editor":{"directly_related_user_types":[{"type":"user"}]},"owner":{"directly_related_user_types":[{"type":"user"}]},"viewer":{},"writer":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"editor":{"this":{}},"owner":{"this":{}},"viewer":{"union":{"child":[{"computedUserset":{"relation":"writer"}},{"difference":{"base":{"computedUserset":{"relation":"editor"}},"subtract":{"computedUserset":{"relation":"owner"}}}}]}},"writer":{"this":{}}},"type":"document"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"object":"document:1","relation":"writer","user":"user:aardvark"},{"object":"document:1","relation":"editor","user":"user:badger"},{"object":"document:2","relation":"owner","user":"user:badger"},{"object":"document:3","relation":"editor","user":"user:cheetah"},{"object":"document:4","relation":"owner","user":"user:duck"}]'::jsonb);
+select tap.is(fga_test.check('user:aardvark', 'viewer', 'document:1', null, true, null, :'model_id'), 'ok', 'stored:union_and_exclusion:s0:check0');
+select tap.is(fga_test.check('user:badger', 'viewer', 'document:1', null, true, null, :'model_id'), 'ok', 'stored:union_and_exclusion:s0:check1');
+select tap.is(fga_test.check('user:badger', 'viewer', 'document:2', null, false, null, :'model_id'), 'ok', 'stored:union_and_exclusion:s0:check2');
+select tap.is(fga_test.check('user:cheetah', 'viewer', 'document:3', null, true, null, :'model_id'), 'ok', 'stored:union_and_exclusion:s0:check3');
+select tap.is(fga_test.check('user:duck', 'viewer', 'document:4', null, false, null, :'model_id'), 'ok', 'stored:union_and_exclusion:s0:check4');
+select tap.is(fga_test.list_objects('user:aardvark', 'document', 'viewer', null, array['document:1']::text[], null, :'model_id'), 'ok', 'stored:union_and_exclusion:s0:lo0');
+select tap.is(fga_test.list_objects('user:badger', 'document', 'viewer', null, array['document:1']::text[], null, :'model_id'), 'ok', 'stored:union_and_exclusion:s0:lo1');
+select tap.is(fga_test.list_objects('user:cheetah', 'document', 'viewer', null, array['document:3']::text[], null, :'model_id'), 'ok', 'stored:union_and_exclusion:s0:lo2');
+select tap.is(fga_test.list_objects('user:duck', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:union_and_exclusion:s0:lo3');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['user']::text[], null, array['user:aardvark', 'user:badger']::text[], null, :'model_id'), 'ok', 'stored:union_and_exclusion:s0:lu0');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['document#writer']::text[], null, array['document:1#writer']::text[], null, :'model_id'), 'ok', 'stored:union_and_exclusion:s0:lu1');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['document#editor']::text[], null, array['document:1#editor']::text[], null, :'model_id'), 'ok', 'stored:union_and_exclusion:s0:lu2');
+select tap.is(fga_test.list_users('document:3', 'viewer', array['user']::text[], null, array['user:cheetah']::text[], null, :'model_id'), 'ok', 'stored:union_and_exclusion:s0:lu3');
+
+-- intersection_and_tuple_to_userset
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"viewer":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"viewer":{"this":{}}},"type":"folder"},{"metadata":{"relations":{"parent":{"directly_related_user_types":[{"type":"folder"}]},"viewer":{},"writer":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"parent":{"this":{}},"viewer":{"intersection":{"child":[{"computedUserset":{"relation":"writer"}},{"tupleToUserset":{"computedUserset":{"relation":"viewer"},"tupleset":{"relation":"parent"}}}]}},"writer":{"this":{}}},"type":"document"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"object":"document:1","relation":"parent","user":"folder:X"},{"object":"folder:X","relation":"viewer","user":"user:aardvark"},{"object":"document:1","relation":"writer","user":"user:aardvark"},{"object":"folder:X","relation":"viewer","user":"user:badger"},{"object":"document:2","relation":"writer","user":"user:cheetah"}]'::jsonb);
+select tap.is(fga_test.check('user:aardvark', 'viewer', 'document:1', null, true, null, :'model_id'), 'ok', 'stored:intersection_and_tuple_to_userset:s0:check0');
+select tap.is(fga_test.check('user:badger', 'viewer', 'document:1', null, false, null, :'model_id'), 'ok', 'stored:intersection_and_tuple_to_userset:s0:check1');
+select tap.is(fga_test.check('user:cheetah', 'viewer', 'document:2', null, false, null, :'model_id'), 'ok', 'stored:intersection_and_tuple_to_userset:s0:check2');
+select tap.is(fga_test.list_objects('user:aardvark', 'document', 'viewer', null, array['document:1']::text[], null, :'model_id'), 'ok', 'stored:intersection_and_tuple_to_userset:s0:lo0');
+select tap.is(fga_test.list_objects('user:badger', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_tuple_to_userset:s0:lo1');
+select tap.is(fga_test.list_objects('user:cheetah', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_tuple_to_userset:s0:lo2');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['user']::text[], null, array['user:aardvark']::text[], null, :'model_id'), 'ok', 'stored:intersection_and_tuple_to_userset:s0:lu0');
+select tap.is(fga_test.list_users('document:2', 'viewer', array['user']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_tuple_to_userset:s0:lu1');
+select tap.is(fga_test.list_users('document:3', 'viewer', array['user']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_tuple_to_userset:s0:lu2');
+
+-- intersection_and_union
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"editor":{"directly_related_user_types":[{"type":"user"}]},"owner":{"directly_related_user_types":[{"type":"user"}]},"viewer":{},"writer":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"editor":{"this":{}},"owner":{"this":{}},"viewer":{"intersection":{"child":[{"computedUserset":{"relation":"writer"}},{"union":{"child":[{"computedUserset":{"relation":"editor"}},{"computedUserset":{"relation":"owner"}}]}}]}},"writer":{"this":{}}},"type":"document"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"object":"document:1","relation":"writer","user":"user:aardvark"},{"object":"document:1","relation":"editor","user":"user:aardvark"},{"object":"document:2","relation":"writer","user":"user:badger"},{"object":"document:2","relation":"owner","user":"user:badger"},{"object":"document:3","relation":"writer","user":"user:cheetah"},{"object":"document:4","relation":"editor","user":"user:duck"},{"object":"document:5","relation":"owner","user":"user:eagle"}]'::jsonb);
+select tap.is(fga_test.check('user:aardvark', 'viewer', 'document:1', null, true, null, :'model_id'), 'ok', 'stored:intersection_and_union:s0:check0');
+select tap.is(fga_test.check('user:badger', 'viewer', 'document:2', null, true, null, :'model_id'), 'ok', 'stored:intersection_and_union:s0:check1');
+select tap.is(fga_test.check('user:cheetah', 'viewer', 'document:3', null, false, null, :'model_id'), 'ok', 'stored:intersection_and_union:s0:check2');
+select tap.is(fga_test.check('user:duck', 'viewer', 'document:4', null, false, null, :'model_id'), 'ok', 'stored:intersection_and_union:s0:check3');
+select tap.is(fga_test.check('user:eagle', 'viewer', 'document:5', null, false, null, :'model_id'), 'ok', 'stored:intersection_and_union:s0:check4');
+select tap.is(fga_test.list_objects('user:aardvark', 'document', 'viewer', null, array['document:1']::text[], null, :'model_id'), 'ok', 'stored:intersection_and_union:s0:lo0');
+select tap.is(fga_test.list_objects('user:badger', 'document', 'viewer', null, array['document:2']::text[], null, :'model_id'), 'ok', 'stored:intersection_and_union:s0:lo1');
+select tap.is(fga_test.list_objects('user:cheetah', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_union:s0:lo2');
+select tap.is(fga_test.list_objects('user:duck', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_union:s0:lo3');
+select tap.is(fga_test.list_objects('user:eagle', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_union:s0:lo4');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['user']::text[], null, array['user:aardvark']::text[], null, :'model_id'), 'ok', 'stored:intersection_and_union:s0:lu0');
+select tap.is(fga_test.list_users('document:2', 'viewer', array['user']::text[], null, array['user:badger']::text[], null, :'model_id'), 'ok', 'stored:intersection_and_union:s0:lu1');
+select tap.is(fga_test.list_users('document:3', 'viewer', array['user']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_union:s0:lu2');
+select tap.is(fga_test.list_users('document:4', 'viewer', array['user']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_union:s0:lu3');
+select tap.is(fga_test.list_users('document:5', 'viewer', array['user']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_union:s0:lu4');
+
+-- intersection_and_intersection
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"editor":{"directly_related_user_types":[{"type":"user"}]},"owner":{"directly_related_user_types":[{"type":"user"}]},"viewer":{},"writer":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"editor":{"this":{}},"owner":{"this":{}},"viewer":{"intersection":{"child":[{"computedUserset":{"relation":"writer"}},{"computedUserset":{"relation":"editor"}},{"computedUserset":{"relation":"owner"}}]}},"writer":{"this":{}}},"type":"document"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"object":"document:1","relation":"writer","user":"user:aardvark"},{"object":"document:1","relation":"editor","user":"user:aardvark"},{"object":"document:1","relation":"owner","user":"user:aardvark"},{"object":"document:2","relation":"writer","user":"user:badger"},{"object":"document:2","relation":"editor","user":"user:badger"},{"object":"document:3","relation":"writer","user":"user:cheetah"},{"object":"document:3","relation":"owner","user":"user:cheetah"},{"object":"document:4","relation":"writer","user":"user:duck"},{"object":"document:5","relation":"editor","user":"user:eagle"},{"object":"document:6","relation":"owner","user":"user:fox"}]'::jsonb);
+select tap.is(fga_test.check('user:aardvark', 'viewer', 'document:1', null, true, null, :'model_id'), 'ok', 'stored:intersection_and_intersection:s0:check0');
+select tap.is(fga_test.check('user:badger', 'viewer', 'document:2', null, false, null, :'model_id'), 'ok', 'stored:intersection_and_intersection:s0:check1');
+select tap.is(fga_test.check('user:cheetah', 'viewer', 'document:3', null, false, null, :'model_id'), 'ok', 'stored:intersection_and_intersection:s0:check2');
+select tap.is(fga_test.check('user:duck', 'viewer', 'document:4', null, false, null, :'model_id'), 'ok', 'stored:intersection_and_intersection:s0:check3');
+select tap.is(fga_test.check('user:eagle', 'viewer', 'document:5', null, false, null, :'model_id'), 'ok', 'stored:intersection_and_intersection:s0:check4');
+select tap.is(fga_test.check('user:fox', 'viewer', 'document:6', null, false, null, :'model_id'), 'ok', 'stored:intersection_and_intersection:s0:check5');
+select tap.is(fga_test.list_objects('user:aardvark', 'document', 'viewer', null, array['document:1']::text[], null, :'model_id'), 'ok', 'stored:intersection_and_intersection:s0:lo0');
+select tap.is(fga_test.list_objects('user:badger', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_intersection:s0:lo1');
+select tap.is(fga_test.list_objects('user:cheetah', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_intersection:s0:lo2');
+select tap.is(fga_test.list_objects('user:duck', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_intersection:s0:lo3');
+select tap.is(fga_test.list_objects('user:eagle', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_intersection:s0:lo4');
+select tap.is(fga_test.list_objects('user:fox', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_intersection:s0:lo5');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['user']::text[], null, array['user:aardvark']::text[], null, :'model_id'), 'ok', 'stored:intersection_and_intersection:s0:lu0');
+select tap.is(fga_test.list_users('document:2', 'viewer', array['user']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_intersection:s0:lu1');
+select tap.is(fga_test.list_users('document:3', 'viewer', array['user']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_intersection:s0:lu2');
+select tap.is(fga_test.list_users('document:4', 'viewer', array['user']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_intersection:s0:lu3');
+select tap.is(fga_test.list_users('document:5', 'viewer', array['user']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_intersection:s0:lu4');
+select tap.is(fga_test.list_users('document:6', 'viewer', array['user']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_intersection:s0:lu5');
+
+-- intersection_and_exclusion
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"editor":{"directly_related_user_types":[{"type":"user"}]},"owner":{"directly_related_user_types":[{"type":"user"}]},"viewer":{},"writer":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"editor":{"this":{}},"owner":{"this":{}},"viewer":{"intersection":{"child":[{"computedUserset":{"relation":"writer"}},{"difference":{"base":{"computedUserset":{"relation":"editor"}},"subtract":{"computedUserset":{"relation":"owner"}}}}]}},"writer":{"this":{}}},"type":"document"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"object":"document:1","relation":"writer","user":"user:aardvark"},{"object":"document:1","relation":"editor","user":"user:aardvark"},{"object":"document:1","relation":"owner","user":"user:aardvark"},{"object":"document:2","relation":"writer","user":"user:badger"},{"object":"document:2","relation":"editor","user":"user:badger"},{"object":"document:3","relation":"writer","user":"user:cheetah"},{"object":"document:3","relation":"owner","user":"user:cheetah"},{"object":"document:4","relation":"writer","user":"user:duck"},{"object":"document:5","relation":"editor","user":"user:eagle"},{"object":"document:6","relation":"owner","user":"user:fox"}]'::jsonb);
+select tap.is(fga_test.check('user:aardvark', 'viewer', 'document:1', null, false, null, :'model_id'), 'ok', 'stored:intersection_and_exclusion:s0:check0');
+select tap.is(fga_test.check('user:badger', 'viewer', 'document:2', null, true, null, :'model_id'), 'ok', 'stored:intersection_and_exclusion:s0:check1');
+select tap.is(fga_test.check('user:cheetah', 'viewer', 'document:3', null, false, null, :'model_id'), 'ok', 'stored:intersection_and_exclusion:s0:check2');
+select tap.is(fga_test.check('user:duck', 'viewer', 'document:4', null, false, null, :'model_id'), 'ok', 'stored:intersection_and_exclusion:s0:check3');
+select tap.is(fga_test.check('user:eagle', 'viewer', 'document:5', null, false, null, :'model_id'), 'ok', 'stored:intersection_and_exclusion:s0:check4');
+select tap.is(fga_test.check('user:fox', 'viewer', 'document:6', null, false, null, :'model_id'), 'ok', 'stored:intersection_and_exclusion:s0:check5');
+select tap.is(fga_test.list_objects('user:aardvark', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_exclusion:s0:lo0');
+select tap.is(fga_test.list_objects('user:badger', 'document', 'viewer', null, array['document:2']::text[], null, :'model_id'), 'ok', 'stored:intersection_and_exclusion:s0:lo1');
+select tap.is(fga_test.list_objects('user:cheetah', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_exclusion:s0:lo2');
+select tap.is(fga_test.list_objects('user:duck', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_exclusion:s0:lo3');
+select tap.is(fga_test.list_objects('user:eagle', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_exclusion:s0:lo4');
+select tap.is(fga_test.list_objects('user:fox', 'document', 'viewer', null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_exclusion:s0:lo5');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['user']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_exclusion:s0:lu0');
+select tap.is(fga_test.list_users('document:1', 'viewer', array['document#writer']::text[], null, array[]::text[], null, :'model_id'), 'ok', 'stored:intersection_and_exclusion:s0:lu1');
+select tap.is(fga_test.list_users('document:2', 'viewer', array['user']::text[], null, array['user:badger']::text[], null, :'model_id'), 'ok', 'stored:intersection_and_exclusion:s0:lu2');
 
 select * from tap.finish();

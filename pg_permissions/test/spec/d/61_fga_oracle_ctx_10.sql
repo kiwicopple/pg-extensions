@@ -2,16 +2,31 @@
 -- OpenFGA consolidated_1_1_tests.yaml, Apache-2.0: see test/fga/upstream/SOURCE.
 \set ON_ERROR_STOP off
 \ir ../../fixtures/fga_suite.sql
-\echo '# SKIP recursive_ttu_union_algebraic_operations_with_wildcard: stage2'
-\echo '# SKIP recursive_ttu_union_two_algebraic_operations: stage2'
-\echo '# SKIP recursive_ttu_union_parenthesis_intersection: stage2'
-select tap.plan(5);
+select tap.plan(8);
+
+-- recursive_ttu_union_algebraic_operations_with_wildcard
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"parent":{"directly_related_user_types":[{"type":"document"}]},"rel1":{},"rel2":{"directly_related_user_types":[{"type":"user"}]},"rel3":{},"rel4":{"directly_related_user_types":[{"type":"user","wildcard":{}}]},"rel5":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"parent":{"this":{}},"rel1":{"union":{"child":[{"computedUserset":{"relation":"rel2"}},{"tupleToUserset":{"computedUserset":{"relation":"rel1"},"tupleset":{"relation":"parent"}}}]}},"rel2":{"intersection":{"child":[{"this":{}},{"computedUserset":{"relation":"rel3"}}]}},"rel3":{"difference":{"base":{"computedUserset":{"relation":"rel4"}},"subtract":{"computedUserset":{"relation":"rel5"}}}},"rel4":{"this":{}},"rel5":{"this":{}}},"type":"document"}]}'::jsonb) as model_id \gset
+select tap.is(fga_test.check('user:maria', 'rel1', 'document:x', '[{"user":"document:parent","relation":"parent","object":"document:x"},{"user":"user:maria","relation":"rel2","object":"document:parent"},{"user":"user:*","relation":"rel4","object":"document:parent"}]'::jsonb, true, null, :'model_id'), 'ok', 'contextual:recursive_ttu_union_algebraic_operations_with_wildcard:s0:check0');
+
+-- recursive_ttu_union_two_algebraic_operations
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"parent":{"directly_related_user_types":[{"type":"document"}]},"rel1":{},"rel2":{"directly_related_user_types":[{"type":"user"}]},"rel3":{},"rel4":{"directly_related_user_types":[{"type":"user","wildcard":{}}]},"rel5":{"directly_related_user_types":[{"type":"user"}]},"rel6":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"parent":{"this":{}},"rel1":{"union":{"child":[{"computedUserset":{"relation":"rel2"}},{"computedUserset":{"relation":"rel6"}},{"tupleToUserset":{"computedUserset":{"relation":"rel1"},"tupleset":{"relation":"parent"}}}]}},"rel2":{"intersection":{"child":[{"this":{}},{"computedUserset":{"relation":"rel3"}}]}},"rel3":{"difference":{"base":{"computedUserset":{"relation":"rel4"}},"subtract":{"computedUserset":{"relation":"rel5"}}}},"rel4":{"this":{}},"rel5":{"this":{}},"rel6":{"this":{}}},"type":"document"}]}'::jsonb) as model_id \gset
+select tap.is(fga_test.check('user:maria', 'rel1', 'document:x', '[{"user":"document:parent","relation":"parent","object":"document:x"},{"user":"user:maria","relation":"rel6","object":"document:parent"}]'::jsonb, true, null, :'model_id'), 'ok', 'contextual:recursive_ttu_union_two_algebraic_operations:s0:check0');
 
 -- recursive_ttu_union_terminal_type
 select permissions.fga_delete_store();
 -- stage 0
 select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"parent":{"directly_related_user_types":[{"type":"document"}]},"rel1":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"parent":{"this":{}},"rel1":{"union":{"child":[{"this":{}},{"tupleToUserset":{"computedUserset":{"relation":"rel1"},"tupleset":{"relation":"parent"}}}]}}},"type":"document"}]}'::jsonb) as model_id \gset
 select tap.is(fga_test.check('user:maria', 'rel1', 'document:x', '[{"user":"document:parent","relation":"parent","object":"document:x"},{"user":"user:maria","relation":"rel1","object":"document:parent"}]'::jsonb, true, null, :'model_id'), 'ok', 'contextual:recursive_ttu_union_terminal_type:s0:check0');
+
+-- recursive_ttu_union_parenthesis_intersection
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"parent":{"directly_related_user_types":[{"type":"document"}]},"rel1":{},"rel2":{"directly_related_user_types":[{"type":"user"}]},"rel3":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"parent":{"this":{}},"rel1":{"union":{"child":[{"intersection":{"child":[{"computedUserset":{"relation":"rel2"}},{"computedUserset":{"relation":"rel3"}}]}},{"tupleToUserset":{"computedUserset":{"relation":"rel1"},"tupleset":{"relation":"parent"}}}]}},"rel2":{"this":{}},"rel3":{"this":{}}},"type":"document"}]}'::jsonb) as model_id \gset
+select tap.is(fga_test.check('user:maria', 'rel1', 'document:x', '[{"user":"document:parent","relation":"parent","object":"document:x"},{"user":"user:maria","relation":"rel2","object":"document:parent"},{"user":"user:maria","relation":"rel2","object":"document:x"},{"user":"user:maria","relation":"rel3","object":"document:x"}]'::jsonb, true, null, :'model_id'), 'ok', 'contextual:recursive_ttu_union_parenthesis_intersection:s0:check0');
 
 -- combined_public_wildcard_userset
 select permissions.fga_delete_store();

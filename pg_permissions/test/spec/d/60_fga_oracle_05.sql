@@ -2,12 +2,7 @@
 -- OpenFGA consolidated_1_1_tests.yaml, Apache-2.0: see test/fga/upstream/SOURCE.
 \set ON_ERROR_STOP off
 \ir ../../fixtures/fga_suite.sql
-\echo '# SKIP list_objects_considers_input_contextual_tuples: stage2'
-\echo '# SKIP ignores_irrelevant_contextual_tuples_because_different_user: stage2'
-\echo '# SKIP ignores_irrelevant_contextual_tuples_because_different_type: stage2'
-\echo '# SKIP list_objects_ignores_irrelevant_tuples_because_different_user: stage2'
-\echo '# SKIP list_objects_ignores_duplicate_contextual_tuples: stage2'
-select tap.plan(20);
+select tap.plan(41);
 
 -- validation_user_invalid
 select permissions.fga_delete_store();
@@ -63,5 +58,66 @@ select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_
 select tap.is(fga_test.check('user:aardvark', 'viewer', 'document:1', '[{"object":"document:1","relation":"parent","user":"user:*"}]'::jsonb, null, 2027, :'model_id'), 'ok', 'stored:val_contextual_tuples_and_wildcard_in_ttu_evaluation:s0:check0');
 select tap.is(fga_test.list_objects('user:aardvark', 'document', 'viewer', '[{"object":"document:1","relation":"parent","user":"user:*"}]'::jsonb, null, 2027, :'model_id'), 'ok', 'stored:val_contextual_tuples_and_wildcard_in_ttu_evaluation:s0:lo0');
 select tap.is(fga_test.list_users('document:1', 'viewer', array['user']::text[], '[{"object":"document:1","relation":"parent","user":"user:*"}]'::jsonb, null, 2027, :'model_id'), 'ok', 'stored:val_contextual_tuples_and_wildcard_in_ttu_evaluation:s0:lu0');
+
+-- list_objects_considers_input_contextual_tuples
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"blocked":{"directly_related_user_types":[{"type":"user"}]},"owner":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"blocked":{"this":{}},"owner":{"difference":{"base":{"this":{}},"subtract":{"computedUserset":{"relation":"blocked"}}}}},"type":"repo"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"user":"user:a","relation":"owner","object":"repo:1"}]'::jsonb);
+select tap.is(fga_test.list_objects('user:a', 'repo', 'owner', '[{"user":"user:a","relation":"owner","object":"repo:2"},{"user":"user:a","relation":"owner","object":"repo:3"}]'::jsonb, array['repo:1', 'repo:2', 'repo:3']::text[], null, :'model_id'), 'ok', 'stored:list_objects_considers_input_contextual_tuples:s0:lo0');
+select tap.is(fga_test.list_users('repo:2', 'owner', array['user']::text[], '[{"user":"user:a","relation":"owner","object":"repo:2"}]'::jsonb, array['user:a']::text[], null, :'model_id'), 'ok', 'stored:list_objects_considers_input_contextual_tuples:s0:lu0');
+select tap.is(fga_test.list_users('repo:1', 'owner', array['user']::text[], '[{"user":"user:a","relation":"blocked","object":"repo:1"}]'::jsonb, array[]::text[], null, :'model_id'), 'ok', 'stored:list_objects_considers_input_contextual_tuples:s0:lu1');
+-- stage 1
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"owner":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"owner":{"this":{}}},"type":"repo"}]}'::jsonb) as model_id \gset
+select tap.is(fga_test.list_objects('user:a', 'repo', 'owner', '[{"user":"user:a","relation":"owner","object":"repo:2"},{"user":"user:a","relation":"owner","object":"repo:3"}]'::jsonb, array['repo:1', 'repo:2', 'repo:3']::text[], null, :'model_id'), 'ok', 'stored:list_objects_considers_input_contextual_tuples:s1:lo0');
+select tap.is(fga_test.list_users('repo:1', 'owner', array['user']::text[], '[{"user":"user:aardvark","relation":"owner","object":"repo:1"}]'::jsonb, array['user:a', 'user:aardvark']::text[], null, :'model_id'), 'ok', 'stored:list_objects_considers_input_contextual_tuples:s1:lu0');
+
+-- ignores_irrelevant_contextual_tuples_because_different_user
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"blocked":{"directly_related_user_types":[{"type":"user"}]},"owner":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"blocked":{"this":{}},"owner":{"difference":{"base":{"this":{}},"subtract":{"computedUserset":{"relation":"blocked"}}}}},"type":"repo"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"user":"user:a","relation":"owner","object":"repo:1"}]'::jsonb);
+select tap.is(fga_test.list_objects('user:a', 'repo', 'owner', '[{"user":"user:b","relation":"owner","object":"repo:2"}]'::jsonb, array['repo:1']::text[], null, :'model_id'), 'ok', 'stored:ignores_irrelevant_contextual_tuples_because_different_user:s0:lo0');
+select tap.is(fga_test.list_users('repo:1', 'owner', array['user']::text[], '[{"user":"user:a","relation":"owner","object":"repo:2"}]'::jsonb, array['user:a']::text[], null, :'model_id'), 'ok', 'stored:ignores_irrelevant_contextual_tuples_because_different_user:s0:lu0');
+-- stage 1
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"member":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"member":{"this":{}}},"type":"team"},{"metadata":{"relations":{"owner":{"directly_related_user_types":[{"type":"user"},{"relation":"member","type":"team"}]}}},"relations":{"owner":{"this":{}}},"type":"repo"}]}'::jsonb) as model_id \gset
+select tap.is(fga_test.list_objects('user:a', 'repo', 'owner', '[{"user":"user:b","relation":"owner","object":"repo:2"}]'::jsonb, array['repo:1']::text[], null, :'model_id'), 'ok', 'stored:ignores_irrelevant_contextual_tuples_because_different_user:s1:lo0');
+
+-- ignores_irrelevant_contextual_tuples_because_different_type
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"blocked":{"directly_related_user_types":[{"type":"user"}]},"owner":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"blocked":{"this":{}},"owner":{"difference":{"base":{"this":{}},"subtract":{"computedUserset":{"relation":"blocked"}}}}},"type":"repo"},{"metadata":{"relations":{"blocked":{"directly_related_user_types":[{"type":"user"}]},"owner":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"blocked":{"this":{}},"owner":{"difference":{"base":{"this":{}},"subtract":{"computedUserset":{"relation":"blocked"}}}}},"type":"organization"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"user":"user:a","relation":"owner","object":"repo:1"}]'::jsonb);
+select tap.is(fga_test.list_objects('user:a', 'repo', 'owner', '[{"user":"user:a","relation":"owner","object":"organization:1"}]'::jsonb, array['repo:1']::text[], null, :'model_id'), 'ok', 'stored:ignores_irrelevant_contextual_tuples_because_different_type:s0:lo0');
+select tap.is(fga_test.list_users('repo:1', 'owner', array['user']::text[], '[{"user":"user:a","relation":"owner","object":"organization:1"}]'::jsonb, array['user:a']::text[], null, :'model_id'), 'ok', 'stored:ignores_irrelevant_contextual_tuples_because_different_type:s0:lu0');
+-- stage 1
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"owner":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"owner":{"this":{}}},"type":"repo"},{"metadata":{"relations":{"owner":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"owner":{"this":{}}},"type":"organization"}]}'::jsonb) as model_id \gset
+select tap.is(fga_test.list_objects('user:a', 'repo', 'owner', '[{"user":"user:a","relation":"owner","object":"organization:1"}]'::jsonb, array['repo:1']::text[], null, :'model_id'), 'ok', 'stored:ignores_irrelevant_contextual_tuples_because_different_type:s1:lo0');
+select tap.is(fga_test.list_users('repo:1', 'owner', array['user']::text[], '[{"user":"user:a","relation":"owner","object":"organization:1"}]'::jsonb, array['user:a']::text[], null, :'model_id'), 'ok', 'stored:ignores_irrelevant_contextual_tuples_because_different_type:s1:lu0');
+
+-- list_objects_ignores_irrelevant_tuples_because_different_user
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"blocked":{"directly_related_user_types":[{"type":"user"}]},"owner":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"blocked":{"this":{}},"owner":{"difference":{"base":{"this":{}},"subtract":{"computedUserset":{"relation":"blocked"}}}}},"type":"repo"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"user":"user:a","relation":"owner","object":"repo:1"},{"user":"user:aa","relation":"owner","object":"repo:2"}]'::jsonb);
+select tap.is(fga_test.list_objects('user:a', 'repo', 'owner', null, array['repo:1']::text[], null, :'model_id'), 'ok', 'stored:list_objects_ignores_irrelevant_tuples_because_different_user:s0:lo0');
+select tap.is(fga_test.list_users('repo:1', 'owner', array['user']::text[], null, array['user:a']::text[], null, :'model_id'), 'ok', 'stored:list_objects_ignores_irrelevant_tuples_because_different_user:s0:lu0');
+select tap.is(fga_test.list_users('repo:2', 'owner', array['user']::text[], null, array['user:aa']::text[], null, :'model_id'), 'ok', 'stored:list_objects_ignores_irrelevant_tuples_because_different_user:s0:lu1');
+-- stage 1
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"owner":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"owner":{"this":{}}},"type":"repo"}]}'::jsonb) as model_id \gset
+select tap.is(fga_test.list_objects('user:a', 'repo', 'owner', null, array['repo:1']::text[], null, :'model_id'), 'ok', 'stored:list_objects_ignores_irrelevant_tuples_because_different_user:s1:lo0');
+select tap.is(fga_test.list_users('repo:1', 'owner', array['user']::text[], null, array['user:a']::text[], null, :'model_id'), 'ok', 'stored:list_objects_ignores_irrelevant_tuples_because_different_user:s1:lu0');
+
+-- list_objects_ignores_duplicate_contextual_tuples
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"blocked":{"directly_related_user_types":[{"type":"user"}]},"owner":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"blocked":{"this":{}},"owner":{"difference":{"base":{"this":{}},"subtract":{"computedUserset":{"relation":"blocked"}}}}},"type":"repo"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"user":"user:a","relation":"owner","object":"repo:1"}]'::jsonb);
+select tap.is(fga_test.list_objects('user:a', 'repo', 'owner', '[{"user":"user:a","relation":"owner","object":"repo:2"},{"user":"user:a","relation":"owner","object":"repo:2"}]'::jsonb, array['repo:1', 'repo:2']::text[], null, :'model_id'), 'ok', 'stored:list_objects_ignores_duplicate_contextual_tuples:s0:lo0');
+select tap.is(fga_test.list_users('repo:2', 'owner', array['user']::text[], '[{"user":"user:a","relation":"owner","object":"repo:2"},{"user":"user:a","relation":"owner","object":"repo:2"}]'::jsonb, array['user:a']::text[], null, :'model_id'), 'ok', 'stored:list_objects_ignores_duplicate_contextual_tuples:s0:lu0');
+-- stage 1
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"owner":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"owner":{"this":{}}},"type":"repo"}]}'::jsonb) as model_id \gset
+select tap.is(fga_test.list_objects('user:a', 'repo', 'owner', '[{"user":"user:a","relation":"owner","object":"repo:2"},{"user":"user:a","relation":"owner","object":"repo:2"}]'::jsonb, array['repo:1', 'repo:2']::text[], null, :'model_id'), 'ok', 'stored:list_objects_ignores_duplicate_contextual_tuples:s1:lo0');
+select tap.is(fga_test.list_users('repo:2', 'owner', array['user']::text[], '[{"user":"user:a","relation":"owner","object":"repo:2"},{"user":"user:a","relation":"owner","object":"repo:2"}]'::jsonb, array['user:a']::text[], null, :'model_id'), 'ok', 'stored:list_objects_ignores_duplicate_contextual_tuples:s1:lu0');
 
 select * from tap.finish();

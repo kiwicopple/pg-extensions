@@ -2,11 +2,37 @@
 -- OpenFGA consolidated_1_1_tests.yaml, Apache-2.0: see test/fga/upstream/SOURCE.
 \set ON_ERROR_STOP off
 \ir ../../fixtures/fga_suite.sql
-\echo '# SKIP error_if_contextual_tuples_do_not_follow_type_restrictions: stage2'
-\echo '# SKIP list_objects_error_if_unknown_type_in_request: stage2'
-\echo '# SKIP list_objects_error_if_unknown_relation_in_request: stage2'
-\echo '# SKIP three_prong_relation_possible_exclusion: stage2'
-select tap.plan(64);
+select tap.plan(87);
+
+-- error_if_contextual_tuples_do_not_follow_type_restrictions
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"blocked":{"directly_related_user_types":[{"type":"user"}]},"owner":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"blocked":{"this":{}},"owner":{"difference":{"base":{"this":{}},"subtract":{"computedUserset":{"relation":"blocked"}}}}},"type":"repo"},{"metadata":{"relations":{"blocked":{"directly_related_user_types":[{"type":"user"}]},"owner":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"blocked":{"this":{}},"owner":{"difference":{"base":{"this":{}},"subtract":{"computedUserset":{"relation":"blocked"}}}}},"type":"organization"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"user":"user:a","relation":"owner","object":"repo:1"}]'::jsonb);
+select tap.is(fga_test.list_objects('user:a', 'repo', 'owner', '[{"user":"user:*","relation":"owner","object":"organization:1"}]'::jsonb, null, 2027, :'model_id'), 'ok', 'stored:error_if_contextual_tuples_do_not_follow_type_restrictions:s0:lo0');
+select tap.is(fga_test.list_users('repo:1', 'owner', array['user']::text[], '[{"user":"user:*","relation":"owner","object":"organization:1"}]'::jsonb, null, 2027, :'model_id'), 'ok', 'stored:error_if_contextual_tuples_do_not_follow_type_restrictions:s0:lu0');
+-- stage 1
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"owner":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"owner":{"this":{}}},"type":"repo"},{"metadata":{"relations":{"owner":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"owner":{"this":{}}},"type":"organization"}]}'::jsonb) as model_id \gset
+select tap.is(fga_test.list_objects('user:a', 'repo', 'owner', '[{"user":"user:*","relation":"owner","object":"organization:1"}]'::jsonb, null, 2027, :'model_id'), 'ok', 'stored:error_if_contextual_tuples_do_not_follow_type_restrictions:s1:lo0');
+select tap.is(fga_test.list_users('repo:1', 'owner', array['user']::text[], '[{"user":"user:*","relation":"owner","object":"organization:1"}]'::jsonb, null, 2027, :'model_id'), 'ok', 'stored:error_if_contextual_tuples_do_not_follow_type_restrictions:s1:lu0');
+
+-- list_objects_error_if_unknown_type_in_request
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"blocked":{"directly_related_user_types":[{"type":"user"}]},"owner":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"blocked":{"this":{}},"owner":{"difference":{"base":{"this":{}},"subtract":{"computedUserset":{"relation":"blocked"}}}}},"type":"repo"}]}'::jsonb) as model_id \gset
+select tap.is(fga_test.list_objects('user:a', 'unknown', 'owner', null, null, 2021, :'model_id'), 'ok', 'stored:list_objects_error_if_unknown_type_in_request:s0:lo0');
+-- stage 1
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"owner":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"owner":{"this":{}}},"type":"repo"}]}'::jsonb) as model_id \gset
+select tap.is(fga_test.list_objects('user:a', 'unknown', 'owner', null, null, 2021, :'model_id'), 'ok', 'stored:list_objects_error_if_unknown_type_in_request:s1:lo0');
+
+-- list_objects_error_if_unknown_relation_in_request
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"blocked":{"directly_related_user_types":[{"type":"user"}]},"owner":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"blocked":{"this":{}},"owner":{"difference":{"base":{"this":{}},"subtract":{"computedUserset":{"relation":"blocked"}}}}},"type":"repo"}]}'::jsonb) as model_id \gset
+select tap.is(fga_test.list_objects('user:a', 'repo', 'unknown', null, null, 2022, :'model_id'), 'ok', 'stored:list_objects_error_if_unknown_relation_in_request:s0:lo0');
+-- stage 1
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"owner":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"owner":{"this":{}}},"type":"repo"}]}'::jsonb) as model_id \gset
+select tap.is(fga_test.list_objects('user:a', 'repo', 'unknown', null, null, 2022, :'model_id'), 'ok', 'stored:list_objects_error_if_unknown_relation_in_request:s1:lo0');
 
 -- relations_not_defined_in_some_child_type_falsy
 select permissions.fga_delete_store();
@@ -121,5 +147,26 @@ select tap.is(fga_test.list_users('document:a', 'viewer', array['user']::text[],
 select tap.is(fga_test.list_users('document:b', 'viewer', array['user']::text[], null, array['user:anne']::text[], null, :'model_id'), 'ok', 'stored:three_prong_relation_loop:s0:lu3');
 select tap.is(fga_test.list_users('module:a', 'viewer', array['user']::text[], null, array['user:anne']::text[], null, :'model_id'), 'ok', 'stored:three_prong_relation_loop:s0:lu4');
 select tap.is(fga_test.list_users('module:b', 'viewer', array['user']::text[], null, array['user:anne']::text[], null, :'model_id'), 'ok', 'stored:three_prong_relation_loop:s0:lu5');
+
+-- three_prong_relation_possible_exclusion
+select permissions.fga_delete_store();
+-- stage 0
+select permissions.fga_write_authorization_model('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"has_owned":{},"owner":{"directly_related_user_types":[{"type":"user"}]},"parent":{"directly_related_user_types":[{"type":"document"},{"type":"module"}]},"viewer":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"has_owned":{"computedUserset":{"relation":"owner"}},"owner":{"union":{"child":[{"this":{}},{"tupleToUserset":{"computedUserset":{"relation":"has_owned"},"tupleset":{"relation":"parent"}}}]}},"parent":{"this":{}},"viewer":{"union":{"child":[{"this":{}},{"computedUserset":{"relation":"has_owned"}},{"tupleToUserset":{"computedUserset":{"relation":"viewer"},"tupleset":{"relation":"parent"}}}]}}},"type":"module"},{"metadata":{"relations":{"has_owned":{},"owner":{"directly_related_user_types":[{"type":"user"}]},"parent":{"directly_related_user_types":[{"type":"module"},{"type":"folder"}]},"viewer":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"has_owned":{"computedUserset":{"relation":"owner"}},"owner":{"union":{"child":[{"this":{}},{"tupleToUserset":{"computedUserset":{"relation":"has_owned"},"tupleset":{"relation":"parent"}}}]}},"parent":{"this":{}},"viewer":{"union":{"child":[{"this":{}},{"computedUserset":{"relation":"has_owned"}},{"tupleToUserset":{"computedUserset":{"relation":"viewer"},"tupleset":{"relation":"parent"}}}]}}},"type":"folder"},{"metadata":{"relations":{"banned":{"directly_related_user_types":[{"type":"user"}]},"has_owned":{},"owner":{"directly_related_user_types":[{"type":"user"}]},"parent":{"directly_related_user_types":[{"type":"folder"},{"type":"document"}]},"viewer":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"banned":{"this":{}},"has_owned":{"difference":{"base":{"computedUserset":{"relation":"owner"}},"subtract":{"computedUserset":{"relation":"banned"}}}},"owner":{"union":{"child":[{"this":{}},{"tupleToUserset":{"computedUserset":{"relation":"has_owned"},"tupleset":{"relation":"parent"}}}]}},"parent":{"this":{}},"viewer":{"union":{"child":[{"this":{}},{"computedUserset":{"relation":"has_owned"}},{"tupleToUserset":{"computedUserset":{"relation":"viewer"},"tupleset":{"relation":"parent"}}}]}}},"type":"document"}]}'::jsonb) as model_id \gset
+select permissions.fga_write('[{"user":"user:anne","relation":"owner","object":"module:a"},{"user":"module:a","relation":"parent","object":"folder:a"},{"user":"folder:a","relation":"parent","object":"document:a"},{"user":"document:a","relation":"parent","object":"module:b"},{"user":"module:b","relation":"parent","object":"folder:b"},{"user":"folder:b","relation":"parent","object":"document:b"}]'::jsonb);
+select tap.is(fga_test.check('user:anne', 'viewer', 'module:a', null, true, null, :'model_id'), 'ok', 'stored:three_prong_relation_possible_exclusion:s0:check0');
+select tap.is(fga_test.check('user:anne', 'viewer', 'module:b', null, true, null, :'model_id'), 'ok', 'stored:three_prong_relation_possible_exclusion:s0:check1');
+select tap.is(fga_test.check('user:anne', 'viewer', 'folder:a', null, true, null, :'model_id'), 'ok', 'stored:three_prong_relation_possible_exclusion:s0:check2');
+select tap.is(fga_test.check('user:anne', 'viewer', 'folder:b', null, true, null, :'model_id'), 'ok', 'stored:three_prong_relation_possible_exclusion:s0:check3');
+select tap.is(fga_test.check('user:anne', 'viewer', 'document:a', null, true, null, :'model_id'), 'ok', 'stored:three_prong_relation_possible_exclusion:s0:check4');
+select tap.is(fga_test.check('user:anne', 'viewer', 'document:b', null, true, null, :'model_id'), 'ok', 'stored:three_prong_relation_possible_exclusion:s0:check5');
+select tap.is(fga_test.list_objects('user:anne', 'folder', 'viewer', null, array['folder:a', 'folder:b']::text[], null, :'model_id'), 'ok', 'stored:three_prong_relation_possible_exclusion:s0:lo0');
+select tap.is(fga_test.list_objects('user:anne', 'document', 'viewer', null, array['document:a', 'document:b']::text[], null, :'model_id'), 'ok', 'stored:three_prong_relation_possible_exclusion:s0:lo1');
+select tap.is(fga_test.list_objects('user:anne', 'module', 'viewer', null, array['module:a', 'module:b']::text[], null, :'model_id'), 'ok', 'stored:three_prong_relation_possible_exclusion:s0:lo2');
+select tap.is(fga_test.list_users('folder:a', 'viewer', array['user']::text[], null, array['user:anne']::text[], null, :'model_id'), 'ok', 'stored:three_prong_relation_possible_exclusion:s0:lu0');
+select tap.is(fga_test.list_users('folder:b', 'viewer', array['user']::text[], null, array['user:anne']::text[], null, :'model_id'), 'ok', 'stored:three_prong_relation_possible_exclusion:s0:lu1');
+select tap.is(fga_test.list_users('document:a', 'viewer', array['user']::text[], null, array['user:anne']::text[], null, :'model_id'), 'ok', 'stored:three_prong_relation_possible_exclusion:s0:lu2');
+select tap.is(fga_test.list_users('document:b', 'viewer', array['user']::text[], null, array['user:anne']::text[], null, :'model_id'), 'ok', 'stored:three_prong_relation_possible_exclusion:s0:lu3');
+select tap.is(fga_test.list_users('module:a', 'viewer', array['user']::text[], null, array['user:anne']::text[], null, :'model_id'), 'ok', 'stored:three_prong_relation_possible_exclusion:s0:lu4');
+select tap.is(fga_test.list_users('module:b', 'viewer', array['user']::text[], null, array['user:anne']::text[], null, :'model_id'), 'ok', 'stored:three_prong_relation_possible_exclusion:s0:lu5');
 
 select * from tap.finish();

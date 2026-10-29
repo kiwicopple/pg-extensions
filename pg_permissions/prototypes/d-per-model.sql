@@ -1015,8 +1015,8 @@ $$;
 -- "on_duplicate": "ignore" (writes) or "on_missing": "ignore" (deletes).
 -- Writes are validated against the model (latest unless given): 2027. Writing
 -- a tuple that exists or deleting one that doesn't is 2017 unless ignored.
--- Deletes only need to be well formed, so tuples a newer model no longer
--- allows can still be removed.
+-- Deletes only need to be well formed (2000 otherwise), so tuples a newer
+-- model no longer allows can still be removed.
 create function permissions.fga_write(writes jsonb default null, deletes jsonb default null,
                                       authorization_model_id text default null)
 returns void
@@ -1069,7 +1069,7 @@ begin
        or coalesce(e ->> 'relation', '') !~ '^[^:#@ [:cntrl:]]+$'
     limit 1;
     if bad is not null then
-        perform permissions._fga_error(2027, format('Invalid tuple ''%s'' in deletes', bad));
+        perform permissions._fga_error(2000, format('Invalid tuple ''%s'' in deletes: malformed', bad));
     end if;
     select format('%s:%s#%s@%s', t.object_type, t.object_id, t.relation,
                   permissions._fga_user_string(t.user_type, t.user_id, t.user_relation)) into bad
