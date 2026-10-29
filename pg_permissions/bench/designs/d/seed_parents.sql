@@ -27,7 +27,9 @@ select permissions.fga_write(jsonb_build_object('tuple_keys', keys, 'on_duplicat
 from (
     select jsonb_agg(jsonb_build_object('user', 'user:' || md5('user' || u)::uuid, 'relation', 'viewer',
                                         'object', 'folder:' || md5('folder' || f)::uuid)) as keys
-    from (select distinct u, f from bench.folder_viewers) v
+    from (select u, f, (row_number() over () - 1) / 100 as chunk   -- the Write cap (seed_sharing.sql)
+          from (select distinct u, f from bench.folder_viewers) d) v
+    group by chunk
 ) w;
 
 drop policy documents_select_fga on public.documents;

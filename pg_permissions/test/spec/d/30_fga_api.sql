@@ -35,7 +35,7 @@ select tap.ok(fga_test.code_of($$ select permissions.fga_write_authorization_mod
 select tap.ok(fga_test.code_of($$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [{"type": "user"}, {"type": "user"}]}') $$)
               like 'openfga:2005 %', 'a type defined twice is refused (2005)');
 select tap.is(fga_test.code_of($$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [{"type": "user"}], "conditions": {"c": {"name": "c", "expression": "true"}}}') $$),
-              'sqlstate:0A000 conditions are not supported', 'conditions are not supported yet (0A000)');
+              'sqlstate:0A000 conditions are not supported: the model defines condition ''c''', 'conditions are not supported yet (0A000)');
 select tap.is(permissions.fga_read_authorization_model() ->> 'id', :'v1', 'refused models do not become the latest');
 
 -- writes
@@ -51,7 +51,7 @@ select tap.is(fga_test.code_of($$ select permissions.fga_write('{"tuple_keys": [
               'ok', 'unless on_duplicate is ignore');
 select tap.ok(fga_test.code_of($$ select permissions.fga_write(deletes => '[{"user": "user:zed", "relation": "editor", "object": "document:1"}]') $$)
               like 'openfga:2017 %', 'deleting a tuple that does not exist fails (2017)');
-select tap.ok(fga_test.code_of($$ select permissions.fga_write('[]') $$) like 'openfga:2003 %', 'an empty write fails (2003)');
+select tap.ok(fga_test.code_of($$ select permissions.fga_write() $$) like 'openfga:2003 %', 'a write with no writes and no deletes fails (2003)');
 select tap.ok(fga_test.code_of($$ select permissions.fga_write('[{"user": "user:x", "relation": "editor", "object": "document:9"}, {"user": "user:x", "relation": "editor", "object": "document:9"}]') $$)
               like 'openfga:2004 %', 'the same tuple twice in one request fails (2004)');
 select tap.ok(fga_test.code_of($$ select permissions.fga_write('[{"user": "user:*", "relation": "editor", "object": "document:9"}]') $$)
@@ -61,7 +61,7 @@ select tap.ok(fga_test.code_of($$ select permissions.fga_write('[{"user": "team:
 select tap.ok(fga_test.code_of($$ select permissions.fga_write('[{"user": "user:x", "relation": "owner", "object": "document:9"}]') $$)
               like 'openfga:2027 %', 'an unknown relation fails (2027)');
 select tap.is(fga_test.code_of($$ select permissions.fga_write('[{"user": "user:x", "relation": "editor", "object": "document:9", "condition": {"name": "c"}}]') $$),
-              'sqlstate:0A000 relationship conditions are not supported', 'a tuple with a condition is not supported (0A000)');
+              'sqlstate:0A000 relationship condition ''c'' on tuple ''document:9#editor@user:x'' is not supported', 'a tuple with a condition is not supported (0A000)');
 select permissions.fga_write('[{"user": "user:x", "relation": "editor", "object": "document:9"}]',
                              '[{"user": "user:anne", "relation": "editor", "object": "document:1"}]');
 select tap.ok(not permissions.fga_check('user:anne', 'editor', 'document:1') and permissions.fga_check('user:x', 'editor', 'document:9'),
@@ -71,9 +71,13 @@ select permissions.fga_write_tuple('user:anne', 'editor', 'document:1');
 select tap.is(permissions.fga_check('user:anne', 'editor', 'document:1'), true, 'fga_write_tuple writes, and is idempotent');
 
 -- read
-select tap.set_eq(array(select "user" from permissions.fga_read('document:1')), '{user:anne,team:eng#member}', 'read by object');
-select tap.set_eq(array(select object from permissions.fga_read('document:', null, 'user:anne')), '{document:1}', 'read by object type and user');
-select tap.set_eq(array(select object || '#' || relation from permissions.fga_read(null, null, 'team:eng#member')), '{document:1#viewer}', 'read by userset');
+select tap.set_eq(array(select t #>> '{key,user}' from permissions.fga_read('document:1') r, jsonb_array_elements(r.tuples) t),
+                  '{user:anne,team:eng#member}', 'read by object');
+select tap.set_eq(array(select t #>> '{key,object}' from permissions.fga_read('document:', null, 'user:anne') r, jsonb_array_elements(r.tuples) t),
+                  '{document:1}', 'read by object type and user');
+select tap.set_eq(array(select (t #>> '{key,object}') || '#' || (t #>> '{key,relation}')
+                        from permissions.fga_read(null, null, 'team:eng#member') r, jsonb_array_elements(r.tuples) t),
+                  '{document:1#viewer}', 'read by userset');
 
 -- versioning: a new model that drops the team userset from viewer
 select permissions.fga_write_authorization_model($m${
@@ -91,7 +95,7 @@ select tap.ok(fga_test.code_of($$ select permissions.fga_check('user:bob', 'edit
 select tap.ok(fga_test.code_of($$ select permissions.fga_check('user:bob', 'viewer', 'document:1', null, '01ARZ3NDEKTSV4RRFFQ69G5FAV') $$) like 'openfga:2001 %', 'an unknown model id fails (2001)');
 select tap.set_eq(array(select id from permissions.fga_read_authorization_models()), array[:'v1', :'v2'], 'read_authorization_models lists both versions');
 select permissions.fga_write(deletes => '[{"user": "team:eng#member", "relation": "viewer", "object": "document:1"}]');
-select tap.is((select count(*)::int from permissions.fga_read('document:1', 'viewer')), 0, 'a tuple the model no longer allows can still be deleted');
+select tap.is((select tuples from permissions.fga_read('document:1', 'viewer')), '[]'::jsonb, 'a tuple the model no longer allows can still be deleted');
 
 -- current subject
 select permissions.fga_write(('[{"user": "user:' || :'alice' || '", "relation": "viewer", "object": "document:' || :'acme_plan' || '"}]')::jsonb);

@@ -31,8 +31,10 @@
 --
 -- Loading: fga_write, the native Write API (each tuple validated against the
 -- model, then one set-based insert), with every tuple key of a seed in
--- chunks of 50,000 per call (OpenFGA caps a Write at 100 tuples; D doesn't,
--- design doc §8.4). `distinct` because a Write may not name a tuple twice.
+-- chunks of 100 per call, the cap on a Write (2053 above it, as OpenFGA;
+-- design doc §4). Until phase 2 of session 5 there was no cap and the seeds
+-- wrote chunks of 50,000, so seed times in baselines before then are not
+-- comparable. `distinct` because a Write may not name a tuple twice.
 --
 -- Plus a fixture for write_nest_team and nest_check only (no document grants,
 -- so it doesn't change what the share_* workloads see):
@@ -67,7 +69,7 @@ select permissions.fga_write(jsonb_build_object('tuple_keys', keys, 'on_duplicat
 from (
     select jsonb_agg(jsonb_build_object('user', u, 'relation', r, 'object', o)) as keys
     from (
-        select u, r, o, (row_number() over () - 1) / 50000 as chunk
+        select u, r, o, (row_number() over () - 1) / 100 as chunk
         from (
             select distinct 'user:' || md5('user' || u)::uuid as u, 'member' as r, 'team:' || md5('team' || team)::uuid as o
             from bench.team_members

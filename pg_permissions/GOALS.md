@@ -27,11 +27,11 @@ Status as of 2026-10-29, from `test/run.sh` (the extension) and `test/run.sh --i
 | | Design-specific: C materialized memberships stay correct | | `c/32_memberships` | | | | ✅ 31/31 |
 | | Design-specific: C `who_can` reports public grants | | `c/54_who_can_public` | | | | ✅ 8/8 |
 | | Design-specific: C tenant as a parent type | | `c/55_tenant_parent` | | | | ✅ 9/9 |
-| | **Total** | | | **37/37 files, 2,164 assertions** | **18/18 files, 199 assertions** | **18/18 files, 189 assertions** | **21/21 files, 229 assertions** |
+| | **Total** | | | **39/39 files, 2,276 assertions** | **18/18 files, 199 assertions** | **18/18 files, 189 assertions** | **21/21 files, 229 assertions** |
 
 Zanzibar-level spec files (`30`+, in `test/spec/<design>/`) are per-design: each design has its own copy of the same scenario written in its native API, with the same assertions, so results compare one to one. G10–G14 are the v0.0.2 scenarios from PLAN.md §10.
 
-The extension (`pg_permissions--0.0.1.sql`) is design D. It passes the engine-independent specs (G1-G6, G14 and the plan-time probe) like A, B and C. G7-G13 are per-design specs in the prototypes' native API; D's equivalents are the `d/` specs (the OpenFGA API, cycles, set-based walks, RBAC plus FGA in RLS, and OpenFGA's own consolidated suite), so those rows read "see `d/`". The extension's total is the whole local run: 37 files, 2,164 assertions.
+The extension (`pg_permissions--0.0.1.sql`) is design D. It passes the engine-independent specs (G1-G6, G14 and the plan-time probe) like A, B and C. G7-G13 are per-design specs in the prototypes' native API; D's equivalents are the `d/` specs (the OpenFGA API, cycles, set-based walks, RBAC plus FGA in RLS, the API limits, an error-hint check of every raise site, and OpenFGA's own consolidated suite), so those rows read "see `d/`". The extension's total is the whole local run: 39 files, 2,276 assertions.
 
 ## Performance goals
 

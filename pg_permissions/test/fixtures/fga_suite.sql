@@ -26,6 +26,18 @@ exception when others then
 end;
 $$;
 
+-- The error p_sql raises, every field (null fields when it runs).
+create function fga_test.error_of(p_sql text, out st text, out msg text, out detail text, out hint text)
+language plpgsql
+as $$
+begin
+    execute p_sql;
+exception when others then
+    get stacked diagnostics st = returned_sqlstate, msg = message_text, detail = pg_exception_detail,
+                            hint = pg_exception_hint;
+end;
+$$;
+
 create function fga_test._want_code(p_got text, p_code int)
 returns text
 language sql

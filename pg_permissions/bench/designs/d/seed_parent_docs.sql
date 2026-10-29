@@ -10,7 +10,7 @@
 --
 -- Storage: one parent tuple per document (10k at small, 1M at large),
 -- `document:<id>#parent@folder:<folder_id>`, mirroring documents.folder_id.
--- Loaded with fga_write in chunks of 50,000 tuple keys (seed_sharing.sql).
+-- Loaded with fga_write in chunks of 100 tuple keys, the Write cap (seed_sharing.sql).
 
 \set ON_ERROR_STOP 1
 
@@ -18,7 +18,7 @@ select permissions.fga_write(jsonb_build_object('tuple_keys', keys, 'on_duplicat
 from (
     select jsonb_agg(jsonb_build_object('user', 'folder:' || folder_id, 'relation', 'parent',
                                         'object', 'document:' || id)) as keys
-    from (select id, folder_id, (row_number() over () - 1) / 50000 as chunk from public.documents) d
+    from (select id, folder_id, (row_number() over () - 1) / 100 as chunk from public.documents) d
     group by chunk
 ) w;
 

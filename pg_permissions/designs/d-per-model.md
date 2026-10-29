@@ -42,7 +42,7 @@ All ids, types and relations are `text collate "C"`.
 | `fga_paths` | OpenFGA's `PathExists`: which user types (`user`, `user:*`, `group#member`) each relation can reach through any operand |
 | `fga_reach` | reachability between (type, relation) pairs in the positive graph, per target relation; `strict` when through at least one edge (a reflexive strict row is on a cycle) |
 | `fga_walk_steps` | ListObjects' forward walk compiled per target relation: each `d`/`t` edge joined with the computed closure of its destination, kept only if the node it yields can reach the target; `expand` when that node has steps of its own toward the target |
-| `fga_tuples` | the tuples: (object_type, object_id, relation, user_type, user_id, user_relation); user_id `*` is a typed wildcard, user_relation is `''` unless the user is a userset. Primary key in that order; a second index on (user_type, user_id, user_relation, object_type, relation). |
+| `fga_tuples` | the tuples: (object_type, object_id, relation, user_type, user_id, user_relation); user_id `*` is a typed wildcard, user_relation is `''` unless the user is a userset. Primary key in that order; a second index on (user_type, user_id, user_relation, object_type, relation). `seq` (identity, unique index) is the insertion order, Read's page order and continuation token (section 4); added in phase 2 of session 5, since OpenFGA's ULID has no counterpart in the key. |
 
 Everything but `fga_tuples` is written once by `fga_write_authorization_model`, which validates the JSON and compiles it. No check reads JSON. Tuples don't belong to a model: like OpenFGA, every read joins them with the type restrictions of the model in use, so tuples left over from an earlier model that no longer type-check are ignored (upstream case `check_with_invalid_tuple_in_store`).
 
@@ -58,16 +58,35 @@ Strings use OpenFGA's forms: objects `type:id`, users `type:id`, `type:*` or `ty
 | --- | --- | --- |
 | WriteAuthorizationModel | `fga_write_authorization_model(model jsonb) returns text` | The body of the request: `{schema_version: "1.1", type_definitions, conditions}` as `fga model transform --output-format json` prints it. Returns the new ULID; it becomes the latest. |
 | ReadAuthorizationModel(s) | `fga_read_authorization_model(id default null) returns jsonb`, `fga_read_authorization_models() returns table(id, created_at)` | |
-| Write | `fga_write(writes jsonb, deletes jsonb, authorization_model_id)` | Each side an array of tuple keys, or `{"tuple_keys": [...], "on_duplicate": "ignore"}` / `{"tuple_keys": [...], "on_missing": "ignore"}`. One transaction. |
+| Write | `fga_write(writes jsonb, deletes jsonb, authorization_model_id)` | Each side an array of tuple keys, or `{"tuple_keys": [...], "on_duplicate": "ignore"}` / `{"tuple_keys": [...], "on_missing": "ignore"}`. One transaction. At most 100 tuple keys, writes and deletes together (Limits below). |
 | (convenience) | `fga_write_tuple(user, relation, object)`, `fga_delete_tuple(user, relation, object)` | Idempotent: `on_duplicate`/`on_missing` ignore. |
-| Read | `fga_read(p_object, p_relation, p_user) returns table(object, relation, user, inserted_at)` | `p_object` may be `type:` for every object of a type. |
+| Read | `fga_read(p_object, p_relation, p_user, p_page_size int, p_continuation_token text) returns (tuples jsonb, continuation_token text)` | One page, OpenFGA's ReadResponse as one row: `tuples` is `[{"key": {"user", "relation", "object"}, "timestamp"}, ...]` in insertion order, `continuation_token` is `''` on the last page. `p_object` may be `type:` for every object of a type. |
 | Check | `fga_check(user, relation, object, contextual_tuples jsonb, authorization_model_id) returns boolean` | |
-| ListObjects | `fga_list_objects(user, type, relation, contextual_tuples, authorization_model_id) returns setof text` | `type:id` strings, unordered, all of them (no 1,000 cap). |
-| ListUsers | `fga_list_users(object, relation, user_filters text[], contextual_tuples, authorization_model_id) returns setof text` | Filters `'user'` or `'group#member'`. Returns `type:id`, `type:*`, `type:id#relation`. |
+| ListObjects | `fga_list_objects(user, type, relation, contextual_tuples, authorization_model_id) returns setof text` | `type:id` strings, unordered, at most 1,000. |
+| ListUsers | `fga_list_users(object, relation, user_filters text[], contextual_tuples, authorization_model_id) returns setof text` | Filters `'user'` or `'group#member'`. Returns `type:id`, `type:*`, `type:id#relation`, at most 1,000. |
 | DeleteStore | `fga_delete_store()` | Every model and tuple of the one store. |
-| (current subject) | `fga_check_current(relation, object)`, `fga_list_objects_current(type, relation)`, `fga_list_object_ids_current(type, relation)` | Clients and RLS. The user is `current_subject_type():current_subject_id()`. |
+| (current subject) | `fga_check_current(relation, object)`, `fga_list_objects_current(type, relation)`, `fga_list_object_ids_current(type, relation)` | Clients and RLS. The user is `current_subject_type():current_subject_id()`. The lists are uncapped. |
 
 Contextual tuples are an array of tuple keys or OpenFGA's `{"tuple_keys": [...]}`. They are validated like writes (2027) and behave exactly like stored tuples, including in the walks.
+
+### Limits
+
+The API functions follow OpenFGA v1.22.1's default limits and what it does when one is hit (DECISION.md, end of session 4, point 4). The limits are fixed constants in one function, `_fga_limits()`: OpenFGA makes each of them configurable (for example `OPENFGA_MAX_TUPLES_PER_WRITE`), this extension doesn't (the blessed path, no extra settings). Sources are openfga/openfga at tag v1.22.1 and openfga/api at the commit its go.mod pins (`f153694bfc20`); `test/spec/d/34_fga_limits.sql` checks each behavior below.
+
+| Limit | OpenFGA v1.22.1 | pg_permissions |
+| --- | --- | --- |
+| ListObjects results | at most 1,000 (`pkg/server/config/config.go:28`); more are dropped silently, no error and no flag in the response (`pkg/server/commands/list_objects.go:637-639`); which ones survive is whichever were found first, not deterministic | the same: `fga_list_objects` returns at most 1,000, silently. The spec asserts the count and that each one is in the true set, never which ones. |
+| ListUsers results | at most 1,000 unique users, dropped silently (`config.go:31`, `commands/listusers/list_users_rpc.go:245-257`) | the same: `fga_list_users` returns at most 1,000. |
+| ListObjects and ListUsers deadline | 3 s, after which the results so far are returned and the error swallowed (`list_objects.go:645-646`, `list_users_rpc.go:286-289`) | none (deviation 4): set `statement_timeout`, which raises instead of returning a partial list. |
+| Write size | at most 100 tuple keys, writes and deletes together (`config.go:19`), counted after the duplicate check (2004): over it is 2053 `exceeded_entity_limit`, `The number of write operations exceeds the allowed limit of 100` (`commands/write.go:195-212`). A `writes` or `deletes` given with no tuple keys is 2000 (proto `min_items: 1`). | the same codes and order. The message adds the count: `... allowed limit of 100: got 101 tuple keys (101 writes, 0 deletes)`; the hint says to split into batches of at most 100, which can share one transaction. An empty array (or `{"tuple_keys": []}`) given for either side is 2000; neither given is 2003. |
+| Read page size | 50 when absent (`pkg/storage/storage.go:29`), else 1 to 100 or 2000 (`openfga/v1/openfga_service.proto:1174-1180`) | the same: `p_page_size` null is 50, outside 1..100 is 2000. |
+| Read continuation token | base64url (padded) of `<ulid>\|`, the ULID of the first tuple of the next page, found by reading `page_size + 1` (`token_serializer.go:25-35`, `read.go:118`); `''` on the last page, also when it is exactly full. Proto: at most 5,120 bytes and `^$\|^[A-Za-z0-9-_]+={0,2}$`, else 2000. Matching that but not decoding to the shape is 2007 `invalid_continuation_token` (`read.go:79-88`). A well-formed token for a ULID that doesn't exist seeks past it. Pages are in ULID order (insertion order). | the same, with `fga_tuples.seq` for the ULID: the token is base64url of `<seq>\|`, pages are in `seq` order, the next page starts at `seq >= token`. Treat the token as opaque. |
+
+Read's return shape changed in phase 2 of session 5, an API break: it was `table(object, relation, user, inserted_at)`, every match unpaginated. It is now one row of `(tuples jsonb, continuation_token text)`, mirroring OpenFGA's ReadResponse; a tuple's `key` is the tuple key `fga_write` takes, so a page can be fed back as deletes. For rows: `select t #>> '{key,object}' from permissions.fga_read('document:1') r, jsonb_array_elements(r.tuples) t`.
+
+`seq` is assigned at insert, so a transaction that commits after a reader has paged past its `seq` is missed by that walk. OpenFGA's ULID, assigned at write time, has the same property.
+
+The RLS helpers (`fga_list_objects_current`, `fga_list_object_ids_current`) are **uncapped**: a cap there would silently hide rows a user may see. The list functions are split for this: `_fga_list_object_ids` and `_fga_list_users` are uncapped and internal; `fga_list_objects` and `fga_list_users` apply the cap; the RLS helpers call the uncapped one. A cap only truncates the output; the walk still computes the whole set.
 
 Privileges (G2): clients get only the three current-subject FGA functions and the client-facing RBAC functions. Everything that takes an explicit user (`fga_check`, `fga_list_objects`, `fga_list_users`, `fga_read`) is admin-only, like every earlier design's explicit-subject functions: a client could otherwise ask what any user can access. The current-subject functions take no contextual tuples, since a client could vouch for itself with them. With no subject, no model yet, or a subject type the model doesn't define, they return false or nothing, so RLS denies instead of failing; an unknown object type or relation still raises.
 
@@ -115,16 +134,35 @@ Invalid input raises where OpenFGA returns an error, with OpenFGA's numeric code
 
 | SQLSTATE | DETAIL | When |
 | --- | --- | --- |
-| `22023` | `openfga:2000 validation_error` | Check: malformed or unknown user, object, relation. ListObjects: invalid user. Write: malformed delete key, bad `on_duplicate`. |
+| `22023` | `openfga:2000 validation_error` | Check: malformed or unknown user, object, relation. ListObjects: invalid user. Write: malformed delete key, bad `on_duplicate`/`on_missing`, an empty `writes` or `deletes` list. Read: `page_size` outside 1..100, a token outside the base64url pattern or over 5,120 bytes. |
 | `22023` | `openfga:2001`, `2020` | unknown model id; no model written yet |
 | `54001` (statement_too_complex) | `openfga:2002 authorization_model_resolution_too_complex` | depth 25 (section 5) |
-| `22023` | `openfga:2003`, `2004`, `2017` | empty write; the same tuple twice in one request; writing a tuple that exists or deleting one that doesn't |
+| `22023` | `openfga:2003`, `2004`, `2017` | a write with neither writes nor deletes; the same tuple twice in one request; writing a tuple that exists or deleting one that doesn't |
+| `22023` | `openfga:2007 invalid_continuation_token` | a Read token that matches the pattern but doesn't decode to a position |
 | `22023` | `openfga:2021 type_not_found`, `2022 relation_not_found` | ListObjects and ListUsers: unknown type or relation in the request or a filter |
 | `22023` | `openfga:2027 invalid_tuple` | a written or contextual tuple the model doesn't allow (unknown type or relation, user type not in the restrictions, wildcard or userset where not allowed, wildcard or userset on a tupleset relation) |
+| `22023` | `openfga:2053 exceeded_entity_limit` | a Write of more than 100 tuple keys (section 4, Limits) |
 | `22023` | `openfga:2005`, `2056`, `2057` | model: a type defined twice; invalid model; schema version other than 1.1 |
 | `0A000` | `pg_permissions:conditions_not_supported` | a condition on a tuple, a type restriction or the model |
 
-The SQLSTATE says what kind of failure it is to any Postgres client; the DETAIL is the machine-checkable OpenFGA code (PostgREST returns it as `details`). The order of validation follows OpenFGA's, so the same request gets the same code: Check validates user, object, relation, then contextual tuples; ListObjects contextual tuples, then type and relation, then user; ListUsers contextual tuples, filters, then the target.
+The `rbac_*` functions raise with no DETAIL: `23505` a role that exists, `22023` an unknown role or a role name that is also a permission, `2BP01` dropping a role another role inherits, `22004` `assign_role` with a null user.
+
+The SQLSTATE says what kind of failure it is to any Postgres client; the DETAIL is the machine-checkable OpenFGA code (PostgREST returns it as `details`). The order of validation follows OpenFGA's, so the same request gets the same code: Check validates user, object, relation, then contextual tuples; ListObjects contextual tuples, then type and relation, then user; ListUsers contextual tuples, filters, then the target; Write the options, the lists, the model, each tuple, duplicates, then the size.
+
+**Messages and hints** (DECISION.md, end of session 4, point 5). The MESSAGE names the offending values: the type, relation, user string, tuple, model id, count or token. Where OpenFGA has a message for the case it is kept as the start of ours (`The number of write operations exceeds the allowed limit of 100`, `Authorization Model '<id>' not found`). Every error, `rbac_*` included, has a non-empty HINT that says how to fix it:
+
+| Error | HINT |
+| --- | --- |
+| an unknown type, relation or role | the nearest existing name, if one is within a third of the input's length (1 to 3 edits), then the list (at most 20): `Did you mean 'viewer'? Relations on type 'document': editor, parent, viewer.` |
+| a tuple whose user type the relation doesn't allow (2027) | the allowed user types: `'document#editor' allows users of type: user.` |
+| an unknown model id (2001) | the valid ids, newest first (at most 10) |
+| no model yet (2020), no roles yet | the call to make first: `fga_write_authorization_model(...)`, `create_role(...)` |
+| 2017, 2053, 2003, Read's token and page size | the option or call that fixes it: `on_duplicate`/`on_missing` `ignore`, batches of at most 100, the default page size, pass the token back unchanged |
+| a malformed user, object or tuple key | the expected form, with an example |
+
+The nearest name uses a Levenshtein distance written in PL/pgSQL (`_edit_distance`, case-insensitive): the extension stays plain SQL and PL/pgSQL for pg_tle, so no `fuzzystrmatch` or `pg_trgm`. Hints are computed only on the error path.
+
+`test/spec/d/35_error_hints.sql` triggers every raise site (59: 7 in `rbac_*`, 49 calls of `_fga_error`, 3 of `_fga_unsupported`), one row each with the statement, SQLSTATE, DETAIL, a pattern for the MESSAGE and, for most, the HINT. A guard scans the function bodies in `pg_proc.prosrc` and fails if any `raise` or error-helper call passes no hint, or if the number of raise sites differs from the number of rows, so a new raise site needs a hint and a row. `_fga_error` takes the hint as a required argument. Removing one hint fails the guard and that site's row (checked on a copy of the extension, one `_fga_error` call and one `rbac_*` raise).
 
 ## 8. Deviations from OpenFGA
 
@@ -133,7 +171,7 @@ Deliberate:
 1. **One implicit store per database.** No CreateStore/ListStores/store ids; `fga_delete_store()` clears the one store. A second store would be a second database or schema.
 2. **No conditions yet** (stage 2 of the plan, CEL in SQL). A condition anywhere raises `0A000`.
 3. **Errors are Postgres exceptions** (section 7), not gRPC/HTTP statuses.
-4. **No limits and no pagination**: ListObjects and ListUsers return every result (OpenFGA caps them at 1,000 by default and has a deadline), Read and the model list aren't paginated, Write takes any number of tuples (OpenFGA: 100), and models have no size or type-count limit.
+4. **Limits are OpenFGA's defaults, fixed, with no deadline** (section 4, Limits). ListObjects and ListUsers return at most 1,000, Write takes at most 100 tuple keys and Read is paginated, as OpenFGA does; but the limits can't be configured, and there is no ListObjects/ListUsers deadline (OpenFGA: 3 s, then partial results): use `statement_timeout`, which raises instead of returning part of the list. The RLS helpers are uncapped. ReadAuthorizationModels isn't paginated, and models have no size or type-count limit.
 5. **Consistency is Postgres's**: every read uses the statement's snapshot, so there is no `consistency` parameter and no cache.
 6. **The current-subject functions take no contextual tuples** and deny instead of raising when the subject or the model is missing (section 4).
 7. **Strings, not structured users**: ListUsers returns `type:id#relation` strings, not `User` objects, and no `excluded_users`.
@@ -142,7 +180,8 @@ Simplifications that could differ from OpenFGA in corner cases, none of them hit
 
 8. **Model validation is a subset**: type and relation names, unknown types and relations in rewrites and restrictions, tupleset relations (direct, plain types only, the computed relation defined on at least one of them), `this` iff type restrictions. Not checked: relations with no entrypoint (`define a: b`, `define b: a`) and OpenFGA's other graph checks. Such a model is accepted and its relations are simply never satisfied.
 9. **Depth on false answers**: a Check on a monotone relation that is false is false, even where OpenFGA's top-down search would have hit depth 25 on some irrelevant branch and returned 2002. This now includes a monotone relation under a subtract. When the true answer needs 25 levels or more the result matches (2002). In `_fga_bidi` the depth of the first meeting point is used; a shorter path found later would not change a 2002 back to true.
-10. **Malformed delete keys** raise 2000 for any field (OpenFGA checks only the user's format).
+10. **Malformed delete keys** raise 2000 for any field (OpenFGA checks only the user's format). Until phase 2 of session 5 a malformed user or object in a delete gave 2017 instead (the check counted the rows of a function that always returns one); `d/35_error_hints` found it.
+13. **Read's filter** is any combination of `p_object` (`type:id` or `type:`), `p_relation` and `p_user`, or none. OpenFGA requires the object type and either the object id or the user when a tuple key is given (2000 otherwise).
 11. Not implemented: Expand, BatchCheck, StreamedListObjects, ReadChanges, assertions, the modular-model (`fga.mod`) format.
 12. **A cycle inside a monotone subtract** contributes nobody (least fixpoint), in Check, ListObjects and ListUsers alike. OpenFGA v1.22.1 answers true in Check and ListObjects when its recursive resolver applies, false when an unused path in the model rules that resolver out, and nothing in ListUsers. Recursion through negation keeps OpenFGA's cycle rule. Section 5.
 
@@ -167,6 +206,8 @@ Mutants confirm the suite bites: ignoring wildcards fails 13 assertions, no dept
 
 - Shared specs (`test/spec/*.sql`): all pass unchanged.
 - `d/30_fga_api`: writes and their errors, model validation and versioning (an old model id still evaluates with that model; tuples a newer model doesn't allow are ignored but can be deleted), Read, the current-subject functions, privileges, `delete_subject`.
+- `d/34_fga_limits`: the limits (section 4): 1,050 objects and users against the 1,000 cap (count, no duplicates, each in the uncapped set) while the RLS helpers return all 1,050; Write at 100 and 101 tuple keys, writes and deletes counted together, duplicates before the count, empty lists; Read walked page by page (every tuple once, in insertion order, an exactly full last page, filters), page sizes, bad tokens (2000, 2007), a token whose tuple was deleted.
+- `d/35_error_hints`: every raise site with its SQLSTATE, DETAIL, MESSAGE and HINT, and the `prosrc` guard (section 7).
 - `d/31_fga_cycles`: a userset cycle inside a monotone subtract contributes nobody (least fixpoint), with a control model that OpenFGA answers differently, a cycle that does block a user, and the cycle broken (section 5).
 - `d/32_fga_set_based`: set-based `but not` ListObjects and ListUsers against Check (one `_fga_rec` per object or user) and against the per-candidate path on the same store, for computed and tupleToUserset subtracts, recursive subtracts (rechecked, including one too deep), a cyclic base, wildcards, userset users, contextual tuples and the depth limit; and which relations compile to the set-based form.
 - `d/33_fga_walk_pruning`: the pruned forward walk against Check for every relation of a model with several targets, cycles, a wildcard, tupleToUserset and userset users; the depth limit at 24/25 levels, for a userset user, and behind the level-25 stop.
@@ -195,3 +236,6 @@ What to watch in the benchmark:
 6. **Monotone fast path**: two evaluators that must agree. The suite passes through both (59 cases go through `_fga_rec`), but a change to one should be run against the whole suite. Set-based `but not` lists add a third (`d/32` compares it with the other two).
 7. **Least fixpoint for positive recursion under a subtract** (section 5): decided in session 4. D differs from OpenFGA's default strategy, and agrees with OpenFGA v1.22.1's Check and ListObjects only when its recursive resolver applies.
 8. **Compiled walk steps per target relation** (`fga_walk_steps`): rows grow with relations x reachable steps, per model version. Tiny for the benchmark model (13 rows); a model with hundreds of interlinked relations would store more.
+9. **Fixed limits** (section 4, phase 2 of session 5): OpenFGA's defaults as constants in `_fga_limits()`, not settings. A GUC per limit would be the configurable alternative. The cap truncates the output only; the walk still computes every result, so it bounds the response, not the work.
+10. **Read returns one row of `(tuples jsonb, continuation_token text)`**, OpenFGA's ReadResponse, rather than rows with the token repeated on each. Rows read more naturally in SQL (`jsonb_array_elements` is needed now); the JSON keeps one token per page and round-trips into `fga_write`. Its filter arguments keep the `p_` prefix because an output column is named `continuation_token`.
+11. **`fga_tuples.seq`** for Read's order: an identity column and a unique index on every tuple (8 bytes plus an index entry, written on every insert), for a function the RLS path never calls. Paginating on the primary key instead would need no column but give key order, not OpenFGA's insertion order, and a token encoding the six-column key.
