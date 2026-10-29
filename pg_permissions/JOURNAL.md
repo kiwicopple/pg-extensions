@@ -883,3 +883,40 @@ Orchestrator choices: fixed constant caps (OpenFGA makes them configurable; here
   - Condition names need at least 2 characters on a tuple but only 1 in a model, so a probe condition named `c` failed every write.
   - Ruby read the value 1.8e309 as Infinity, which JSON can't carry, so a Psych-AST converter keeps numbers as written.
 - **Open questions went to the user before any parser code was written.**
+
+### 6. Phase 4b: conditions, with a CEL interpreter in PL/pgSQL (commit 8b70765)
+
+- **The user's calls, before any code:**
+  - RLS helpers deny on conditioned edges.
+  - OpenFGA's top-down error rule, so Check fails even for an erroring edge off the user's path.
+  - A stale stored context is ignored in every API.
+  - An approximate cost counter.
+- **Smaller calls (the orchestrator's):** inline `$expression` rejected; a conflicting rewrite under `on_duplicate: ignore` becomes 2017; `bytes`, `type()` and `dyn()` rejected at model write.
+- **The result:**
+  - The ABAC oracle went 302/302 stored and 271/271 contextual on the first run after integration (from 0).
+  - In-house CEL specs went from 10/257 to all passing.
+  - The fga_lang oracle went to 70/70, with 4 more condition cases running.
+  - The consolidated suite is still 933/746.
+  - Overall, 53 spec files and 3,337 assertions on PG 16, 17 and 18.
+- **Mutants:** every one was caught.
+  - Ignoring the condition fails 148 stored, 140 contextual and 87 in-house assertions.
+  - Swapping context precedence fails 18, 18 and 24.
+  - The "always conditional" fast-path flag mutant is invisible to the oracle; only a white-box spec catches it.
+- **The cost limit is 100, as in OpenFGA.** With per-node costs chosen so that `exists` over strings passes at 19 elements and fails at 20, exactly where the live server trips.
+- **A subtle catch:** "RLS helpers never take conditioned edges", read literally, would have let a user through a `but not` whose subtract errors. The fix is a mode in which an error counts as true inside a subtract, so the helper fails closed. A spec pins it.
+- **Performance:**
+  - The unconditioned fast path is unchanged within noise (two runs before, two after, large scale; `parents_select_page` p95 swings 10–20% between identical runs).
+  - One `x < 100` evaluation costs about 9 µs end to end (2 µs in the interpreter).
+  - ListObjects over 1,000 tuples: 2.0 ms unconditioned, 2.8 ms with a shared condition, 21.8 ms with 1,000 distinct contexts.
+  - A false Check on a conditional relation goes from 68 µs to 160–180 µs because of the error walk.
+- **PL/pgSQL traps hit along the way:**
+  - `if x = case ... then ... end then` breaks (the IF scanner stops at the CASE's THEN).
+  - `row(null, ...)` needs casts.
+  - Assigning `collate "C"` text to a variable drops the collation.
+  - Regex repetition counts cap at 255.
+  - psql's `\set` turned the CLI's `<` into `u003c`.
+- **Probe surprises:**
+  - `getHours("+02:00")` means two hours east, the opposite of Postgres' POSIX reading.
+  - A condition with no parameters and any non-empty context is an error.
+- **API change:** `fga_check`, `fga_list_objects` and `fga_list_users` take `context jsonb` as their sixth parameter.
+- **Left for phase 5:** inside the recursive CTE term, conditions are evaluated per row, not once per distinct context, because a recursive term can't aggregate.
