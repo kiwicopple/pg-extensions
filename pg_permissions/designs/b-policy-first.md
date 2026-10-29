@@ -33,7 +33,8 @@ All objects live in a fixed schema `permissions`. Entity ids are `text`, so uuid
 | --- | --- | --- |
 | `entities(type, id, attrs jsonb)` | Attributes for principals, read by conditions (`principal.attrs.*`) | `set_attrs` |
 | `parents(child_type, child_id, parent_type, parent_id)` | User in team, team in team, folder in org, folder in folder | `add_parent`, `remove_parent` |
-| `ancestors(child, ancestor, depth)` | Transitive closure of `parents`; `depth` is the shortest path, 1–10 | triggers on `parents` only |
+| `ancestors(child, ancestor, depth)` | Transitive closure of `parents` for **inner nodes** (entities that are the parent of something); `depth` is the shortest path, 1–10 | triggers on `parents` only |
+| `closure` (view) | Every (descendant, ancestor) pair: direct `parents` rows plus the stored rows of each direct parent. What the read paths use | nothing (a view) |
 | `roles(resource_type, role)` | Roles declared per resource type, so typos fail at grant time | `define_role` |
 | `role_implies(resource_type, role, implies)` | `editor` implies `viewer` | `define_role` |
 | `role_closure(resource_type, role, implied)` | Reflexive transitive closure of `role_implies` | rebuilt per type by `define_role` |
@@ -42,14 +43,14 @@ All objects live in a fixed schema `permissions`. Entity ids are `text`, so uuid
 
 A policy row has `effect` (`permit` / `forbid`), a principal scope (`principal_type`, default `'user'`, null = any; optional `principal_id` for one principal; optional `principal_in_type/id` for "member of this group"), `actions text[]`, `resource_type`, optional `resource_id`, optional `roles` plus `via` (the anchor), the `condition` as written plus its two halves `principal_condition` and `resource_condition` (split on write), `managed_by` (`'rbac'` for preset-generated policies) and `enabled`.
 
-Indexes that matter: `role_grants` primary key `(principal_type, principal_id, resource_type, resource_id, role)`, which every check probes by subject and anchor; `role_grants (resource_type, resource_id)` for `who_can`; `ancestors` primary key `(child_type, child_id, ...)` for "my groups" and "this folder's ancestors"; `ancestors (ancestor_type, ancestor_id, child_type)` for "folders under this org".
+Id, type and role columns are `collate "C"` (opaque keys; see [Optimizations](#optimizations-session-3)). Indexes that matter: `role_grants` primary key `(principal_type, principal_id, resource_type, resource_id, role)`, which every check probes by subject and anchor; `role_grants (resource_type, resource_id, principal_type, principal_id)` for `who_can`, also an exact probe for checks; `parents` primary key for "my parents" and `parents (parent_type, parent_id, child_type, child_id)` for "children of this folder" (index-only); `ancestors` primary key for an inner node's ancestors and `ancestors (ancestor_type, ancestor_id, child_type, child_id)` for "inner nodes under this org".
 
 ### Closure maintenance and concurrency
 
-`ancestors` is maintained by row-level `after insert` / `after delete` triggers on `parents` (updates are rejected; remove and add instead). Every trigger first takes one transaction-scoped advisory lock, `pg_advisory_xact_lock(hashtext('permissions.closure'))`, so closure writers are serialized.
+`ancestors` holds rows only for inner nodes: a team with members, a folder with documents, an org with folders. A leaf (a user, a document) is one hop away: its ancestors are its `parents` rows plus their stored rows, which the `closure` view joins (no recursion). It is maintained by a row-level `before insert` and an `after delete` trigger on `parents` (updates are rejected; remove and add instead). Every trigger that does work first takes one transaction-scoped advisory lock, `pg_advisory_xact_lock(hashtext('permissions.closure'))`, so closure writers are serialized.
 
-- **Insert `c -> p`:** reject if `p` is already below `c` (cycle, SQLSTATE `23514`), reject if any new path would be deeper than 10 (`23514`), then insert `descendants-or-self(c) x ancestors-or-self(p)` with `on conflict ... depth = least(...)`.
-- **Delete `c -> p`:** only `c` and its descendants can change. Their closure rows are deleted and rebuilt from `parents` with a depth-bounded recursive walk.
+- **Insert `c -> p`:** reject if `p` is already below `c` (cycle, SQLSTATE `23514`), reject if any new path would be deeper than 10 (`23514`). If `p` has no stored rows yet (its first child), store its ancestors. If `c` is itself inner, every inner descendant-or-self of `c` gets every ancestor-or-self of `p` (`on conflict ... depth = least(...)`). A leaf child writes no closure rows. The trigger runs *before* the insert so that a multi-row insert sees only the rows inserted before it, as the original after-trigger (which never read `parents`) effectively did; a row that already exists is skipped (ON CONFLICT drops it).
+- **Delete `c -> p`:** only `c` and its descendants can change, and only inner ones have rows: theirs are deleted and rebuilt from `parents` with a depth-bounded recursive walk. A parent left without children loses its rows.
 - **Isolation:** the closure is computed from what the transaction sees *after* it gets the lock. Under read committed each statement takes a fresh snapshot, so it sees the previous writer's committed rows. Under serializable, a stale read is a serialization failure, which aborts. Under **repeatable read** the snapshot predates the lock and the closure would silently miss a concurrent writer's edge, so parent and role-definition writes raise `0A000` there. (Design C makes the same call.)
 - `role_closure` is rebuilt for one resource type under a second advisory lock (`permissions.roles`), with the same isolation guard.
 
@@ -249,6 +250,8 @@ Graduation (`b/40_graduation`) adds `define_role('document', ...)`, two `permit`
 
 ## Performance
 
+> The numbers in this section are the session 2 baselines. See [Optimizations (session 3)](#optimizations-session-3) for what changed and the interleaved before/after measurements.
+
 **Large and medium scale.** Serial runs, one engine at a time, 10 s per workload, 4 pgbench clients; full tables, plans and checksums are in [bench/baselines/COMPARISON.md](../bench/baselines/COMPARISON.md). Per-user visible-document checksums match A and C at every scale. p50 ms (p95 in `COMPARISON.md`):
 
 | workload | large (1M docs) | medium (100k docs) |
@@ -307,10 +310,114 @@ The built evaluator drives every check from `subject (+ its groups) × anchor` i
 | --- | --- |
 | `grant_role`, `revoke_role`, `set_attrs`, `permit`, `forbid` | one row; no closure work |
 | `define_role` | rebuild `role_closure` for one resource type (tens of rows) |
-| `add_parent(c, p)` | `|descendants-or-self(c)| × |ancestors-or-self(p)|` closure rows, after cycle and depth checks |
-| `remove_parent(c, p)` | delete and rebuild closure for `c` and its descendants |
+| `add_parent(c, p)` | `|inner descendants-or-self(c)| × |ancestors-or-self(p)|` closure rows if `c` has children, none for a leaf (plus `p`'s own rows on its first child), after cycle and depth checks |
+| `remove_parent(c, p)` | delete and rebuild closure for `c` and its inner descendants; nothing for a leaf |
 
-All parent writes serialize on one advisory lock. The sharing seed (1,047 parent edges, 2,722 closure rows) loads in about 1 s at small scale.
+All parent writes serialize on one advisory lock. (Session 2 numbers, before the inner-node closure: the sharing seed, 1,047 parent edges and 2,722 closure rows, loaded in about 1 s at small scale.)
+
+## Optimizations (session 3)
+
+Goal: cut B's measured weak spots without changing the policy model, the closure-on-write approach or the concurrency rules. Semantics are unchanged: the suite still passes (15/15 files, 172/172 assertions) and the per-user checksums of all four read policies match A and C at small, medium (default, deep, wide) and large.
+
+**How it was measured.** Two other agents were benchmarking on the same machine, so absolute numbers are noisy and **every before/after below is interleaved**: the original prototype (kept as `bench/results/optb/b-orig.sql`, git-ignored) and each step were loaded into separate databases of one private cluster with the same seeds and the same `VACUUM FULL ANALYZE` steps as `bench/run.sh`. pgbench then alternated between them with the bench's own workload files, 5-10 s per run, at least two rounds each. Values are p50 ms, 1 client unless marked "4c". Each step was also checked with `EXPLAIN (ANALYZE, BUFFERS)` and with auto_explain on the functions' nested statements, after warming up so the plan cache had chosen its steady-state plan. Seed times and sizes are single runs on a loaded machine and are not interleaved.
+
+**Correctness checks beyond the suite.** Two differential fuzzers, original against new engine (scripts in `bench/results/optb/`):
+- *closure*: 168k random `add_parent` / `remove_parent` / `delete_entity` / multi-row inserts into `parents` on graphs of up to 30 nodes with long chains (720 depth-cap rejections, 6.6k cycle rejections). After every operation it compares the outcome (`ok`, or SQLSTATE plus message, including the reported depth) and the full closure (every pair with its shortest depth), and checks that the stored rows are exactly the inner nodes' closure. 0 differences.
+- *reads*: 120 random worlds (nested teams, folders in orgs, documents with and without `parents` rows, expired grants, permits and forbids via folder or org, `principal_in`, public documents) comparing `can_for` with and without the row, `ids_for` (resource ids and every projection), `denied_ids_for`, `allows_all_for`, `denies_all_for`, `explain` (with multiplicity), `who_can`, `is_in` and `users_with_role`. 119k compared results, 0 differences.
+
+### What changed, in order
+
+**1. `collate "C"` on every id, type and role column** (`entities`, `parents`, `ancestors`, `roles`, `role_implies`, `role_closure`, `role_grants`). The cluster's default collation is `en_SG.UTF-8`, so every B-tree comparison, join and sort on a uuid-as-text went through `strcoll`. In wide `ids()`, the `distinct` sort of 6.7k ids took 19 of 29 ms. Equality doesn't change under a deterministic collation; only the order of `ids()` arrays does (the specs compare sets). glibc's `strcoll` is slower than macOS's, so Docker or Linux should gain more.
+
+| workload | before | after |
+| --- | --- | --- |
+| `share_list_objects` medium wide | 24.5-25.3 | 6.8 |
+| `share_select_page` medium wide | 66-69 | 30.6 |
+| `write_nest_team` medium | 55 | 18 |
+| `parents_select_page` medium | 28-30 | 7.8 |
+| `nest_check` medium | 2.2 | 0.79 |
+
+**2. Read the right grants, once, by primary key.**
+- `_ids`: a policy-role list (`pr`: each role policy, its anchor type and every role that satisfies it, from `role_closure`) drives `held`, which probes the `role_grants` primary key with `resource_type = any(anchor types)` and `role = any(satisfying roles)`. Before, `held` read every grant of the subject and its groups (6.7k document grants per user in the wide shape, even for the tenant-only `scopes_with_permission` arm) and joined them to `role_closure` with a 100k-comparison nested loop. `distinct` now runs as its own step, so it can hash.
+- `_matches`: the subject's groups, the resource's anchors and `_parent_keys` (before: called twice) are computed once into arrays. Grants are probed with one `lateral (... offset 0)` primary-key lookup per (subject or group, anchor), with the `role_closure` check inside it.
+- `role_grants (resource_type, resource_id)` became `(resource_type, resource_id, principal_type, principal_id)`. The generic plan kept picking the resource index, which reads every grant on a tenant (one per member, about 80-200) and filters by subject. With the principal columns, either index is an exact probe. +2.1 MB at large.
+
+| workload | before | after |
+| --- | --- | --- |
+| `share_list_objects` medium wide | 6.9 | 3.7 |
+| `share_select_page` medium wide | 31.8 | 16.8 |
+| `nest_check` medium | 0.80 | 0.40 |
+| `rbac_check` medium | 0.50 | 0.40 |
+
+**3. PL/pgSQL instead of SQL for the hot wrappers** (`can`, `can_for`, `ids`, `denied_ids`, `allows_all(_for)`, `denies_all(_for)`, `denied_ids_for`, `_all`, `_parent_keys`, `has_permission`, `has_role`, `scopes_with_permission`, `current_subject_id/type`). A SQL function with a `SET` clause or `security definer` is never inlined, and in Postgres 16 its body is parsed and planned again on every outer query; `_parent_keys` alone cost 0.08-0.2 ms per call. PL/pgSQL caches the plans per session. `nest_check` 0.39 → 0.33, `rbac_check` 0.39 → 0.29, wide `share_list_objects` 3.9 → 3.7.
+
+**4. Closure rows for inner nodes only** (the change behind `write_nest_team` and the parents storage). `ancestors` keeps rows only for entities that have children; a leaf's ancestors are its `parents` rows plus their stored rows (the `closure` view, one join, no recursion). Nesting the 1,000-member team writes the team's 1 × (1 + ancestors) rows instead of 1,001 × (1 + ancestors). Filing a document in a folder writes only its `parents` row, and removing a member rebuilds nothing. C already stores "containers only". What it took:
+- the cycle and depth checks are unchanged in meaning; the deepest descendant is the deepest stored inner descendant plus one level of children, computed exactly;
+- the insert trigger runs `before insert`, so multi-row inserts stay edge-by-edge (an `after` trigger would see the whole statement's rows while the closure is half updated; the fuzzer caught it, with duplicate-upsert `21000` errors and missing rows);
+- the `closure` view leaves out pairs more than 10 apart, which matches the original. See the latent bug under remaining limits;
+- every read that joins the view uses `cross join lateral (... offset 0)` (see the planner trap in Weaknesses; before that fix `nest_check` was 22 ms and `parents_select_page` 100 ms);
+- `_matches` and `_ids` pin `plan_cache_mode = force_generic_plan` (the plan cache kept re-planning them with custom plans: 0.66 → 0.11 ms per `can()`);
+- `parents (parent_type, parent_id)` became `(parent_type, parent_id, child_type, child_id)` for index-only descendant reads. The old index was 7 MB at large thanks to B-tree deduplication, the new one 120 MB, but at large single-branch `parents_select_page` is 18.7 vs 26.7 ms and `parents_select_count` 29.5 vs 55 ms with it (interleaved), so it stays.
+
+| workload | before (step 3) | after |
+| --- | --- | --- |
+| `write_nest_team` medium | 19.7 | 0.17-0.21 |
+| `write_nest_team` medium, 4c | 75-84 | 0.65-0.70 |
+| `nest_check` medium | 0.33 | 0.23 |
+| `parents_select_page` medium | 8.5 | 6.4 |
+| `share_list_objects` / `share_select_page` medium wide | 3.9 / 16.6 | 4.05 / 18.0 (worse, see below) |
+
+Storage and seed time (not interleaved): medium parents phase 86.3 → 46.4 MB, seed 15.5 → 4.2 s; medium wide after sharing 225.9 → 105.3 MB, seed 37 → 13 s; large after the single-branch parents seed 762.8 → 377.9 MB, seed 252 → 51 s on the loaded machine (the session-2 baseline measured 167 s). A document with a parent link now costs one `parents` row plus its two index entries, instead of 3 rows. The cost: a user's groups are one hop further away, so wide reads (50 direct teams per user) are about 5-8% slower than after step 3.
+
+**5. `_all()` skips `_candidate_policies` when no allow-all or deny-all policy exists.** `ids_for` asks it about forbids on every call. `scopes_with_permission` 87 → 78 µs per call.
+
+**6. `ids()` and `denied_ids()` are no longer run at plan time.** RLS uses `= any (array(select unnest(permissions.ids(...))::uuid))`. To estimate `unnest()`'s rows, the planner evaluates its argument when it can (`estimate_expression_value` in `array_unnest_support`), and a STABLE function with constant arguments qualifies. So every RLS query ran `ids()` twice: on the original wide sharing page, planning took 30 of 68 ms. (The A agent found the same thing independently.) Fix: the default of the last argument, `p_resource_condition`, is now `permissions._unfolded_null()`, a trivial VOLATILE function that returns null. A call with a non-constant argument isn't folded, `ids()` stays STABLE and reads the calling query's snapshot, and the signature is unchanged. I didn't simply mark `ids()` VOLATILE (A's fix): under read committed a volatile function takes a fresh snapshot for each query it runs, so the grants would be read at a later instant than the rows they filter, which weakens the single-snapshot guarantee within a statement. Policies get the default when they are created, so this applies to policies created after this version is installed. Wide page planning time 4.7 → 1.35 ms.
+
+| workload | before (step 5) | after |
+| --- | --- | --- |
+| `share_select_page` medium wide | 18.8 | 14.4 |
+| `parents_select_page` medium | 6.1 | 5.1 |
+| `parents_select_count` medium | 5.6 | 4.1 |
+| `parents_proj_select_page` medium | 0.80 | 0.60 |
+
+### Original vs final (interleaved)
+
+| workload | original | final | C (session-2 baseline, 4c) |
+| --- | --- | --- | --- |
+| `write_nest_team` large, 4c | 307 | 0.57-0.65 | 333 |
+| `write_nest_team` large, 1c | 71-80 | 0.17 | |
+| `write_nest_team` medium wide / deep, 4c | 338 / 330-386 | 1.5-2.5 / 0.6 | 145 / 354 |
+| `nest_check` large, 4c | 3.3-3.9 | 0.37 (0.81 in a noisy rerun) | 0.26 |
+| `nest_check` large, 1c | 2.5 | 0.22 | |
+| `nest_check` medium wide / deep, 4c | 3.4 / 3.2-3.7 | 0.34 / 0.35 | 0.28 / 0.27 |
+| `share_list_objects` medium wide | 25 | 3.9 | 3.76 |
+| `share_select_page` medium wide | 70.5 (4c 73.7) | 15.1 (4c 15.7) | 10.72 |
+| `parents_select_page` large | 183-198 | 12-14 | 9.57 |
+| `parents_select_count` large | 206-220 | 24-25 | 22.08 |
+| `rbac_check` / `rbac_update_one` medium | 0.26 / 0.76 | 0.17 / 0.51 | |
+| `share_select_page` / `share_list_objects` medium | 0.82 / 0.25 | 0.66 / 0.20 | |
+| `parents_proj_select_page` medium | 0.98 | 0.60 | |
+
+`rbac_select_page`, `rbac_select_count`, `write_assign_role` and `write_share` didn't change beyond noise. Medium-default rows other than `parents_proj_select_page` are original vs step 5; step 6 only affects queries whose RLS calls `ids()` with default arguments.
+
+### Tried and dropped
+
+- **Forcing the primary-key probe in `_matches` with `lateral ... offset 0` alone.** The generic plan still used the `(resource_type, resource_id)` index inside the lateral, and the probe ran 270 times: `nest_check` 0.80 → 2.7 ms, `rbac_check` 0.50 → 0.91. Fixed by widening that index (step 2).
+- **Joining the `closure` view directly.** `nest_check` 22 ms and `parents_select_page` 100 ms (the view-join planner trap). Fixed with lateral joins (step 4).
+- **The narrow `parents (parent_type, parent_id)` index with the inner-node closure.** It saves 113 MB at large but makes single-branch reads 40-90% slower (step 4).
+- **`enable_hashjoin = off` for the subject's group expansion in wide** (hash join over the small inner-node `ancestors` vs 50 primary-key probes): no difference.
+- **Marking `ids()` VOLATILE**: rejected without measuring, for the snapshot reason in step 6.
+- **Caching `ids()` between plan time and execution** (in a setting keyed by statement): rejected. Planning and execution can use different snapshots under read committed, and keys can collide.
+- **Statement-level triggers with transition tables**: not useful here. `add_parent` inserts one row per statement, so a seed of 1M calls fires 1M statement triggers anyway. The inner-node closure removed the per-row closure work instead.
+
+### Remaining hard limits
+
+- **The RLS form costs what the array costs.** With 6.7k-20k ids, `unnest` plus `::uuid` takes 1.5-4.5 ms, and `id = any($1)` is a linear scan of the array for every row a filter checks (8 ms of the wide page's 15). C's policy casts the whole array (`(select f())::uuid[]`). B can't change the seeds' policy text.
+- **`scopes_with_permission` is still evaluated at plan time** (one argument, no default to hang the trick on). It costs about 1 ms in the wide shape. Fixing it needs a new parameter on a shared preset function.
+- **Explicitly passed constant arguments still fold**, e.g. `rls_expression`'s resource-conditioned groups (all four arguments). `rls_expression` could emit `(select permissions.ids(...))::uuid[]` instead, which is never folded. That changes the PLAN §4 fast-path form for all engines, so it isn't done here.
+- **One global closure lock.** Nesting is now about 0.2 ms when the nested group's members are leaves, so the lock is held briefly. Nesting a sub-tree with many inner nodes still writes `inner descendants × ancestors` rows under it.
+- **Wide memberships cost a hop.** A user's groups are `parents` rows plus their stored rows. With 50 teams per user that is about 0.3 ms per `ids()` call more than a fully stored closure.
+- **Latent bug kept for compatibility (pre-existing in the original):** removing a shortcut edge can make the shortest remaining path between two entities longer than 10. The original's delete rebuild stops at depth 10 and silently drops that pair (a partial answer, against "the depth cap is enforced on write"). The new engine reproduces this exactly, through the view's `depth < 10` filter and the capped depth computation, because the fuzzer compares against the original. The right fix is to reject such a delete with `23514` (or allow any depth). That is a semantic change, left as a decision.
 
 ## Weaknesses and risks
 
@@ -327,8 +434,10 @@ All parent writes serialize on one advisory lock. The sharing seed (1,047 parent
 - **`who_can`'s `('*', '*')` row is not net of forbids.** A no-role permit with no principal restriction (public access) returns one wildcard row; a forbid on one user can't be expressed as an exception to it. A's `list_subjects` row for `user:*` and C's null row behave the same way. Unlike A, B labels the row `('*', '*')` even when the policy's `principal_type` is `user`.
 - **A document without a value in the RLS parent column** (e.g. `folder_id is null`) is reachable only through its own grants unless the policy also has an `org_id` branch.
 - **`ids()` is exact only for unconditioned policies.** With resource-conditioned permits or forbids, `ids_for` used as a "list" is an approximation. RLS is exact because it compiles the conditions.
+- **Plan pinning.** `_matches` and `_ids` set `plan_cache_mode = force_generic_plan`: the plan cache otherwise kept choosing custom plans, re-planning the lateral and view queries on every call (0.66 ms vs 0.11 ms per `can()`).
 - **Planner trap in `_matches`: set-returning helpers need a `rows` estimate.** A function scan is estimated at 1000 rows by default. `_parent_keys()` returns about one row, but once `ancestors` had been analyzed with real data (92k rows) the planner hash-joined a full seq scan of `ancestors` against it, and `can()` went from about 1.3 ms to 17-22 ms (wide shape, `nest_check`). `_parent_keys` is now declared `rows 1`, the plan probes the `ancestors` primary key again, and `nest_check` p50 is 0.79 ms. Any new set-returning helper joined to `ancestors` or `role_grants` needs the same.
-- **Closure write amplification and one global lock.** Nesting a big group in another writes the product of their sizes. Row-level triggers mean removing a 1,000-member team does 1,000 small rebuilds. Membership churn in the tens per second is fine; org-chart-sized graphs with constant churn are not. Repeatable read is refused for these writes.
+- **Closure write amplification and one global lock.** Nesting a group writes `inner descendants × ancestors` rows: nesting a 1,000-member team of users writes about 5 rows (0.2 ms), but nesting a team that contains hundreds of sub-teams still writes the product. Removing members (leaves) rebuilds nothing. All closure writers still serialize on one lock, so a slow nest of a deep sub-tree blocks every other membership write. Repeatable read is refused for these writes.
+- **Planner trap in the `closure` view.** Its second branch is a join, so Postgres can't flatten it into an append or push a join condition from an outer relation into it; it computes every inner node's descendants and filters (`nest_check` went from 0.3 to 22 ms when it was first joined). Every read joins it as `cross join lateral (... offset 0)` or with parameters only. New read paths must do the same.
 - **Text ids and casts.** `::uuid` in RLS fails the whole query if any stored id for that type isn't a uuid. An id type per resource type, validated in `grant_role`, would fix this.
 - **Security definer everywhere.** A bug in the read functions is a privilege bug. `search_path = ''` and no dynamic SQL in the read path limit the damage. The functions aren't `leakproof` (that needs a superuser).
 - **Context from settings.** `permissions.context` and `permissions.subject_id` can be set by any session on plain Postgres. On Supabase the JWT wins, but conditions on `context.*` should only use JWT claims or server-set values.
@@ -351,6 +460,7 @@ All parent writes serialize on one advisory lock. The sharing seed (1,047 parent
 12. **Parameter names:** `permit` and `forbid` take named arguments without a prefix (`roles =>`, `via =>`, `resource_id =>`, `condition =>`, `principal_id =>`), matching the examples in the original doc.
 13. **`can()` fails closed on missing forbid inputs** (added after review, 2026-10-28): a forbid that could apply and reads a parent or attribute absent from `resource` raises `22023` instead of not matching. `who_can` and `explain` inherit it.
 14. **Principal-typed jsonb keys are not parents** (same review): `{"user": ...}` or `{"team": ...}` is an attribute unless a policy on the resource type anchors `via` that type. Before, every key was a parent, and an author column named `user` made the author's orgs anchors of the row.
+15. **Closure rows for inner nodes only** (session 3): `ancestors` stores rows only for entities with children, the `closure` view adds the leaves, and the insert trigger is `before insert`. Same answers, cycle and depth checks; see [Optimizations (session 3)](#optimizations-session-3).
 
 ## Open questions
 
@@ -359,5 +469,5 @@ All parent writes serialize on one advisory lock. The sharing seed (1,047 parent
 3. Explicit subject: is `revoke` on `*_for` functions enough, or should they check membership of a dedicated `permissions_admin` role?
 4. Should parent keys in the `resource` jsonb be explicit (declared parent types per resource type, Cedar's `memberOfTypes`) rather than "every key except principal types"? Recommended: it would replace the derived principal-type rule and let `can()` name exactly which keys a call must pass.
 5. Should `apply_rls` exist at all (it is the only `execute` in the extension), or should we ship only `rls_expression`?
-6. Is one global advisory lock acceptable for closure maintenance, or do we need per-component locks? Statement-level triggers would also cut the per-row cost of big membership changes.
+6. Is one global advisory lock acceptable for closure maintenance, or do we need per-component locks? Since session 3 the lock is held for about 0.2 ms when a group of users is nested (inner-node closure), so this matters mainly for nesting large sub-trees.
 7. Principal-to-resource conditions (`resource.owner_id == principal.id`): allow them as a compiled SQL predicate comparing a column with `current_subject_id()`? That's partially evaluable, but the splitter rejects it today.
