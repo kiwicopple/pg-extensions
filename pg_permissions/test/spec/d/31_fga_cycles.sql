@@ -1,12 +1,22 @@
 -- Goal: pin D's answer for a cycle under a subtract where the subtract is
--- monotone (designs/d-per-model.md §5, §8). This is D's choice, not a verified
--- OpenFGA answer: OpenFGA's default strategy (LocalChecker.hasCycle, then
--- exclusion() in internal/graph/check.go) makes the difference false, but for
--- a recursive userset like `blocked: [user, document#blocked]` its planner
--- may pick the recursive resolver instead, which never reports a cycle and
--- would answer true. The upstream suite has no such case. D follows the
--- default strategy: under a subtract it always uses the recursive evaluator,
--- never the set-based search (which would compute plain false for blocked).
+-- monotone (designs/d-per-model.md §5, §8). D follows OpenFGA's default
+-- strategy (LocalChecker.hasCycle, then exclusion() in internal/graph/check.go):
+-- the cycle makes the difference false. This is NOT what OpenFGA answers for
+-- this exact model. Checked against openfga/openfga v1.22.1 (commit 44054f5,
+-- image sha256:b852071314f1fda1194d341a6ebac0a4f619b3cd87a6626d2ccc7048af4ec671,
+-- memory datastore, default settings and enable-check-optimizations, 600+ runs
+-- over fresh containers and stores): check(user:jon, viewer, document:1) is
+-- true, list_objects returns {document:1, document:3}, list_users returns {};
+-- blocked alone is false and document:3 is true, as here. For a recursive
+-- userset like `blocked: [user, document#blocked]` the planner picks the
+-- recursive resolver, which never reports a cycle; its cold-start priors
+-- (150 ms against 500 ms for the default resolver) make that choice in
+-- practice every time. The same model with a second weight for `user` on
+-- blocked (so the recursive resolver doesn't apply) gives false, as D does.
+-- So the check and list_objects assertions below pin D's deliberate
+-- difference, not OpenFGA's answer. The upstream suite has no such case.
+-- Under a subtract D always uses the recursive evaluator, never the set-based
+-- search (which would compute plain false for blocked).
 \ir ../../fixtures/fga_suite.sql
 
 -- type user
