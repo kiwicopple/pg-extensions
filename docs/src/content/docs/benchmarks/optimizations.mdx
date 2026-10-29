@@ -1,0 +1,48 @@
+---
+title: Optimizations, before and after
+description: What the session 3 optimization pass changed on each pg_permissions engine, measured on Docker Postgres 18, with ranking changes.
+---
+
+import OptKey from '../../../components/opt/OptKey.astro';
+import OptRbac from '../../../components/opt/OptRbac.astro';
+import OptSeeds from '../../../components/opt/OptSeeds.astro';
+import OptRanking from '../../../components/opt/OptRanking.astro';
+import OptVersions from '../../../components/opt/OptVersions.astro';
+import OptTakeaways from '../../../components/opt/OptTakeaways.astro';
+
+All three engines went through one optimization pass. This page puts the Docker Postgres 18 runs from before the pass (untagged
+runs) next to the runs after it (tagged `opt`): same machine, same configurations, same pgbench settings, one run each.
+Before and after produce identical results (every per-policy checksum matches); only the cost changed.
+Engine colors are the same as everywhere else:
+<strong style="color:var(--eng-a)">A</strong> tuple core, <strong style="color:var(--eng-b)">B</strong> policy first,
+<strong style="color:var(--eng-c)">C</strong> compiled model. In the charts a **hollow dot is before** and a **filled dot is after**.
+
+The written analysis, with the claims each optimization made and how they held up, is the synced
+[optimizations report](../optimizations-report/). The other Postgres versions are on the [Postgres versions](../postgres-versions/) page,
+and the rest of the numbers on the [dashboard](../dashboard/).
+
+## Takeaways
+
+Computed from the data below.
+
+<OptTakeaways />
+
+## Key workloads
+
+<OptKey />
+
+## RBAC, the control group
+
+<OptRbac />
+
+## Seed time and storage
+
+<OptSeeds />
+
+## Ranking changes
+
+<OptRanking />
+
+## Same speedups on 16, 17 and 18?
+
+<OptVersions />

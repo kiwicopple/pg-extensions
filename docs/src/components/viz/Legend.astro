@@ -4,7 +4,7 @@ import { ENGINES } from '../../lib/chart';
 interface Props {
 	designs?: string[];
 	kind?: 'bar' | 'line';
-	extra?: { label: string; kind: 'whisker' }[];
+	extra?: { label: string; kind: 'whisker' | 'before' | 'after' }[];
 }
 const { designs = ['a', 'b', 'c'], kind = 'bar', extra = [] } = Astro.props;
 ---

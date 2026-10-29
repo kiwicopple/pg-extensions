@@ -1,0 +1,50 @@
+---
+import Frame from '../viz/Frame.astro';
+import Legend from '../viz/Legend.astro';
+import Dumbbell from '../viz/Dumbbell.astro';
+import { BASELINES_URL } from '../../lib/bench';
+import { fmt } from '../../lib/chart';
+import { KEY_CASES, MAIN_MAJOR, allChanges, caseConfig, describeChange, dumbbellRows, beforeAfterText, pairFor } from '../../lib/optimizations';
+
+const pair = pairFor(MAIN_MAJOR);
+const rows = dumbbellRows(pair, KEY_CASES);
+const ch = allChanges(KEY_CASES);
+const big = [...ch].sort((a, b) => b.r - a.r).slice(0, 4);
+const flat = ch.filter((x) => x.dir === 'same');
+const takeaway = ch.length
+	? `Largest changes: ${big.map((x) => describeChange(x, fmt)).join('; ')}.` +
+		(flat.length
+			? ` Not moved (within 20%): ${flat.map((x) => `${x.design.toUpperCase()} ${x.c.cls.toLowerCase()} (${fmt(x.before)} to ${fmt(x.after)} ms)`).join(', ')}.`
+			: '')
+	: '';
+---
+
+{
+	rows.length ? (
+		<Frame
+			title="Key workloads, before and after"
+			subtitle={`${beforeAfterText(pair)}. p50 in milliseconds on a log axis, lower is better. The sharing reads use the medium wide shape, the others the large default (1M documents).`}
+			takeaway={takeaway}
+			source={[{ href: BASELINES_URL, label: 'per-run reports (pg18-docker-*, pg18-docker-*-opt)' }]}
+		>
+			<Legend slot="legend" extra={[{ label: 'before', kind: 'before' }, { label: 'after', kind: 'after' }]} />
+			<Dumbbell rows={rows} unit="ms" context="p50 latency before and after the optimizations, key workloads, by engine" />
+			<Fragment slot="table">
+				<table>
+					<thead>
+						<tr><th>Workload</th><th>Configuration</th><th>Engine</th><th>Before p50 ms</th><th>After p50 ms</th><th>Change</th></tr>
+					</thead>
+					<tbody>
+						{KEY_CASES.flatMap((c) =>
+							ch.filter((x) => x.c.id === c.id).map((x) => (
+								<tr><td>{c.title}</td><td>{caseConfig(c)}</td><td>{x.design.toUpperCase()}</td><td>{fmt(x.before)}</td><td>{fmt(x.after)}</td><td>{x.text}</td></tr>
+							)),
+						)}
+					</tbody>
+				</table>
+			</Fragment>
+		</Frame>
+	) : (
+		<div class="viz-note"><p>Needs both the untagged and the <code>opt</code> Docker PG {MAIN_MAJOR} runs; not available in the current data.</p></div>
+	)
+}

@@ -40,9 +40,9 @@ if (w0 && pt('a') && pt('c')) {
 	panels.length ? (
 		<Frame
 			title="Read cost against write cost"
-			subtitle="Each point is one engine. x = sharing page read (share_select_page p50), y = nest a 1,000-member team (write_nest_team p50), both ms on log axes. Nearer the bottom left is better."
+			subtitle={`${s!.label}. Each point is one engine. x = sharing page read (share_select_page p50), y = nest a 1,000-member team (write_nest_team p50), both ms on log axes. Nearer the bottom left is better.`}
 			takeaway={takeaway}
-			source={[{ href: comparisonLink('large', 'default'), label: 'COMPARISON.md (Nesting)' }]}
+			source={[{ href: comparisonLink('large', 'default'), label: 'COMPARISON.md (local PG 16, before optimization: Nesting)' }]}
 		>
 			<Legend slot="legend" />
 			<div class="viz-panels">

@@ -1,0 +1,76 @@
+---
+import { fmt } from '../../lib/chart';
+import { KEY_CASES, MAIN_MAJOR, RBAC_CASES, SEED_TIME_CASES, STORAGE_CASES, allChanges, describeChange, pairFor, rankingRows } from '../../lib/optimizations';
+
+const pair = pairFor(MAIN_MAJOR);
+const key = allChanges(KEY_CASES);
+const all = allChanges([...KEY_CASES, ...RBAC_CASES, ...SEED_TIME_CASES, ...STORAGE_CASES]);
+const biggest = [...key].sort((a, b) => b.r - a.r)[0];
+const byEngine = (['a', 'b', 'c'] as const).map((d) => {
+	const mine = key.filter((x) => x.design === d);
+	const best = [...mine].sort((a, b) => b.r - a.r)[0];
+	const faster = mine.filter((x) => x.dir === 'faster').length;
+	return { d, best, faster, n: mine.length };
+});
+const rbac = allChanges(RBAC_CASES);
+const rbacMoved = rbac.filter((x) => x.dir !== 'same').length;
+const slower = all.filter((x) => x.dir === 'slower');
+const ranks = rankingRows();
+const changed = ranks.filter((r) => r.changed);
+const nest = ranks.find((r) => r.c.key === 'write_nest_team');
+const nestAfter = nest ? nest.after : {};
+const stillWorst = ranks.filter((r) => r.ga.length > 1 && r.ga[r.ga.length - 1].length === 1 && r.gb[r.gb.length - 1].join() === r.ga[r.ga.length - 1].join());
+---
+
+{
+	pair.before && pair.after && key.length ? (
+		<ul>
+			<li>
+				<strong>Biggest single win:</strong> {describeChange(biggest, fmt)}. Per engine, the largest gain on the key workloads is{' '}
+				{byEngine.map((e, i) => (
+					<>
+						{i > 0 && '; '}
+						{e.best ? describeChange(e.best, fmt) : `${e.d.toUpperCase()}: none`}
+					</>
+				))}
+				.
+			</li>
+			<li>
+				<strong>Who gained how much:</strong>{' '}
+				{byEngine.map((e, i) => (
+					<>
+						{i > 0 && '; '}
+						{e.d.toUpperCase()} is more than 20% faster on {e.faster} of {e.n} key workloads
+					</>
+				))}
+				.
+			</li>
+			<li>
+				<strong>RBAC did not move:</strong> {rbac.length - rbacMoved} of {rbac.length} RBAC measurements are within 20% of their
+				old values.
+			</li>
+			<li>
+				<strong>Ranking:</strong> {changed.length} of {ranks.length} workload classes changed order or tie pattern.
+				{stillWorst.length > 0 && <> The slowest engine is unchanged on {stillWorst.map((r) => r.c.cls).join('; ')}.</>}
+			</li>
+			{
+				nest && nestAfter.a != null && nestAfter.c != null && (
+					<li>
+						<strong>What is still expensive:</strong> nesting a team still costs {fmt(nestAfter.c)} ms on C against{' '}
+						{fmt(nestAfter.a)} ms on A{nestAfter.b != null && <> and {fmt(nestAfter.b)} ms on B</>}.
+					</li>
+				)
+			}
+			{
+				slower.length > 0 && (
+					<li>
+						<strong>Costs:</strong> {slower.length} measurement{slower.length > 1 ? 's' : ''} got more than 20% worse:{' '}
+						{slower.map((x) => `${x.design.toUpperCase()} ${x.c.cls.toLowerCase()} (${fmt(x.before)} to ${fmt(x.after)} ${x.c.metric === 'p50' ? 'ms' : x.c.metric === 'seed_s' ? 's' : 'MB'})`).join(', ')}.
+					</li>
+				)
+			}
+		</ul>
+	) : (
+		<p>Needs both the untagged and the <code>opt</code> Docker PG {MAIN_MAJOR} runs.</p>
+	)
+}

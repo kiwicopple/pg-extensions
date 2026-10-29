@@ -38,7 +38,7 @@ call it from inside row-level security, so the database enforces access, not the
 		visible-document sets on every engine.
 	</Card>
 	<Card title="Not yet measured" icon="warning">
-		pg_tle installs, concurrency beyond 4 clients, and (so far) any Postgres version other than 16. See the [Postgres versions](./benchmarks/postgres-versions/) page for what exists.
+		pg_tle installs, concurrency beyond 4 clients, and Postgres versions other than 16, 17 and 18. See the [Postgres versions](./benchmarks/postgres-versions/) page for what exists.
 	</Card>
 </CardGrid>
 
@@ -54,7 +54,8 @@ per-object sharing, where the engines trade read cost against nesting cost and c
 <CardGrid>
 	<LinkCard title="Decision guide" description="Scorecard, when each engine wins, hybrids, open questions." href="./decision/guide/" />
 	<LinkCard title="Benchmarks dashboard" description="Charts for every comparison, with takeaways and table views." href="./benchmarks/dashboard/" />
-	<LinkCard title="Postgres versions" description="pg16, pg17 and pg18 side by side, as the data arrives." href="./benchmarks/postgres-versions/" />
+	<LinkCard title="Optimizations" description="Before and after the optimization pass, per engine, with ranking changes." href="./benchmarks/optimizations/" />
+	<LinkCard title="Postgres versions" description="pg16, pg17 and pg18 side by side, within one environment and engine build." href="./benchmarks/postgres-versions/" />
 	<LinkCard title="Plan and goals" description="What it must do, the rbac preset API, evaluation criteria." href="./overview/plan/" />
 	<LinkCard title="Design docs" description="One per engine: A tuple core, B policy first, C compiled model." href="./designs/a-tuple-core/" />
 	<LinkCard title="Build journal" description="How it was built, including the dead ends." href="./journal/build-journal/" />

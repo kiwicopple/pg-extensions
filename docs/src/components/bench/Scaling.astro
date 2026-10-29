@@ -2,11 +2,12 @@
 import Frame from '../viz/Frame.astro';
 import Legend from '../viz/Legend.astro';
 import LinePanel from '../viz/LinePanel.astro';
-import { primary, workloadInfo, p50s, times, comparisonLink, SCALE_DOCS } from '../../lib/bench';
+import { primary, scalingSeries, workloadInfo, p50s, times, comparisonLink, SCALE_DOCS } from '../../lib/bench';
 import { engine, fmt } from '../../lib/chart';
 import type { Design } from '../../lib/chart';
 
-const s = primary;
+const s = scalingSeries();
+const otherThanPrimary = !!s && s !== primary;
 const KEY = ['rbac_check', 'share_select_page', 'parents_proj_select_page', 'parents_select_page', 'write_nest_team', 'nest_check'];
 const scales = ['small', 'medium', 'large'].filter((sc) => s?.configs.some((c) => c.scale === sc && c.shape === 'default'));
 const cats = scales.map((sc) => `${SCALE_DOCS[sc]}`);
@@ -29,7 +30,7 @@ if (scales.length >= 2) {
 	};
 	const sh = designs.map((d) => g('share_select_page', d)).filter(Boolean).join(', ');
 	const pg = designs.map((d) => g('parents_select_page', d)).filter(Boolean).join(', ');
-	takeaway = `From ${SCALE_DOCS[first]} to ${SCALE_DOCS[last]} documents, the sharing page grows slowly (${sh}). The single-branch parents page tracks the number of visible ids and grows with it (${pg}). RBAC and nest_check stay close to flat.`;
+	takeaway = `From ${SCALE_DOCS[first]} to ${SCALE_DOCS[last]} documents, the sharing page grows slowly (${sh}). The single-branch parents page tracks the number of visible ids and grows with it (${pg}). RBAC stays close to flat.`;
 }
 ---
 
@@ -37,10 +38,10 @@ if (scales.length >= 2) {
 	panels.length && scales.length >= 2 ? (
 		<Frame
 			title="Scaling from 10k to 1M documents"
-			subtitle="p50 latency, default shape, log axis. x = documents in the table."
+			subtitle={`${s!.label}: p50 latency, default shape, log axis. x = documents in the table.${otherThanPrimary ? ` The small and medium default scales exist only in this series (${primary?.label} has the large default only), so this chart is not drawn from the same runs as the others on this page, and its numbers predate the optimization pass.` : ''}`}
 			takeaway={takeaway}
 			source={[
-				{ href: comparisonLink('large', 'default'), label: 'COMPARISON.md' },
+				{ href: comparisonLink('large', 'default'), label: 'COMPARISON.md (local PG 16)' },
 			]}
 		>
 			<Legend slot="legend" designs={designs} kind="line" />

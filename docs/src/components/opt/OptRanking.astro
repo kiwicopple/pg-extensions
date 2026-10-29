@@ -1,0 +1,109 @@
+---
+import Frame from '../viz/Frame.astro';
+import { fmt } from '../../lib/chart';
+import { MAIN_MAJOR, TIE, UNIT, caseConfig, pairFor, rankingRows } from '../../lib/optimizations';
+import type { Design } from '../../lib/chart';
+
+const pair = pairFor(MAIN_MAJOR);
+const rows = rankingRows();
+const changed = rows.filter((r) => r.changed);
+const ties = (g: Design[][]) => g.length === 1 && g[0].length > 1;
+---
+
+{
+	rows.length && pair.before && pair.after ? (
+		<Frame
+			title="Ranking, before and after"
+			subtitle={`${pair.before.label} against ${pair.after.label}. Best first. Engines within ${Math.round((TIE - 1) * 100)}% of the best in a group are tied (=); "<" means the next group is slower.`}
+			takeaway={`${changed.length} of ${rows.length} workload classes changed order or tie pattern. ` +
+				(changed.length ? `Changed: ${changed.map((r) => r.c.cls).join('; ')}. ` : '') +
+				(rows.filter((r) => ties(r.ga) && !ties(r.gb)).length
+					? `Now a tie between all three engines: ${rows.filter((r) => ties(r.ga) && !ties(r.gb)).map((r) => r.c.cls).join('; ')}.`
+					: '')}
+		>
+			<div class="rank-wrap">
+				<table class="rank">
+					<thead>
+						<tr><th>Workload class</th><th>Before</th><th>After</th><th>Changed</th></tr>
+					</thead>
+					<tbody>
+						{rows.map((r) => (
+							<tr>
+								<td>{r.c.cls}<div class="cfg">{caseConfig(r.c)}</div></td>
+								{[
+									{ g: r.gb, v: r.before },
+									{ g: r.ga, v: r.after },
+								].map((x) => (
+									<td>
+										<div class="order">
+										{x.g.map((grp, gi) => (
+											<>
+												{gi > 0 && <span class="op">&lt;</span>}
+												{grp.map((d, di) => (
+													<>
+														{di > 0 && <span class="op">=</span>}
+														<span class="chip" style={`--c:var(--eng-${d})`} title={`${d.toUpperCase()}: ${fmt(x.v[d])} ${UNIT[r.c.metric]}`}>{d.toUpperCase()}</span>
+													</>
+												))}
+											</>
+										))}
+										</div>
+										<div class="vals">{(['a', 'b', 'c'] as Design[]).filter((d) => x.v[d] != null).map((d) => `${fmt(x.v[d])}`).join(' / ')} {UNIT[r.c.metric]}</div>
+									</td>
+								))}
+								<td class="chg">{r.changed ? 'changed' : 'same'}</td>
+							</tr>
+						))}
+					</tbody>
+				</table>
+			</div>
+			<p class="viz-sub" style="margin-top:0.5rem">Values under each ranking are A / B / C.</p>
+		</Frame>
+	) : null
+}
+
+<style>
+	.rank-wrap {
+		overflow-x: auto;
+	}
+	.rank th,
+	.rank td {
+		text-align: left !important;
+		vertical-align: middle;
+		white-space: nowrap;
+	}
+	.rank .cfg {
+		color: var(--viz-muted);
+		font-size: 0.7rem;
+	}
+	.rank .order {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+	}
+	.chip {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.25rem;
+		height: 1.25rem;
+		border-radius: 4px;
+		background: var(--c);
+		color: #fff;
+		font-weight: 700;
+		font-size: 0.7rem;
+	}
+	.op {
+		color: var(--viz-ink-2);
+		font-weight: 600;
+		padding: 0 0.1rem;
+	}
+	.vals {
+		margin-top: 0.15rem;
+		color: var(--viz-muted);
+		font-size: 0.7rem;
+	}
+	.chg {
+		font-weight: 600;
+	}
+</style>

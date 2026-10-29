@@ -30,9 +30,9 @@ if (lg && lg.proj.a && lg.single.a && lg.proj.c && lg.single.c) {
 	panels.length ? (
 		<Frame
 			title="Parents: two-arm projection against single-branch policy"
-			subtitle="First page p50, default shape, ms on a log axis shared by the three panels."
+			subtitle={`${s!.label}: first page p50, default shape, ms on a log axis${panels.length > 1 ? ` shared by the ${panels.length} panels` : ''}. ${panels.length === 1 ? 'This series has the large default scale only.' : ''}`}
 			takeaway={takeaway}
-			source={[{ href: comparisonLink('large', 'default'), label: 'COMPARISON.md (policy shape)' }]}
+			source={[{ href: comparisonLink('large', 'default'), label: 'COMPARISON.md (local PG 16, before optimization: policy shape)' }]}
 		>
 			<Legend slot="legend" />
 			<div class="viz-panels">

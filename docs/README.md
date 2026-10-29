@@ -31,7 +31,7 @@ Rule: synced pages are `.md`, hand-written pages are `.mdx`, and `src/content/do
 
 Runs before `dev` and `build` (npm `predev` and `prebuild`). It:
 
-1. Copies README, PLAN, GOALS, DECISION, JOURNAL, `designs/*`, `prototypes/README`, `test/README` and `bench/baselines/COMPARISON.md` to site routes (the table at the top of the script), adding Starlight frontmatter (`title` from the H1, `description` from the first paragraph, `editUrl`, sidebar label). The H1 is dropped because Starlight renders the title.
+1. Copies README, PLAN, GOALS, DECISION, JOURNAL, `designs/*`, `prototypes/README`, `test/README` and `bench/baselines/COMPARISON.md`, `VERSIONS.md` and `OPTIMIZATIONS.md` to site routes (the table at the top of the script), adding Starlight frontmatter (`title` from the H1, `description` from the first paragraph, `editUrl`, sidebar label). The H1 is dropped because Starlight renders the title.
 2. Rewrites relative links. Links between synced docs become relative site URLs (so the site works under any base path). Directories that have a site home (`prototypes/`, `test/`) go there; other files and directories link to GitHub (`DOCS_REPO_URL`, `DOCS_REPO_REF`, default `kiwicopple/pg-extensions` at `main`). A link to something that does not exist is shown as plain code with a warning. Fenced and inline code is never touched.
 3. Copies run files, removing stale ones.
 4. Extracts workload descriptions.
@@ -43,7 +43,11 @@ Set `DOCS_REPO_REF=<branch>` if the files are not on `main` yet, and `DOCS_SITE`
 Pages read every run file with `import.meta.glob` (`src/lib/bench.ts`). Shape of a run file: see `src/lib/bench.ts` (`Run`): `run_id, date, environment, host, pg_version, design, scale, shape, clients, duration_s, workloads[], seeds[], checksums{}`.
 
 - **Real data wins.** If `src/data/bench/` has any file, only real data is used. Otherwise the fixture in `src/data/fixture/` is used and the pages say so.
-- A **series** is one Postgres major version on one environment (for example "PG 16 (local)"). The dashboard shows the series with the most runs, the latest run per engine, scale and shape. The Postgres versions page shows all series and says which versions exist.
+- **Tags.** A run's `tag` (JSON field, else the run_id suffix after the fifth dash) names a variant of the engines, e.g. `opt` for the session 3 optimized engines. Tagged and untagged runs of one configuration are different series; a tagged run never replaces an untagged one.
+- A **series** is one Postgres major version on one environment with one tag (for example "PG 18 (docker, optimized)" or "PG 16 (local)"). `allSeries` in `src/lib/bench.ts` groups by environment, major and tag.
+- **Primary series** (dashboard, home page): set by `PRIMARY_PREFERENCE` in `src/lib/bench.ts`. It is Docker PG 18 `opt` if that exists, else the newest Docker series, else the newest local series. It is never chosen by run count. Charts that need scales Docker lacks (scaling from 10k to 1M) use `scalingSeries()` (today local PG 16) and say so in their subtitle; no chart mixes environments or tags.
+- The **Postgres versions** page compares only series with the same environment and tag: optimized Docker first, then pre-optimization Docker.
+- The **Optimizations** page (`src/lib/optimizations.ts`, `src/components/opt`) pairs the untagged and `opt` Docker series per Postgres version (main version 18): dumbbell charts (hollow dot before, filled dot after, log axis), a ranking table (engines within 20% of the best are tied) and takeaways computed from the numbers.
 - Takeaways under each chart are computed from the data at build time, so they stay true when numbers change.
 - A malformed file is skipped with a warning, not a build failure.
 

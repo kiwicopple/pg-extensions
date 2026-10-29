@@ -1,8 +1,9 @@
 ---
-import { primary, runs, usingFixture, DATA_URL } from '../../lib/bench';
+import { allSeries, primary, runs, scalingSeries, seriesVersionLabel, usingFixture, DATA_URL } from '../../lib/bench';
 // What data the dashboard is showing, plus a stat strip and the cross-engine checksum result.
 const s = primary;
 const dates = s ? s.runs.map((r) => r.date.slice(0, 10)).sort() : [];
+const scaling = scalingSeries();
 const hosts = s ? [...new Set(s.runs.map((r) => r.host).filter(Boolean))] : [];
 
 // Checksum agreement: for every configuration where all three engines ran, do the per-policy checksums match?
@@ -38,7 +39,7 @@ if (s) {
 				<div class="viz-stat">
 					<div class="label">Dataset</div>
 					<div class="value">{s.label}</div>
-					<div class="note">Postgres {s.versions.join(', ')}</div>
+					<div class="note">{seriesVersionLabel(s)}</div>
 				</div>
 				<div class="viz-stat">
 					<div class="label">Runs</div>
@@ -62,11 +63,19 @@ if (s) {
 			</div>
 			<p>
 				Charts use <strong>{s.label}</strong>
-				{hosts.length > 0 && <>{' '}on {hosts.join('; ')}</>}, the series with the most runs; the latest run per
-				engine, scale and shape. {s.runs[0]?.clients && <>{s.runs[0].clients} pgbench clients, {s.runs[0].duration_s} s per workload. </>}
-				Compare Postgres versions on the <a href={'../postgres-versions/'}>Postgres versions page</a>. All
-				latencies are milliseconds; one run per configuration, so differences under about 20% are noise.
-				Run files live in <a href={DATA_URL}>bench/baselines/data</a>.
+				{hosts.length > 0 && <>{' '}on {hosts.join('; ')}</>}: Postgres {s.versions.join(', ')}, the latest run per engine, scale
+				and shape. This is the primary series, chosen on purpose: Docker, the newest Postgres version, and the
+				optimized engines when their runs exist (otherwise the newest Docker series, then local).{' '}
+				{s.runs[0]?.clients && <>{s.runs[0].clients} pgbench clients, {s.runs[0].duration_s} s per workload. </>}
+				Docker runs cover the large default, medium deep and medium wide configurations only.
+				{scaling && scaling !== s && (
+					<> The small and medium default scales exist only for <strong>{scaling.label}</strong>, so the scaling chart uses that series and says so.</>
+				)}{' '}
+				Charts never mix environments or tags in one figure. Series in the data: {allSeries.map((x) => x.label).join('; ')}.
+				Compare Postgres versions on the <a href={'../postgres-versions/'}>Postgres versions page</a> and the before and
+				after of the optimization pass on the <a href={'../optimizations/'}>Optimizations page</a>. All latencies are
+				milliseconds; one run per configuration, so differences under about 20% are noise. Run files live in{' '}
+				<a href={DATA_URL}>bench/baselines/data</a>.
 			</p>
 		</>
 	) : (

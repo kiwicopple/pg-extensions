@@ -43,8 +43,11 @@ export default defineConfig({
 					label: 'Benchmarks',
 					items: [
 						{ label: 'Dashboard', slug: 'benchmarks/dashboard' },
+						{ label: 'Optimizations', slug: 'benchmarks/optimizations' },
 						{ label: 'Postgres versions', slug: 'benchmarks/postgres-versions' },
 						{ label: 'Engine comparison (report)', slug: 'benchmarks/comparison' },
+						{ label: 'Postgres versions (report)', slug: 'benchmarks/versions-report' },
+						{ label: 'Optimizations (report)', slug: 'benchmarks/optimizations-report' },
 					],
 				},
 				{

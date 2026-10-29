@@ -6,7 +6,9 @@ description: How the three pg_permissions engines compare across Postgres 16, 17
 import Versions from '../../../components/bench/Versions.astro';
 
 Do the engines behave the same on different Postgres major versions? This page renders whatever versions exist in
-the benchmark data: each run file carries its `pg_version` and `environment`, and a series is one major version on one
-environment. Workloads and charts are described on the [benchmarks dashboard](../dashboard/).
+the benchmark data: each run file carries its `pg_version`, `environment` and optional `tag`, and a series is one major version on one
+environment with one tag. Versions are only compared within the same environment and tag; the optimized engines (tag `opt`) come first
+and the pre-optimization runs follow. The Docker analysis is in the synced [Postgres versions report](../versions-report/), the effect of
+the optimization pass in [Optimizations](../optimizations/), and workloads and charts are described on the [benchmarks dashboard](../dashboard/).
 
 <Versions />

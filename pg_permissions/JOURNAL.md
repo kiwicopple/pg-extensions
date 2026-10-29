@@ -412,3 +412,170 @@ Run strictly one at a time on an idle laptop, 10 s per workload: large default, 
 - Wide groups (medium): 221 / 70 / 10.7 ms. Nesting a 1,000-member team: 0.15 / 285 / 333 ms.
 - Single-branch parents at 1M documents: 509 / 197 / 9.6 ms; projection 3.2 / 1.4 / 1.0 ms.
 - One-line fixes: B `rows 1` 17.1 → 0.79 ms; B's stand-in OR rewrite 2.5 → 0.56 ms; A's SQL → PL/pgSQL 0.58 → 0.34 ms.
+
+---
+
+## Session 3: 2026-10-29, Postgres 16–18 with pg_tle, and a docs site
+
+Copple asked for three things: a Docker Compose setup with PG 16, 17 and 18, each with pg_tle; benchmarks across all of them, with optimizations where the results suggest them; and a browsable docs site (Astro + Starlight, with charts), because reading markdown files had become tiresome. Two agents ran in parallel: a heavy-implementer on the Docker matrix and a light-implementer on the docs site.
+
+### 1. Docker matrix (heavy-implementer, about 17 minutes)
+
+- pg_tle **v1.5.3** (released 2026-10-08, PG 12–19) is built from source in a build stage onto pinned official images: `postgres:16.15`, `17.11` and `18.6`. Each container gets the same 4 CPUs and 6 GB, plus the harness's own settings (`fsync=off` and so on).
+- `docker/run-matrix.sh` runs strictly one server at a time. The client runs in a separate container from the same image, so psql and pgbench match the server version.
+- **All 9 version × engine suites pass:** A 156, B 172, C 204 assertions each, on 16, 17 and 18. There were no version-specific failures.
+- **The pg_tle branch of the install test ran for the first time, and it had a bug.** psql doesn't interpolate `:"var"` inside backticks, so `pgtle.install_extension` received an empty body and "succeeded", and the next calls then failed. **Code that has never run is broken until proven otherwise.** The fix also made the assertion stricter: it now requires functions that belong to the extension, checked through `pg_depend`.
+- **A portability bug in the harness:** Debian's `mawk` parsed `a[x > 0 ? ...]` inside `printf` as output redirection, so every workload failed in the containers. BSD awk on macOS had hidden it.
+- Benchmark results now also go to JSON (`bench/baselines/data/`) for the charts. The 15 local PG16 reports were backfilled.
+
+### 2. Docs site (light-implementer, about 19 minutes)
+
+- `docs/` at the repo root: Astro 7.4 + Starlight 0.42. `make docs` builds it and `make docs.dev` serves it.
+- **No hand-copied duplicates:** `scripts/sync.mjs` copies the 11 pg_permissions markdown files in before every build, adds frontmatter and rewrites links. The markdown in the repo stays the source of truth; the site is just a way to read it.
+- **Charts are hand-built SVG, rendered at build time,** following the `dataviz` skill: one color per engine everywhere (A blue, B orange, C aqua), log scales where values span orders of magnitude, a table view and ARIA labels on every chart, and light/dark themes. Observable Plot was rejected because it needs a DOM shim at build time. The takeaway sentence under each chart is **computed from the data at build time**, so it can't go stale when the numbers change.
+- The benchmark JSON is the contract between the two agents. The docs agent built against a fixture generated from the saved reports; when the Docker agent's real data appeared mid-task, it took over automatically.
+- A link checker was added on top of Starlight's validator, because the plugin skips relative links: 820 internal links, all resolve.
+
+### 3. Postgres 16 vs 17 vs 18 (27 serial runs, about 90 minutes)
+
+- All 27 runs completed. **Checksums were identical across engines and versions:** 12 runs per configuration, one value per policy.
+- **PG18 makes single-row updates under RLS 21–37% faster on every engine** (`rbac_update_one`, large: A 0.67→0.53 ms, B 0.81→0.52, C 0.66→0.45). Other RBAC reads are 10–15% faster on 18. PG17 is within ±7% of 16 almost everywhere.
+- PG17/18 make C's single-branch parents count about 25% faster (large: 23.1 → 18.1 → 16.9 ms). A doesn't move.
+- **Calibrating Docker against the laptop turned up a Postgres minor-release difference.** The median ratio was 1.04, but `parents_proj_select_count` was 2–3× slower in Docker. With the same plan, 16.4 touched 1,180 buffers and 16.15 touched 11,996: the newer minor releases stopped skipping heap fetches for all-visible pages in a bitmap `count(*)`, and 17 and 18 behave like 16.15. **Our local number for that workload was optimistic because of a Postgres patch release, not our code.**
+- A's and B's heavy PL/pgSQL paths ran about 2× faster in Docker (Linux) than on macOS, with identical plans. The cause wasn't isolated, and JIT was ruled out.
+- **Noise is real:** repeats varied ±20% on heavy wide reads and about ±10% elsewhere. One run (pg18/A medium wide) had a disturbance spike and was rerun; both sets are recorded.
+
+### 4. Optimization pass (three heavy-implementers in parallel, one per engine)
+
+The rules: keep each engine's character, keep every test green, keep cross-engine checksums equal, and don't touch workloads or seeds. Because the three agents shared one laptop, they measured **interleaved before/after** runs (old and new code alternating in the same cluster) rather than absolute numbers. A serial rerun confirms the results afterwards.
+
+**C** (about 1 h):
+- **Delta inserts instead of recomputing on every membership write.** New rows = (the subject's existing members) × (the object's usersets and everything above them). Deletes still recompute.
+- The set-level walk runs once per distinct set instead of once per principal.
+- `accessible()` uses a single `distinct on` sort for dedup and forbid veto.
+- Results:
+
+  | Workload | Before | After |
+  | --- | --- | --- |
+  | `write_nest_team`, large, 4 clients | 367 ms | 58 ms (6×) |
+  | `write_nest_team`, large, 1 client | 90 ms | 15.5 ms |
+  | Wide bulk seed | 185 s | 24.6 s (7.5×) |
+  | Wide bulk seed with a new `grant_many()` | | 7.5 s (not used by the benchmark) |
+  | Single-branch parents page | 9.4 ms | 5.0 ms |
+
+- **Safety net:** a new spec runs 400 random grants and revokes with `verify()` after every step. `verify()` keeps its own **independent** per-principal walk, so the optimized path is always checked against a naive one. 4 of 4 mutants of the delta logic were caught, one of them only by the new random test.
+- The global lock stayed. Per-team locks wouldn't help, because concurrent nests write the same unique keys anyway. The two-session race was rerun in both orders and stayed clean.
+
+**A** (about 75 minutes): A still derives nothing, and every target got 10× faster or better.
+- **The biggest find of the session: Postgres was running A's whole walk twice per query.** For `unnest(f(const args))` over a STABLE function, the planner evaluates the function at plan time to estimate rows, then runs it again at execution. Planning time equalled execution time. **Marking the list functions VOLATILE** halved the wide page (207 → 110 ms) on its own. The other engines' RLS functions are STABLE too, so the finding was relayed to B mid-flight and given to C as a follow-up.
+- `array_agg(distinct)` was a 25 ms collation sort per 6.6k IDs, and it was unnecessary because the walk already returns each node once.
+- The walk expands only nodes that can have an outgoing edge (a new partial index, 6.8 MB). The exclusion CTE is forced `materialized`: without that, a statistics change mid-run turned it into per-node probes, and a walk went from 5 to 85 ms.
+- `check_for` became a bidirectional search with forced generic plans.
+- Results (interleaved, 1 client, p50):
+
+  | Workload | Before | After |
+  | --- | --- | --- |
+  | Medium wide `share_select_page` | 207 ms | 18 ms (11×) |
+  | Medium wide `share_list_objects` | 59 ms | 5 ms |
+  | Large single-branch parents page | 505 ms | 35 ms (14×) |
+  | `nest_check` | 0.60 ms | 0.24 ms |
+
+- **Honest gap:** two mutants of the new check survived the suite. One was a real hole: dropping exclusions in the backward direction. The agent couldn't add a spec (outside its files), so a follow-up agent was briefed to add `a/56_exclusion_paths` and prove it catches that mutant. **The mutation habit from session 1 keeps paying off: optimized code needs new tests, not just old ones passing.**
+
+**Follow-up** (light-implementer):
+- **C had the double execution too,** in `scopes_with_permission`: its planning buffers exactly equalled the InitPlan's buffers at execution. After the VOLATILE change, C's RBAC reads were 20–30% faster.
+- C's `accessible()` stays STABLE, because the recommended `(select accessible(..))::uuid[]` form doesn't trigger the plan-time run, and VOLATILE would stop the bare form from being an index condition. **The trap depends on the exact SQL shape in the policy, not just on the function's volatility.**
+- `a/56_exclusion_paths` (31 assertions): each assertion requires `check_for`, `list_objects_for` and `list_subjects` to agree. **It catches the mutant that survived** (7 assertions fail). A is now at 15/15 files and 187 assertions.
+
+**B** (about 97 minutes), with the same policy model, closure approach and lock:
+- **Collation was the biggest cost.** The database's default collation (en_SG) made the distinct sort 19 of 29 ms in a wide `ids()` call. `collate "C"` on the ID, type and role columns took the wide list from 25 to 6.8 ms on its own. **Another trap with nothing to do with authorization.** (A's `array_agg(distinct)` cost was the same problem in disguise.)
+- Exact primary-key probes instead of scans, and PL/pgSQL wrappers (PG16 re-plans non-inlinable SQL functions on every call; A found the same in session 2).
+- **Closure rows only for entities that have children,** as C already did. Leaves are reached in one hop through a `closure` view. This took `write_nest_team` from **307 ms to 0.6 ms** with 4 clients and halved the storage (large per-document parents: 763 → 378 MB, seed 252 → 51 s).
+- **The plan-time double execution, done more carefully than A.** B kept `ids()` STABLE and made its last argument default to a VOLATILE `_unfolded_null()`, so the planner can't fold the call. The reasoning: **a VOLATILE function under read committed takes a fresh snapshot for each query it runs, so grants could be read at a later instant than the rows they filter.** A and C were then switched to B's technique, so all three keep single-snapshot semantics.
+- Results (interleaved):
+
+  | Workload | Before | After |
+  | --- | --- | --- |
+  | `write_nest_team`, large, 4 clients | 307 ms | 0.6 ms |
+  | `nest_check` | 3.3 ms | 0.37 ms |
+  | Wide `share_select_page` | 70 ms | 15 ms |
+  | Large single-branch parents page | 190 ms | 13 ms |
+
+- **Proof of equivalence:** two differential fuzzers compared old and new engines: 168k random closure writes (outcomes, errors, the full closure with depths) and 119k read results across 120 random worlds. **0 differences.**
+- **A latent bug B kept as-is:** removing a shortcut edge can push a shortest path past depth 10, and the rebuild then silently drops that pair. The fix (reject such deletes, or lift the cap) is a semantic decision left to Copple.
+- **The ranking changed.** Before optimization, B was worst on writes (285 ms); now it's the fastest of the materializing engines on writes (0.6 ms), close to A. The comparison in DECISION.md is now out of date, until the serial confirmation run.
+
+**Making the plan-time trap impossible to reintroduce** (light-implementers):
+- All three engines now keep STABLE (statement snapshot) and use B's volatile-default dummy argument. Planning dropped from about 12 ms and 3,564 buffers to 0.2 ms and catalog lookups only. `collate "C"` gave A another 9% on wide pages, mostly in B-tree probes rather than sorts.
+- **A deterministic test for the trap:** `pg_stat_get_xact_function_calls()` counts function calls made during planning. The new specs run `EXPLAIN` (no ANALYZE), assert the permission functions were called zero times, then run the query and assert they were called. One gotcha: the counter also includes unflushed counts from earlier transactions, so the specs assert on differences.
+- **The test found another gap immediately:** B's generated RLS for conditioned policies passed every `ids()` argument as a constant, so it folded too. Each new spec was proven by a mutant that removes the dummy default.
+- Suites: A 18 files and 199 assertions, B 18 and 189, C 21 and 229. All green.
+
+### 5. Serial confirmation of the optimizations (27 runs, tagged `opt`)
+
+- **Every checksum matched the pre-optimization runs,** per configuration and policy, across all three versions. The optimizations changed speed, not answers.
+- PG18 Docker, p50, before → after:
+
+  | Engine | Workload | Before → after |
+  | --- | --- | --- |
+  | A | wide `share_select_page` | 125 → 14.4 ms |
+  | A | large single-branch parents | 240 → 45.6 ms |
+  | B | `write_nest_team` | 107 → 0.62 ms (172×) |
+  | B | `nest_check` | 1.14 → 0.32 ms |
+  | B | large parents | 102 → 13.7 ms |
+  | B | storage | 763 → 378 MB |
+  | C | `write_nest_team` | 300 → 58 ms |
+  | C | wide seed | 176 → 25 s |
+  | C | parents | 9.3 → 4.9 ms |
+
+- **The "after" values matched the claims within 1.3×, but some speedup factors were smaller than claimed** (A's parents: 5.3× measured vs 14× claimed). EXPLAIN showed why: Docker (Linux) already ran the old PL/pgSQL paths about 2× faster than macOS, so the "before" values were lower. **A speedup measured on one machine doesn't transfer, but the absolute "after" number did.**
+- **The new ranking:**
+  - RBAC and default/deep sharing: all three within 15%.
+  - `nest_check`: a three-way tie (0.30–0.32 ms).
+  - Wide sharing: C < A < B.
+  - Nesting write: A 0.15 < B 0.62 ≪ C 58 ms.
+  - Storage at large: C 182 < B 378 < A 404 MB.
+- **The engines converged.** Before the pass, the gaps were 10–2,000×. After it, most are under 3×, except C's nesting write and A's single-branch parents. **Much of the "engine difference" in session 2 was really unoptimized code.**
+- Not every number moved: A's `rbac_check` got 10–20% slower (0.26 → 0.30 ms). Large `parents_proj_select_count` sits on the minor-release heap-fetch floor (about 8 ms), so no engine can meet its 9 ms budget (set on 16.4) on current minor releases.
+- Housekeeping: four disturbed runs were replaced by repeats, using a written rule (5 or more workloads with p95 > 2× p50). Desktop apps kept the load average at 3–5 even with no agents running.
+
+### 6. Docs and decision refresh
+
+- **The docs site needed one data-model change:** series are now keyed by environment + major version + tag, so optimized runs no longer hide pre-optimization runs. The primary series is chosen explicitly (PG18 Docker, optimized), not by run count.
+- New `/benchmarks/optimizations/` page: dumbbell charts on a log axis (hollow dot = before, filled = after) in the engine colors, a before/after ranking table and a speedup table across PG 16/17/18. The takeaways are computed from the data. `VERSIONS.md` and `OPTIMIZATIONS.md` are synced in. The build checks 1,125 internal links across 18 pages.
+- **One hand-written takeaway was false:** "nest_check stays close to flat" isn't true for B on local PG16 (1.2 → 2.6 ms). It was fixed. **Computed takeaways stayed honest and the hand-written one went stale.**
+- `DECISION.md` and PLAN.md were refreshed to the optimized PG18 numbers. PLAN §4 gained four rules learned this session: STABLE plus a volatile-default dummy argument, `collate "C"` on text IDs, PL/pgSQL for hot functions, and `rows` estimates on set-returning helpers.
+- New open questions for Copple:
+  - B's depth cap can silently drop a path after a delete.
+  - The dummy argument means `scopes_with_permission` signatures differ slightly across engines (the one-argument call is still identical).
+
+### Still open (end of session 3)
+
+- **Choose the engine.** After optimization the engines are much closer:
+  - RBAC, default/deep sharing and `nest_check` are within 15%.
+  - C still leads on wide reads (1.8× A) and single-branch parents.
+  - A and B lead on nesting writes (0.15 / 0.62 ms vs 58).
+  - A is the smallest (871 lines) and derives nothing.
+- B's depth-cap-on-delete behaviour, and its list function not being net of conditioned forbids.
+- The large `parents_proj_select_count` budget (9 ms) can't be met on current minor releases. Re-baseline it, or accept it.
+- Not yet measured: small and medium default in Docker after optimization, mixed read/write concurrency, fsync on, single-client writes in Docker.
+
+### Possible angles for the blog post (session 3 additions)
+
+- **"Most of the engine difference was unoptimized code."** Gaps of 10–2,000× shrank to under 3× for most workloads after one optimization pass, without changing any engine's design.
+- **"Postgres ran our permission check twice per query."** Plan-time folding of STABLE functions; the VOLATILE fix that weakens snapshot semantics; and the dummy-argument trick that avoids both. Plus a deterministic test using `pg_stat_get_xact_function_calls`.
+- **"Your collation is a performance setting."** `collate "C"` on text IDs was B's biggest single win.
+- **"Speedups don't transfer between machines; absolute numbers do."** macOS vs Linux Docker made the same plan 2× different.
+- **"A patch release changed our benchmark."** 16.4 vs 16.15 changed a bitmap `count(*)` by 10× in buffers.
+- **"Code that has never run is broken."** The pg_tle install branch, written in session 2, failed the first time it ran.
+- **"Agents relaying findings to each other":** A's plan-time discovery was sent to B and C mid-flight, and B's snapshot objection then improved A's and C's fixes.
+
+### Numbers worth quoting (session 3)
+
+- 3 Postgres versions (16.15, 17.11, 18.6) × 3 engines; 54 Docker benchmark runs plus repeats; pg_tle 1.5.3.
+- Checksums identical across 69 runs, engines, versions and before/after optimization.
+- PG18 makes RLS single-row updates 21–37% faster on every engine.
+- After optimization (PG18): B's nesting write 107 → 0.62 ms; A's wide sharing page 125 → 14 ms; C's wide seed 176 → 25 s; B's storage 763 → 378 MB.
+- Plan-time fold: planning went from 12 ms and 3,564 buffers to 0.2 ms.
+- Collation: B's wide list went from 25 to 6.8 ms on that change alone.
+- Suites: A 199, B 189, C 229 assertions; all green on 16, 17 and 18.

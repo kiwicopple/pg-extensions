@@ -35,6 +35,8 @@ export interface Run {
 	workloads: WorkloadResult[];
 	seeds: Seed[];
 	checksums?: Record<string, string>;
+	/** e.g. "opt" (the session 3 optimized engines); untagged runs have none */
+	tag?: string;
 	/** fixture only: path of the saved report in pg_permissions */
 	report?: string;
 	/** file name the run was loaded from */
@@ -68,17 +70,36 @@ function valid(r: any, file: string): boolean {
 	return !!ok;
 }
 
+/**
+ * Tag of a run: the JSON `tag` field, else the run_id suffix after the fifth dash
+ * (`pg18-docker-a-large-default-opt` -> `opt`). Run ids that do not follow that pattern (the fixture) have none.
+ */
+function tagOf(r: { tag?: string; run_id?: string }): string | undefined {
+	if (typeof r.tag === 'string' && r.tag) return r.tag;
+	const m = r.run_id?.match(/^pg\d+-[a-z]+-[abc]-(?:small|medium|large)-(?:default|deep|wide)-(.+)$/);
+	return m?.[1] || undefined;
+}
+
 export const runs: Run[] = Object.entries(source)
 	.map(([path, r]) => ({ ...(r as any), file: path.split('/').pop()! }) as Run)
 	.filter((r) => valid(r, r.file))
-	.map((r) => ({ ...r, environment: r.environment ?? 'local', seeds: r.seeds ?? [] }));
+	.map((r) => ({ ...r, environment: r.environment ?? 'local', seeds: r.seeds ?? [], tag: tagOf(r) }));
 
-/** A series is one (environment, Postgres major version) combination, e.g. "PG 17 (docker)". */
+/** Display names for known tags; an unknown tag is shown as is. */
+const TAG_LABELS: Record<string, string> = { opt: 'optimized' };
+export const tagLabel = (tag?: string) => (tag ? (TAG_LABELS[tag] ?? tag) : 'untagged');
+
+/**
+ * A series is one (environment, Postgres major version, tag) combination, e.g. "PG 18 (docker, optimized)" or
+ * "PG 18 (docker)" for untagged runs. Tagged and untagged runs of one configuration are different series:
+ * a tagged run is not a newer version of an untagged one.
+ */
 export interface Series {
 	key: string;
 	label: string;
 	major: number;
 	environment: string;
+	tag?: string;
 	runs: Run[];
 	/** latest run per (design, scale, shape) */
 	get(design: Design, scale: string, shape: string): Run | undefined;
@@ -98,6 +119,7 @@ const configRank = (s: string, h: string) => {
 function makeSeries(key: string, rs: Run[]): Series {
 	const major = Math.floor(Number.parseFloat(rs[0].pg_version));
 	const environment = rs[0].environment;
+	const tag = rs[0].tag;
 	const latest = new Map<string, Run>();
 	for (const r of [...rs].sort((x, y) => (x.date < y.date ? -1 : 1))) {
 		latest.set(`${r.design}|${r.scale}|${r.shape}`, r);
@@ -116,9 +138,10 @@ function makeSeries(key: string, rs: Run[]): Series {
 		.sort((a, b) => configRank(a.scale, a.shape) - configRank(b.scale, b.shape));
 	return {
 		key,
-		label: `PG ${major} (${environment})`,
+		label: `PG ${major} (${environment}${tag ? `, ${tagLabel(tag)}` : ''})`,
 		major,
 		environment,
+		tag,
 		runs: rs,
 		get: (d, s, h) => latest.get(`${d}|${s}|${h}`),
 		configs,
@@ -130,19 +153,66 @@ export const allSeries: Series[] = (() => {
 	const groups = new Map<string, Run[]>();
 	for (const r of runs) {
 		const major = Math.floor(Number.parseFloat(r.pg_version));
-		const k = `${r.environment}-pg${major}`;
+		const k = `${r.environment}-pg${major}${r.tag ? `-${r.tag}` : ''}`;
 		if (!groups.has(k)) groups.set(k, []);
 		groups.get(k)!.push(r);
 	}
 	return [...groups.entries()]
 		.map(([k, rs]) => makeSeries(k, rs))
-		.sort((a, b) => a.major - b.major || a.environment.localeCompare(b.environment));
+		.sort(
+			(a, b) =>
+				a.environment.localeCompare(b.environment) ||
+				a.major - b.major ||
+				(a.tag ?? '').localeCompare(b.tag ?? ''),
+		);
 })();
 
-/** The series the dashboard shows: the one with the most runs (ties: lowest Postgres major). */
-export const primary: Series | undefined = [...allSeries].sort(
-	(a, b) => b.runs.length - a.runs.length || a.major - b.major,
-)[0];
+export const findSeries = (environment: string, major: number, tag?: string) =>
+	allSeries.find((s) => s.environment === environment && s.major === major && s.tag === tag);
+
+/**
+ * Which series the dashboard, the home page and the charts that need one series draw from. Chosen explicitly,
+ * never by run count: the preferred series (Docker, newest Postgres, optimized engines) if it exists, else the
+ * newest Docker series, else the newest local series, else whatever exists.
+ */
+export const PRIMARY_PREFERENCE = { environment: 'docker', major: 18, tag: 'opt' } as const;
+
+const newest = (a: Series, b: Series) => {
+	const da = a.runs.map((r) => r.date).sort().pop() ?? '';
+	const db = b.runs.map((r) => r.date).sort().pop() ?? '';
+	return db.localeCompare(da) || b.major - a.major;
+};
+
+export const primary: Series | undefined =
+	findSeries(PRIMARY_PREFERENCE.environment, PRIMARY_PREFERENCE.major, PRIMARY_PREFERENCE.tag) ??
+	[...allSeries].filter((s) => s.environment === 'docker').sort(newest)[0] ??
+	[...allSeries].filter((s) => s.environment === 'local').sort(newest)[0] ??
+	[...allSeries].sort(newest)[0];
+
+/** `PG 18.6 (docker, optimized)`: label with the full server version, for captions that name the exact build. */
+export const seriesVersionLabel = (s: Series) =>
+	`PG ${s.versions[s.versions.length - 1]} (${s.environment}${s.tag ? `, ${tagLabel(s.tag)}` : ''})`;
+
+/** Series that can be compared with each other: same environment and same tag. */
+export function comparableGroups(): { environment: string; tag?: string; series: Series[] }[] {
+	const g = new Map<string, { environment: string; tag?: string; series: Series[] }>();
+	for (const s of allSeries) {
+		const k = `${s.environment}|${s.tag ?? ''}`;
+		if (!g.has(k)) g.set(k, { environment: s.environment, tag: s.tag, series: [] });
+		g.get(k)!.series.push(s);
+	}
+	return [...g.values()];
+}
+
+/**
+ * The series for charts that need several data scales at the default shape (small, medium, large). The primary
+ * series if it has at least two, else the series with the most scales. Callers must say which one they got.
+ */
+export function scalingSeries(): Series | undefined {
+	const n = (s: Series) => new Set(s.configs.filter((c) => c.shape === 'default').map((c) => c.scale)).size;
+	if (primary && n(primary) >= 2) return primary;
+	return [...allSeries].sort((a, b) => n(b) - n(a) || newest(a, b))[0];
+}
 
 // ---- workloads ----
 

@@ -1,0 +1,61 @@
+---
+import Frame from '../viz/Frame.astro';
+import { fmt } from '../../lib/chart';
+import { KEY_CASES, MAJORS, MAIN_MAJOR, caseConfig, change, items, pairFor } from '../../lib/optimizations';
+import { times } from '../../lib/bench';
+
+const pairs = MAJORS.map((m) => ({ major: m, pair: pairFor(m) })).filter((p) => p.pair.before && p.pair.after);
+const rows = KEY_CASES.flatMap((c) =>
+	(['a', 'b', 'c'] as const).map((d) => ({
+		c,
+		d,
+		by: pairs.map((p) => {
+			const i = items(p.pair, c).find((x) => x.design === d);
+			return i ? { ...i, ...change(i.before, i.after), major: p.major } : undefined;
+		}),
+	})),
+);
+// the entry whose speedup differs most between versions
+const spread = rows
+	.map((r) => {
+		const v = r.by.filter((x): x is NonNullable<typeof x> => !!x);
+		if (v.length < 2) return undefined;
+		const hi = v.reduce((a, b) => (b.r > a.r ? b : a));
+		const lo = v.reduce((a, b) => (b.r < a.r ? b : a));
+		return { r, hi, lo, ratio: hi.r / lo.r };
+	})
+	.filter((x): x is NonNullable<typeof x> => !!x)
+	.sort((a, b) => b.ratio - a.ratio);
+const worst = spread[0];
+const within = spread.filter((x) => x.ratio <= 1.3).length;
+const takeaway = worst
+	? `${within} of ${spread.length} engine and workload pairs have a speedup within 30% across Postgres ${pairs.map((p) => p.major).join(', ')}. The biggest spread is ${worst.r.d.toUpperCase()} ${worst.r.c.cls.toLowerCase()}: ${times(worst.lo.r)} on ${worst.lo.major} against ${times(worst.hi.r)} on ${worst.hi.major} (${fmt(worst.lo.before)} to ${fmt(worst.lo.after)} ms against ${fmt(worst.hi.before)} to ${fmt(worst.hi.after)} ms).`
+	: '';
+---
+
+{
+	pairs.length > 1 ? (
+		<Frame
+			title="The same speedups on every Postgres version?"
+			subtitle={`Speedup = before p50 / after p50, Docker, key workloads. Page main version is ${MAIN_MAJOR}. Below 1.0x means slower after.`}
+			takeaway={takeaway}
+		>
+			<div class="tbl-wrap" style="overflow-x:auto">
+				<table>
+					<thead>
+						<tr><th>Workload</th><th>Engine</th>{pairs.map((p) => <th>PG {p.major}</th>)}</tr>
+					</thead>
+					<tbody>
+						{rows.map((r) => (
+							<tr>
+								<td style="white-space:nowrap">{r.c.cls}<div style="color:var(--viz-muted);font-size:0.7rem">{caseConfig(r.c)}</div></td>
+								<td>{r.d.toUpperCase()}</td>
+								{r.by.map((x) => <td style="white-space:nowrap">{x ? <><strong>{times(x.r)}</strong><div style="color:var(--viz-muted);font-size:0.7rem">{fmt(x.before)} to {fmt(x.after)} ms</div></> : 'n/a'}</td>)}
+							</tr>
+						))}
+					</tbody>
+				</table>
+			</div>
+		</Frame>
+	) : null
+}

@@ -42,7 +42,7 @@ if (ref) {
 			title="Seed time and storage, per phase"
 			subtitle="Left: native-API load time per phase (seconds, log axis). Right: size of the permissions tables after each phase (cumulative MB, after VACUUM FULL). Proj. = parents seeded through the folder_id projection; Links = a parent row per document."
 			takeaway={takeaway}
-			source={[{ href: comparisonLink(ref?.scale, ref?.shape), label: 'COMPARISON.md (Storage and seed cost)' }]}
+			source={[{ href: comparisonLink(ref?.scale, ref?.shape), label: 'COMPARISON.md (local PG 16, before optimization: storage and seed cost)' }]}
 		>
 			<Legend slot="legend" />
 			<TabGroup tabs={configs.map((c) => ({ key: `${c.scale}-${c.shape}`, label: c.label }))} label="Scale and shape">

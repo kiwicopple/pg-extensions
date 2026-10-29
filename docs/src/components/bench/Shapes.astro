@@ -32,17 +32,23 @@ if (shapes.length >= 2) {
 	const w = g('share_select_page', 'wide');
 	if (w.a && w.b && w.c)
 		parts.push(`in the wide shape the engines separate most: A ${fmt(w.a)}, B ${fmt(w.b)}, C ${fmt(w.c)} ms (${times(w.a / w.c)} between A and C)`);
-	takeaway = parts.length ? `Medium data: ${parts.join('; ')}.` : '';
+	if (!parts.length) {
+		const wd = g('share_select_page', 'wide');
+		const dp = g('share_select_page', 'deep');
+		if (wd.a && wd.c && dp.a && dp.c)
+			parts.push(`the sharing page on deep teams is ${fmt(dp.a)} ms on A and ${fmt(dp.c)} ms on C, on wide teams ${fmt(wd.a)} ms on A and ${fmt(wd.c)} ms on C (${times(wd.a / wd.c)} between A and C)`);
+	}
+	takeaway = parts.length ? `Medium data, ${s!.label}: ${parts.join('; ')}.` : '';
 }
 ---
 
 {
 	panels.length && shapes.length >= 2 ? (
 		<Frame
-			title="Default, deep and wide team shapes (medium data)"
-			subtitle="p50 latency, log axis. Deep = teams in chains 9 levels deep; wide = each user in 50 teams, 50 shares per team."
+			title={shapes.length === 3 ? 'Default, deep and wide team shapes (medium data)' : `Team shapes: ${shapes.join(' and ')} (medium data)`}
+			subtitle={`${s!.label}: p50 latency, log axis.${shapes.includes('default') ? '' : ' This series has no medium default run (the default shape exists at 1M documents, and at 10k and 100k only on local PG 16).'} Deep = teams in chains 9 levels deep; wide = each user in 50 teams, 50 shares per team.`}
 			takeaway={takeaway}
-			source={[{ href: comparisonLink('medium', 'wide'), label: 'COMPARISON.md' }]}
+			source={[{ href: comparisonLink('medium', 'wide'), label: 'COMPARISON.md (local PG 16, before optimization)' }]}
 		>
 			<Legend slot="legend" />
 			<div class="viz-panels">

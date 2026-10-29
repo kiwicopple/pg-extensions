@@ -75,6 +75,18 @@
 	height: 3px;
 	border-radius: 2px;
 }
+.viz-key.before,
+.viz-key.after {
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	box-sizing: border-box;
+	border: 2px solid var(--viz-ink-2);
+	background: transparent;
+}
+.viz-key.after {
+	background: var(--viz-ink-2);
+}
 .viz-key.whisker {
 	width: 14px;
 	height: 0;
@@ -137,6 +149,27 @@
 	stroke-width: 2;
 	stroke-linejoin: round;
 	stroke-linecap: round;
+}
+.viz-body .db-line {
+	stroke-width: 2;
+	stroke-linecap: round;
+	opacity: 0.55;
+}
+.viz-body .db-before {
+	fill: var(--viz-surface);
+	stroke-width: 2;
+}
+.viz-body .db-change.faster {
+	fill: var(--viz-ink);
+	font-weight: 600;
+}
+.viz-body .db-change.same {
+	fill: var(--viz-muted);
+}
+.viz-body .db-change.slower {
+	fill: var(--viz-ink);
+	font-weight: 600;
+	text-decoration: underline dotted;
 }
 .viz-body .dot {
 	stroke: var(--viz-surface);

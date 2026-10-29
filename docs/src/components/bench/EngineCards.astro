@@ -1,7 +1,7 @@
 ---
 import { ENGINES } from '../../lib/chart';
 import { fmt } from '../../lib/chart';
-import { primary, p50s, workloadInfo } from '../../lib/bench';
+import { primary, p50s, seriesVersionLabel } from '../../lib/bench';
 import type { Design } from '../../lib/chart';
 
 const s = primary;
@@ -51,7 +51,7 @@ const metrics = [
 		))
 	}
 </div>
-<p class="engine-foot">p50 latency, 4 pgbench clients.{s && <> {s.label}.</>} Source: the <a href="./benchmarks/dashboard/">benchmarks dashboard</a>.</p>
+<p class="engine-foot">p50 latency, 4 pgbench clients, {s ? <>{seriesVersionLabel(s)}</> : 'no data'}. The numbers come from the dashboard's primary series; the before and after of the optimization pass is on the <a href="./benchmarks/optimizations/">Optimizations page</a>. Source: the <a href="./benchmarks/dashboard/">benchmarks dashboard</a>.</p>
 
 <style>
 	.engine-cards {

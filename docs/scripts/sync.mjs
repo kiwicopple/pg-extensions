@@ -30,6 +30,8 @@ const PAGES = [
 	{ src: 'GOALS.md', route: 'overview/goals', label: 'Goals' },
 	{ src: 'DECISION.md', route: 'decision/guide', label: 'Decision guide' },
 	{ src: 'bench/baselines/COMPARISON.md', route: 'benchmarks/comparison', label: 'Engine comparison (report)' },
+	{ src: 'bench/baselines/VERSIONS.md', route: 'benchmarks/versions-report', label: 'Postgres versions (report)' },
+	{ src: 'bench/baselines/OPTIMIZATIONS.md', route: 'benchmarks/optimizations-report', label: 'Optimizations (report)' },
 	{ src: 'designs/a-tuple-core.md', route: 'designs/a-tuple-core', label: 'A: tuple core' },
 	{ src: 'designs/b-policy-first.md', route: 'designs/b-policy-first', label: 'B: policy first' },
 	{ src: 'designs/c-compiled-model.md', route: 'designs/c-compiled-model', label: 'C: compiled model' },
