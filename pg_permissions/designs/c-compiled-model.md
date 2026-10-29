@@ -2,7 +2,7 @@
 
 > One of three candidate designs. See [../PLAN.md](../PLAN.md) for the shared goals, requirements and evaluation criteria.
 >
-> **Status (2026-10-28):** built as [`prototypes/c-compiled-model.sql`](../prototypes/c-compiled-model.sql). It passes every shared spec file and its own `test/spec/c/` files (30, 31, 32, 40, 50–55): 17 files, 204 assertions. This document describes what was built. Section 13 lists where the build departed from the earlier draft, and why.
+> **Status (2026-10-28):** built as [`prototypes/c-compiled-model.sql`](../prototypes/c-compiled-model.sql). It passes every shared spec file and its own `test/spec/c/` files (30–33, 40, 50–55): 18 files, 217 assertions. This document describes what was built. Section 13 lists where the build departed from the earlier draft, and why; section 15 lists the session 3 optimizations (2026-10-29).
 
 ## 1. Summary
 
@@ -142,12 +142,12 @@ Statement-level `after insert` and `after delete` triggers on `tuples`, with tra
 1. Type-check every new row against `allowed_subjects` and `relations` (right type, relation not a permission, allowed subject, no expiry on userset feeders). Even the owner can't insert an ill-typed tuple (`23514`).
 2. If no changed row has a `feeds_userset` relation, stop. Object grants end here: one insert, no lock.
 3. Take the graph lock (below).
-4. Affected principals `P` = principal subjects of changed rows, plus current members of any userset subject of a changed row. At this point `memberships` still reflects the state before the statement.
-5. Recompute every principal in `P` with one upward recursive CTE (`union` over `(principal, set, depth)`, capped at depth 11), then apply the difference: delete rows no longer derived, upsert new rows and changed depths. If any shortest path is longer than 10, raise `54001` (the write is rejected; this resolves the old open question 3).
+4. **Insert:** apply a delta (since session 3, section 15). The new rows are (members of each new tuple's subject, from the stored memberships) × (the tuple object's usersets and every set above them, one upward walk over the current tuples), with depth = depth in the subject + 1 + distance above the object. Each row is upserted keeping the smaller depth; nothing is deleted. If a new shortest path would be longer than 10, raise `54001` (the write is rejected; this resolves the old open question 3).
+5. **Delete:** affected principals `P` = principal subjects of deleted rows, plus current members of any userset subject of a deleted row (at this point `memberships` still reflects the state before the statement). Recompute every principal in `P` (direct sets from the principals' own tuples, then one upward walk per distinct direct set, capped at 10 hops), then apply the difference: delete rows no longer derived, upsert new rows and changed depths.
 
-The same code handles insert and delete. Cycles are harmless because the CTE stops revisiting at the depth cap, and a set reachable at depth ≤ 10 keeps that depth. Diamonds are handled because each principal's set is recomputed from scratch, not patched. Updates are rejected by a row trigger, except for `expires_at`, which re-granting changes (expiry can't affect memberships, see section 9). `truncate` is rejected.
+Cycles are harmless because the walks stop revisiting at the depth cap, and a set reachable at depth ≤ 10 keeps that depth. Diamonds are handled: an insert keeps the least depth over every path, and a delete recomputes each affected principal from scratch. Updates are rejected by a row trigger, except for `expires_at`, which re-granting changes (expiry can't affect memberships, see section 9). `truncate` is rejected.
 
-Why `P` is complete: take any principal whose membership changes, and the changed tuple closest to it on the path. Either that tuple's subject is the principal, or the prefix of the path before it uses only unchanged tuples, so the principal was already in that tuple's subject set.
+Why the insert delta is complete: take any new path from a principal to a set, and the first new tuple on it (subject S, object O). The part before it uses only old tuples, so the principal is S or was already a stored member of S; the part after it is an upward walk from O. Every candidate is a real path, so nothing is over-granted. Why `P` is complete for a delete: take any principal whose membership changes, and the changed tuple closest to it on the path. Either that tuple's subject is the principal, or the prefix of the path before it uses only unchanged tuples, so the principal was already in that tuple's subject set.
 
 ### Ancestors (container closure)
 
@@ -210,6 +210,8 @@ permissions.grant(object_type, object_id uuid, relation, subject_type, subject_i
                   subject_relation text default null, expires_at timestamptz default null)
 permissions.revoke(object_type, object_id uuid, relation, subject_type, subject_id uuid,
                    subject_relation text default null) returns boolean
+permissions.grant_many(object_type, relation, subject_type, object_ids uuid[], subject_ids uuid[],
+                       subject_relation text default null) returns bigint   -- bulk load, session 3
 permissions.grant_public(object_type, object_id uuid, relation, subject_type text default 'user')
 permissions.revoke_public(object_type, object_id uuid, relation, subject_type text default 'user') returns boolean
 permissions.set_parent(object_type, object_id uuid, parent_type, parent_id uuid)
@@ -344,6 +346,8 @@ Large-scale comparison (serial runs, 4 pgbench clients; full tables and checksum
 | `write_nest_team` (4 clients) | 0.15 | 285 | 333 |
 | `nest_check` | 0.70 | 2.60 | 0.26 |
 
+These are the session 2 serial baselines, measured before the session 3 optimizations. Section 15 has interleaved before/after numbers for the writes, the single-branch parents policy and the wide seed; a serial rerun hasn't been done yet.
+
 C has the fastest reads on every sharing and parents workload and is flat on `nest_check` (0.22-0.28 ms at every scale and shape). RBAC is a wash across engines. In the wide shape (medium, 50 teams per user) `share_select_page` is A 221, B 70, C 10.7 ms, but C's wide sharing seed took 183 s against 35 s for B and 10 s for A. C's per-document parents seed at large took 16 s and added about 160 MB (A 44 s / 378 MB, B 167 s / 736 MB).
 
 **Org-wide access through parents** makes `accessible()` return every document id under the org. For an admin of an org with 1M documents that's a 1M-element array per query, the same cost A or B pay for an equivalent single-branch policy. The two-arm policy (`org_id = any (scopes...) or id = any (accessible(...))`) avoids it and stays the recommended form for large tenants. Measured at large scale (about 20k visible documents per user): the single-branch `parents_select_page` is 9.57 ms p50 for C, against 1.01 ms for the two-arm projection (about 9×). A pays 509 ms and B 197 ms for the same single-branch shape, so C's materialized `accessible()` degrades far less, but the projection is still the cheaper form.
@@ -354,7 +358,7 @@ C has the fastest reads on every sharing and parents workload and is flat on `ne
 | --- | --- | --- |
 | Grant or revoke on a document or org (not a userset feeder) | 1 tuple | none |
 | Add a user to team `eng` (eng in k ancestor usersets) | 1 tuple + (1 + k) memberships | global |
-| Nest team A (n members) into team B (k ancestors) | 1 tuple + n × (1 + k) memberships; n principals recomputed | global |
+| Nest team A (n members) into team B (k ancestors) | 1 tuple + n × (1 + k) memberships, written as a delta (section 15) | global |
 | Move a document | 1 parent link | none |
 | Move a folder with s sub-folders | 1 parent link + closure rows of s + 1 folders | global |
 | Model change touching usersets or what feeds them | full `memberships` rebuild | global |
@@ -365,8 +369,8 @@ C has the fastest reads on every sharing and parents workload and is flat on `ne
 
 ## 12. Weaknesses and risks
 
-1. **The write path is the bulk of the code and where bugs live.** The prototype is about 1,860 lines (A is about 620): compiler about 590, derived-data maintenance about 350, preset about 250. A missed case causes silent drift. `verify()` and `rebuild()` mitigate this; a read-time walk has no drift by construction. Four deliberately broken copies (no propagation on nesting, forbid ignored, parent traversal cut to one hop, `verify()` blind) were each caught by the specs, but drift bugs outside the tested shapes would not be.
-2. **One global lock** for every membership, container-move and rebuild write. Bulk directory syncs (SCIM) and concurrent team edits queue: nesting a 1,000-member team holds it for about 14 ms (single client, small scale; 4 clients at large scale queue to a 333 ms p50). Per-key locking needs careful lock ordering and is deferred.
+1. **The write path is the bulk of the code and where bugs live.** The prototype is about 1,990 lines (A is about 620): compiler about 590, derived-data maintenance about 400, preset about 250 (session 3 added the insert delta and `grant_many`, about 120 lines). A missed case causes silent drift. `verify()` and `rebuild()` mitigate this; a read-time walk has no drift by construction. Four deliberately broken copies (no propagation on nesting, forbid ignored, parent traversal cut to one hop, `verify()` blind) were each caught by the specs, but drift bugs outside the tested shapes would not be.
+2. **One global lock** for every membership, container-move and rebuild write. Bulk directory syncs (SCIM) and concurrent team edits queue: nesting a 1,000-member team holds it for about 14 ms (single client, small scale; 4 clients at large scale queue to a 333 ms p50). Since the session 3 delta it holds it for about 15 ms at large too, and 4 clients queue to about 60 ms (section 15). Per-key locking needs careful lock ordering and is deferred; section 15 explains why it wouldn't help the benchmark's nest.
 3. **`repeatable read` is refused for those writes.** It surprises users. ORMs that default to it would have to switch for permission writes.
 4. **Write latency lands in the app's transaction.** Nesting a 10k-member team writes 10k+ rows synchronously. A TLE can't ship a background worker.
 5. **Model changes that touch usersets rebuild all memberships** under the lock, in one transaction. Fine for small apps; at 5M membership rows it's a maintenance window.
@@ -404,9 +408,86 @@ C has the fastest reads on every sharing and parents workload and is flat on `ne
 
 1. Is uuid-only acceptable, or do we need a per-type key kind (`uuid` | `text`)?
 2. JSON only, or also an OpenFGA-style DSL (client-side)?
-3. Global lock, or per-key locking now? Measured: `write_nest_team` is 333 ms p50 with 4 clients at large scale (`COMPARISON.md`); no per-key locking prototype exists to compare against.
+3. Global lock, or per-key locking now? Measured: `write_nest_team` is 333 ms p50 with 4 clients at large scale (`COMPARISON.md`), about 60 ms after session 3 (section 15); no per-key locking prototype exists to compare against.
 4. Should `memberships` hold a reflexive row per principal so `can()` needs one branch instead of two? That costs a row per principal and requires knowing principals the extension doesn't otherwise track.
 5. How should `apply_model()` express renames, so they don't drop and re-add tuples?
 6. Is deny-overrides the forbid semantics we want, or do we need OpenFGA's exact `but not`?
 7. Should the extension ship a trigger that keeps `parents` in sync with an app column (`folder_id`)?
 8. Is `policy_sql()` worth shipping, given the developer still pastes the result into a migration?
+
+## 15. Optimizations (session 3)
+
+Goal: improve C's weak spots without changing its semantics or its character (materialized memberships, `verify()`/`rebuild()`, typed model, one global lock). Workloads, seeds and the benchmark seed's API are unchanged.
+
+**How it was measured.** Two other agents were optimizing A and B on the same laptop at the same time, so absolute numbers are noisy. Every figure below is **interleaved**: the original prototype (kept as `bench/results/optc/c-orig.sql`, git-ignored) and the new one were run alternately, old, new, new, old, with `bench/run.sh --only <workloads> --tag opt-c` (Postgres 16.4, local, no Docker). Each cell gives the two runs. Reads and writes use `--clients 1` unless marked 4 clients. The big gaps (several times) are far outside the noise; the small ones (under about 10%) are not. Internal breakdowns come from `EXPLAIN (ANALYZE, BUFFERS)` and `auto_explain` (nested statements) on a persistent large-scale database, plus pgbench runs that alternated between an old and a new copy of it.
+
+| Workload (p50 ms unless noted) | Before | After | Change |
+| --- | --- | --- | --- |
+| `write_nest_team`, large, 1 client | 90.2, 91.1 | 15.5, 15.9 | 5.8× faster |
+| `write_nest_team`, large, 4 clients | 367, 351 (10-11 tps) | 58.2, 60.5 (59-67 tps) | 6× faster |
+| `write_nest_team`, medium wide, 1 client | 41.1, 41.6 | 15.8, 15.4 | 2.7× faster |
+| `write_nest_team`, medium deep, 1 client (one pair) | 119.5 | 21.6 | 5.5× faster |
+| `parents_select_page` (single branch), large | 9.41, 9.52 | 4.98, 4.87 | 1.9× faster |
+| `parents_select_count` (single branch), large | 23.7, 18.6 | 14.1, 13.9 | 1.3-1.7× faster |
+| Wide sharing seed, medium (seconds) | 185.1, 198.1 | 24.6, 24.2 | 7.8× faster |
+| Default sharing seed, large (seconds; all 4 runs each) | 4.2-6.0 | 2.0-2.3 | about 2× faster |
+| `share_select_page`, medium wide | 11.42, 11.50 | 11.23, 10.85 | not slower (within noise) |
+| `share_list_objects`, medium wide | 3.65, 3.56 | 3.37, 3.25 | about 8% faster |
+| `nest_check`, medium deep (one pair) | 0.26 | 0.30 | unchanged (`can()` wasn't touched) |
+
+Checksums: every run, old and new, printed the same per-phase checksums (rbac, sharing, parents_proj, parents) and reported "same" against A's and B's latest equivalence files, at large default, medium wide and medium deep. On the persistent database, the new `_accessible()` returned the same sorted id set as the old one for all 10,000 users and three permissions (`documents.read`, `viewer`, `editor`). After the wide seed, the `memberships` table (657,256 rows) had the same md5 over `(principal, set, depth)` for the old code, the new code and the new bulk API.
+
+### 15.1 Insert trigger: a delta instead of a recompute
+
+**What.** `_tuples_after_insert` no longer recomputes the affected principals. Insertions only add paths, so memberships can only gain rows or get shorter. The trigger now writes (members of the new tuple's subject, read from the stored memberships) × (the object's usersets and every set above them, from one upward walk), with depth = depth in the subject + 1 + distance above the object. It upserts with `on conflict ... do update ... where excluded.depth < memberships.depth` and deletes nothing. Section 5 has the completeness argument (the first new tuple on any new path). It also covers multi-row inserts, and the depth limit: the walk goes 10 hops up, so a set first reachable at depth 11 shows up as a candidate of 11 and the write raises `54001`, as before. Deletes still recompute the affected principals, because a delete can lengthen or remove paths, and knowing that needs path counts C doesn't store.
+
+**Why.** Nesting the 1,000-member `nest-src` at large spent 83 ms in the per-principal recursive walk, re-deriving 1,000 × 6 rows, 1,000 of which already existed. In that plan the recursive term ran a seq scan of `satisfies` 30,000 times and threw away 160,833 joined rows: a team's document grants share `tuples_userset` with its nestings. Then the diff's delete scanned `memberships_pkey` for the 1,000 principals and visited 244,087 index entries to find 1,000 live rows. The other 243k were dead rows left by the benchmark's earlier rolled-back nests, and bitmap scans never mark entries dead. The delta skips both: no per-principal walk and no delete. What's left is the walk from the target team (5 rows, under 0.1 ms) and inserting 5,000 new rows (about 10 ms; 67k buffer hits for heap plus two indexes). That is the floor for materialized memberships.
+
+For the wide seed, adding a user to their k-th team used to recompute all k of their teams, so 50 teams per user cost about 50²/2 walks per user. Now each grant upserts the 5-6 rows above that one team.
+
+### 15.2 Set-level walks, filtered in the index
+
+**What.** Both remaining walks (the insert delta, and `_memberships_for` on the delete path) walk between usersets, not between (principal, userset) pairs. `_memberships_for` takes each principal's direct sets from its own tuples, walks up once per distinct direct set, and joins back. The recursive step restricts `tuples.relation` to the relations that feed a userset, as an index condition on `tuples_userset` (whose last key column is `relation`), so a team's document grants are never visited. `_memberships_for` became PL/pgSQL so its plan is cached: Postgres 16 plans a non-inlined SQL function body on every call, and the `set search_path` clause prevents inlining.
+
+**Why.** The delete path had the same per-principal walk. Nest and then un-nest `nest-src` at large (pgbench, alternating old and new copies of one database): 102, 104 ms before, 30, 25 ms after.
+
+**Kept separate on purpose.** `_memberships_all()`, which `verify()` and `rebuild()` use, keeps its own per-principal walk. `verify()` is the oracle for the incremental code, so it doesn't share code with it.
+
+### 15.3 `accessible()`: one sort, sorted output
+
+**What.** `_accessible()` resolves the relation and type ids into variables first, filters container expansions with a plain `object_type = v_type` (no join with a CTE), and builds the result with `distinct on (object_id) ... order by object_id, forbid desc`. That single sort dedups and applies the forbid veto (a vetoed id sorts its forbid row first and is dropped). The output is sorted. The result set is unchanged; only the order of the array is new, and nothing depended on it. With an unknown subject type it still returns membership-derived ids, as before.
+
+**Why.** For the single-branch policy at large (user 1, 20,007 ids), the old version materialized every reachable id in a CTE, ran a hashed `except`, then `array_agg`. Then the documents index scan sorted the 20k-element array again before its first probe (`_bt_preprocess_array_keys`). That gap before the first row was 5.3 ms in the old plan and 0.5 ms in the new one, because an already sorted array costs a single pass. The InitPlan (the `accessible()` call itself) went from 9.1 to 6.5 ms under EXPLAIN ANALYZE, with the same buffers (277 vs 272 hits). `count(*)` keeps its 60.3k buffer hits: 20k separate index descents into `documents_pkey`, which is now most of what's left (15.6).
+
+### 15.4 Bulk load: `grant_many()` (new, optional)
+
+**What.** `permissions.grant_many(object_type, relation, subject_type, object_ids uuid[], subject_ids uuid[], subject_relation default null) returns bigint`. It grants one relation for many (object, subject) pairs, paired by position, in one statement. Names are checked once. Pairs that already exist are skipped (no expiry; use `grant()` for that). The insert trigger maintains memberships once for the whole batch. Admin-only, like `grant()`. Tested in `c/33`.
+
+**Why.** Real apps import data. The multi-row delta makes a batch cost about one walk per distinct target set plus the rows it writes. The benchmark seed still uses `grant()`, so the table above doesn't include this. A variant of the wide sharing seed that uses `grant_many` (five calls instead of 306k `grant()` calls; not committed) loaded in **7.9 s**, or 7.1 s with nestings loaded before members, against 27.6 s for the per-row seed on the same database (A's per-row seed: 10 s). It produced the same memberships.
+
+### 15.5 Tests
+
+New `test/spec/c/33_incremental_memberships.sql` (13 assertions): a shortcut lowering a stored depth, closing a cycle, a multi-row insert of a whole chain, an implied userset (`admin` implies `member`), the depth limit reached through a delta (and nothing left behind), `grant_many`, and 400 seeded random grants, revokes, multi-row inserts and multi-row deletes over 10 teams and 12 users, with `verify()` clean after every one. Its membership cases (all but `grant_many`, which is new) also pass on the original prototype. Four deliberately broken copies of the delta were each caught: members of a userset subject ignored (`c/31`, `c/32`, `c/33`), no upward walk (`c/32`, `c/33`), depth never lowered (only `c/33`), no depth check (`c/32`, `c/33`). Full suite: 18/18 files, 217/217 assertions.
+
+**Lock: unchanged.** It is still one global advisory lock. The new insert path reads the stored memberships and walks the tuples after taking the lock, like the old one. Re-checked with two real sessions in both orders (session 1 adds Carol to `eng` and holds its transaction open; session 2 nests `eng` into `platform`, and the reverse). `verify()` was clean and Carol was in `platform` both times. With `_lock_graph()` replaced by a no-op, both orders left Carol's `platform` membership missing, and `verify()` reported it.
+
+### 15.6 Tried and dropped
+
+| Idea | Result |
+| --- | --- |
+| Plain `insert ... where not exists` plus a separate `update` for shorter depths, instead of `on conflict` (safe under the global lock) | Not faster: `write_nest_team` 17.0, 17.3 ms with `on conflict`, against 18.6, 21.3 ms (1 client, large, alternating). Dropped. |
+| The upward walk as a shared helper function (`_sets_up`) called from the trigger | As a SQL function it was planned on every call. As PL/pgSQL with custom plans it was re-planned too; `force_generic_plan` fixed that (5,000 user-to-team grants: 1.9 s to 0.93 s). Writing the walk inline in the trigger statement was another 20% faster (145 to 117 µs per grant), so the helper was dropped. |
+| First `accessible()` rewrite: `group by ... having not bool_or(forbid)` + `array_agg(... order by ...)` | Page 10.5-11.0 to 7.2-8.6 ms, but the plan hashed and then sorted. Replaced by the single `distinct on` sort (4.6-5.2 ms on the same database). |
+| Narrower locks (per-team advisory locks in a consistent order) | Not built: it wouldn't help this workload, and it isn't simple. Every `write_nest_team` nests the same `nest-src`, and every target sits under one of three tree roots. So concurrent nests insert the same (member, root) membership keys, and the second waits on the first's uncommitted index entry whatever the advisory lock does. A sound per-key scheme also needs shared locks on what a write reads (the members of S, the sets above O) and exclusive locks on what it changes (the sets above O, the sets below S). Those sets come from the graph read before locking, so it needs re-checks or `40001` retries. A write that only adds paths could take shared locks against other adders, but not against deletes or container moves. |
+| Doing the work before taking the lock | Not possible. The delta must read memberships and tuples as of after the lock, or a concurrent committed write would be missed (the race above). The type check and the tuple insert already run before the lock. |
+| A set-to-set closure table, so adding a member becomes one index lookup | Not built. The walk costs about 26 µs per grant. A third derived table would need its own maintenance, `verify()` coverage and drift risk. |
+
+### 15.7 Remaining hard limits
+
+- **A nest writes members × (1 + ancestors) rows under the lock.** That is 5,000 rows, about 10 ms, for the benchmark's nest. With 4 clients the latency is about 4 × the single-client time (58-60 ms against 15.5-15.9 ms), and per-key locks wouldn't change that here (15.6). A still writes one tuple.
+- **The single-branch count does one index descent per visible id.** About 20k probes into `documents_pkey` at large, 60k buffer hits, about 9 ms of the 14 ms. The projection policy reads a few contiguous `folder_id` ranges instead (2.7 ms). Postgres 17 skips repeated descents for nearby array keys, which may help, but that hasn't been measured here.
+- **The single-branch page builds the whole id array** (20k ids, about 4-5 ms) to return 50 rows. The projection policy is still about 5× cheaper (1.0 ms) and stays the recommended form for large tenants.
+- **Per-row `grant()` of memberships costs about 0.1 ms** (trigger, transition table, one delta statement), against about 0.04 ms for an object grant. The wide seed at 24 s is still about 2.4× A's 10 s; `grant_many` loads it in 7-8 s.
+- **Deletes recompute.** Revoking a nesting recomputes every member of the subject (now with a set-level walk). A delta delete would need per-path counts, a bigger change to the derived data.
+
+**Expected in the serial confirmation run** (4 clients, as in `COMPARISON.md`): `write_nest_team` large from 333 to about 55-65 ms (11 to about 60 tps), wide from 145 to about 60 ms, small from 62 to about 15-25 ms. `parents_select_page` large from 9.6 to about 5 ms; `parents_select_count` from 22 to about 14-16 ms. Wide sharing seed from 183 s to about 25 s. Wide reads and `nest_check` unchanged within noise. Checksums identical to A and B.

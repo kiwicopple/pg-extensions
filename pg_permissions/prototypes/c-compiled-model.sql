@@ -212,32 +212,53 @@ $$;
 -- Derived-data computation
 -- ============================================================================
 
--- Upward walk from the given principals: every userset they're in.
--- Relations that imply a userset relation count (org admin -> org#member).
+-- Every userset the given principals are in. Relations that imply a userset
+-- relation count (org admin -> org#member). A principal's first hop is one of
+-- its own tuples (to a direct set); the rest of every path is a walk between
+-- usersets, so the walk runs once per distinct direct set, not once per
+-- principal: recomputing a 1,000-member team walks up from that team once
+-- instead of 1,000 times. depth = 1 + distance from the nearest direct set, so
+-- a path longer than 10 shows up as depth 11. The walk follows only tuples of
+-- relations that feed a userset, filtered in the index (tuples_userset ends in
+-- `relation`), so a team's document grants are never visited.
 create function permissions._memberships_for(p_principals uuid[])
 returns table (principal_id uuid, set_type smallint, set_id uuid, set_relation smallint, depth int)
-language sql stable
+language plpgsql stable   -- not sql: Postgres 16 plans a non-inlined SQL function body on every call
 set search_path = ''
 as $$
-    with recursive walk(principal_id, set_type, set_id, set_relation, depth) as (
-        select t.subject_id, t.object_type, t.object_id, s.grants_id, 1
-        from permissions.tuples t
-        join permissions.satisfies s on s.relation_id = t.relation and not s.via_parent and not s.forbid
-        join permissions.relations u on u.id = s.grants_id and u.is_userset
+begin
+    return query
+    with recursive feeds as materialized (   -- relation -> the userset relations it satisfies
+        select s.relation_id, s.grants_id
+        from permissions.satisfies s join permissions.relations u on u.id = s.grants_id and u.is_userset
+        where not s.via_parent and not s.forbid
+    ), direct as materialized (
+        select t.subject_id as principal_id, t.object_type, t.object_id, f.grants_id
+        from permissions.tuples t join feeds f on f.relation_id = t.relation
         where t.subject_id = any (p_principals) and t.subject_relation is null
+    ), up(src_type, src_id, src_rel, set_type, set_id, set_relation, depth) as (
+        select distinct d.object_type, d.object_id, d.grants_id, d.object_type, d.object_id, d.grants_id, 0
+        from direct d
       union
-        select w.principal_id, t.object_type, t.object_id, s.grants_id, w.depth + 1
-        from walk w
+        select w.src_type, w.src_id, w.src_rel, t.object_type, t.object_id, f.grants_id, w.depth + 1
+        from up w
         join permissions.tuples t
           on t.subject_id = w.set_id and t.subject_relation = w.set_relation and t.subject_type = w.set_type
-        join permissions.satisfies s on s.relation_id = t.relation and not s.via_parent and not s.forbid
-        join permissions.relations u on u.id = s.grants_id and u.is_userset
-        where w.depth <= 10
+         and t.relation = any ((select array_agg(relation_id) from feeds)::smallint[])
+        join feeds f on f.relation_id = t.relation
+        where w.depth < 10
     )
-    select principal_id, set_type, set_id, set_relation, min(depth)
-    from walk group by 1, 2, 3, 4
+    select d.principal_id, u.set_type, u.set_id, u.set_relation, min(u.depth + 1)::int
+    from direct d
+    join up u on u.src_id = d.object_id and u.src_rel = d.grants_id and u.src_type = d.object_type
+    group by 1, 2, 3, 4;
+end;
 $$;
 
+-- Every membership, walked per principal. Used by verify() and rebuild().
+-- Deliberately not the set-level walk of _memberships_for and the insert
+-- trigger: verify() is the drift oracle for the incremental code, so it keeps
+-- its own, independent walk.
 create function permissions._memberships_all()
 returns table (principal_id uuid, set_type smallint, set_id uuid, set_relation smallint, depth int)
 language sql stable
@@ -383,6 +404,7 @@ set search_path = ''
 as $$
 declare
     v_bad record;
+    v_max int;
 begin
     -- Type check every new row against the compiled model, so even the owner
     -- can't insert an ill-typed tuple.
@@ -406,17 +428,64 @@ begin
     end if;
 
     perform permissions._lock_graph();
-    -- Affected principals: direct subjects, plus current members of any
-    -- userset subject (memberships is still in its pre-statement state).
-    perform permissions._recompute_memberships(array(
-        select n.subject_id
-        from new_rows n join permissions.relations r on r.id = n.relation
-        where r.feeds_userset and n.subject_relation is null
+    -- Insertions only add paths, so memberships only gain rows or get
+    -- shorter: apply the delta instead of recomputing the affected principals.
+    -- Take any new path from a principal to a set and the first new tuple on
+    -- it, n (subject S, object O). The part before n uses only old tuples, so
+    -- the principal is S itself or a member of S in the stored memberships
+    -- (still in their pre-statement state); the part after n is an upward
+    -- walk from O's usersets over the current tuples. So the candidates are
+    -- (members of S) x (O's usersets and every set above them) with depth =
+    -- depth in S + 1 + distance above O, and the new shortest depth is the
+    -- least of that and the stored one. Every candidate is a real path, so
+    -- nothing is over-granted. A set first reachable at depth 11 has a
+    -- candidate of 11 (the walk goes 10 hops up), so the depth limit holds.
+    with recursive feeds as materialized (   -- relation -> the userset relations it satisfies
+        select s.relation_id, s.grants_id
+        from permissions.satisfies s join permissions.relations u on u.id = s.grants_id and u.is_userset
+        where not s.via_parent and not s.forbid
+    ), edges as materialized (   -- new tuples that feed a userset, once per userset fed
+        select n.object_type, n.object_id, f.grants_id, n.subject_id, n.subject_relation
+        from new_rows n join feeds f on f.relation_id = n.relation
+    ), up(src_type, src_id, src_rel, set_type, set_id, set_relation, depth) as (
+        select distinct e.object_type, e.object_id, e.grants_id, e.object_type, e.object_id, e.grants_id, 0
+        from edges e
       union
-        select m.principal_id
-        from new_rows n join permissions.relations r on r.id = n.relation
-        join permissions.memberships m on m.set_id = n.subject_id and m.set_relation = n.subject_relation
-        where r.feeds_userset and n.subject_relation is not null));
+        select w.src_type, w.src_id, w.src_rel, t.object_type, t.object_id, f.grants_id, w.depth + 1
+        from up w
+        join permissions.tuples t
+          on t.subject_id = w.set_id and t.subject_relation = w.set_relation and t.subject_type = w.set_type
+         and t.relation = any ((select array_agg(relation_id) from feeds)::smallint[])
+        join feeds f on f.relation_id = t.relation
+        where w.depth < 10
+    ), members as (   -- (edge, principal, depth in the edge's subject)
+        select e.object_type, e.object_id, e.grants_id, e.subject_id as principal_id, 0 as depth
+        from edges e where e.subject_relation is null
+      union all
+        select e.object_type, e.object_id, e.grants_id, m.principal_id, m.depth
+        from edges e
+        join permissions.memberships m on m.set_id = e.subject_id and m.set_relation = e.subject_relation
+        where e.subject_relation is not null
+    ), cand as materialized (
+        select m.principal_id, u.set_type, u.set_id, u.set_relation, min(m.depth + 1 + u.depth) as depth
+        from members m
+        join up u on u.src_id = m.object_id and u.src_type = m.object_type and u.src_rel = m.grants_id
+        group by 1, 2, 3, 4
+    ), ins as (
+        insert into permissions.memberships (principal_id, set_type, set_id, set_relation, depth)
+        select principal_id, set_type, set_id, set_relation, depth from cand
+        on conflict (principal_id, set_id, set_relation) do update set depth = excluded.depth
+        where excluded.depth < memberships.depth
+    )
+    select max(c.depth) into v_max
+    from cand c
+    where c.depth > 10
+      and not exists (select 1 from permissions.memberships m
+                      where m.principal_id = c.principal_id and m.set_id = c.set_id
+                        and m.set_relation = c.set_relation);
+    if v_max > 10 then
+        raise exception 'pg_permissions: group nesting deeper than 10 levels' using errcode = '54001';
+    end if;
     return null;
 end;
 $$;
@@ -1120,6 +1189,10 @@ begin
 end;
 $$;
 
+-- Ids come back sorted and distinct. Sorted matters for RLS: an
+-- `id = any (array)` index scan sorts its keys first, which is close to free
+-- for an already sorted array, so the work isn't done twice. The sort also
+-- does the dedup and the forbid veto (distinct on, forbid rows first).
 create function permissions._accessible(
     p_subject_type text, p_subject_id uuid, p_object_type text, p_name text, p_kind text default null
 )
@@ -1127,37 +1200,40 @@ returns uuid[]
 language plpgsql stable
 set search_path = ''
 as $$
+declare
+    v_rel  smallint;
+    v_type smallint;
+    v_st   smallint;
 begin
     if p_subject_id is null then
         return '{}';
     end if;
+    select r.id, r.type_id into v_rel, v_type
+    from permissions.relations r join permissions.types t on t.id = r.type_id
+    where t.name = p_object_type and r.name = p_name and (p_kind is null or r.kind = p_kind);
+    if v_rel is null then
+        return '{}';
+    end if;
+    select id into v_st from permissions.types where name = p_subject_type;
     return (
-        with g as (
-            select r.id, r.type_id
-            from permissions.relations r join permissions.types t on t.id = r.type_id
-            where t.name = p_object_type and r.name = p_name and (p_kind is null or r.kind = p_kind)
-        ), st as (
-            select id from permissions.types where name = p_subject_type
-        ), rules as (
-            select s.relation_id, s.via_parent, s.forbid
-            from g join permissions.satisfies s on s.grants_id = g.id
-        ), held as (   -- objects where the subject holds a rule's relation
-            select t.object_type, t.object_id, r.via_parent, r.forbid
-            from rules r join permissions.tuples t on t.relation = r.relation_id
-            where t.subject_id = p_subject_id and t.subject_relation is null
-              and t.subject_type = (select id from st)
+        with held as materialized (   -- objects where the subject holds a relation that satisfies or vetoes
+            select t.object_type, t.object_id, s.via_parent, s.forbid
+            from permissions.satisfies s join permissions.tuples t on t.relation = s.relation_id
+            where s.grants_id = v_rel
+              and t.subject_id = p_subject_id and t.subject_relation is null and t.subject_type = v_st
               and (t.expires_at is null or t.expires_at > now())
           union all
-            select t.object_type, t.object_id, r.via_parent, r.forbid
-            from rules r join permissions.tuples t on t.relation = r.relation_id
-            where t.subject_id is null and t.subject_type = (select id from st)
+            select t.object_type, t.object_id, s.via_parent, s.forbid
+            from permissions.satisfies s join permissions.tuples t on t.relation = s.relation_id
+            where s.grants_id = v_rel
+              and t.subject_id is null and t.subject_type = v_st
               and (t.expires_at is null or t.expires_at > now())
           union all
-            select t.object_type, t.object_id, r.via_parent, r.forbid
+            select t.object_type, t.object_id, s.via_parent, s.forbid
             from permissions.memberships m
             join permissions.tuples t
               on t.subject_id = m.set_id and t.subject_relation = m.set_relation and t.subject_type = m.set_type
-            join rules r on r.relation_id = t.relation
+            join permissions.satisfies s on s.relation_id = t.relation and s.grants_id = v_rel
             where m.principal_id = p_subject_id
               and (t.expires_at is null or t.expires_at > now())
         ), reach as (
@@ -1166,26 +1242,25 @@ begin
             select a.object_id, h.forbid
             from held h
             join permissions.ancestors a on a.ancestor_id = h.object_id and a.ancestor_type = h.object_type
-            join g on a.object_type = g.type_id
-            where h.via_parent
+            where h.via_parent and a.object_type = v_type
           union all   -- objects of the target type whose parent is a held ancestor ...
             select p.object_id, h.forbid
             from held h
             join permissions.parents p on p.parent_id = h.object_id and p.parent_type = h.object_type
-            join g on p.object_type = g.type_id
-            where h.via_parent
+            where h.via_parent and p.object_type = v_type
           union all   -- ... or one of its container descendants
             select p.object_id, h.forbid
             from held h
             join permissions.ancestors a on a.ancestor_id = h.object_id and a.ancestor_type = h.object_type
             join permissions.parents p on p.parent_id = a.object_id and p.parent_type = a.object_type
-            join g on p.object_type = g.type_id
-            where h.via_parent
+            where h.via_parent and p.object_type = v_type
         )
-        select coalesce(array_agg(object_id), '{}')
-        from (select object_id from reach where not forbid
-              except
-              select object_id from reach where forbid) x
+        select array(   -- permitted and not vetoed
+            select x.object_id
+            from (select distinct on (r.object_id) r.object_id, r.forbid
+                  from reach r order by r.object_id, r.forbid desc) x
+            where not x.forbid
+            order by x.object_id)
     );
 end;
 $$;
@@ -1362,6 +1437,50 @@ begin
     values (v_ot, p_object_id, v_rel, v_st, p_subject_id, v_sr, p_expires_at)
     on conflict on constraint tuples_key do update set expires_at = excluded.expires_at
     where tuples.expires_at is distinct from excluded.expires_at;
+end;
+$$;
+
+-- Bulk load: grant one relation for many (object, subject) pairs, paired by
+-- position, in one statement. The names are checked once, and the insert
+-- trigger maintains memberships once for the whole batch (one delta over
+-- every new tuple) instead of once per grant. Pairs that already exist are
+-- left alone. No expiry: use grant() for expiring grants. Returns the number
+-- of new tuples.
+create function permissions.grant_many(
+    p_object_type text, p_relation text, p_subject_type text,
+    p_object_ids uuid[], p_subject_ids uuid[], p_subject_relation text default null
+)
+returns bigint
+language plpgsql security definer
+set search_path = ''
+as $$
+declare
+    v_ot  smallint := permissions._type_id(p_object_type);
+    v_rel smallint := permissions._relation_id(v_ot, p_object_type, p_relation);
+    v_st  smallint := permissions._type_id(p_subject_type);
+    v_sr  smallint;
+    v_n   bigint;
+begin
+    if cardinality(p_object_ids) is distinct from cardinality(p_subject_ids)
+       or array_position(p_object_ids, null) is not null or array_position(p_subject_ids, null) is not null then
+        raise exception 'object_ids and subject_ids must be arrays of the same length without nulls'
+            using errcode = '22004';
+    end if;
+    if nullif(p_subject_relation, '') is not null then
+        v_sr := permissions._relation_id(v_st, p_subject_type, p_subject_relation);
+    end if;
+    if not exists (select 1 from permissions.allowed_subjects
+                   where relation_id = v_rel and subject_type = v_st
+                     and subject_relation is not distinct from v_sr and not wildcard) then
+        raise exception '%.% does not accept subjects of type %', p_object_type, p_relation,
+            p_subject_type || coalesce('#' || nullif(p_subject_relation, ''), '') using errcode = '22023';
+    end if;
+    insert into permissions.tuples (object_type, object_id, relation, subject_type, subject_id, subject_relation)
+    select v_ot, o, v_rel, v_st, s, v_sr
+    from unnest(p_object_ids, p_subject_ids) x(o, s)
+    on conflict on constraint tuples_key do nothing;
+    get diagnostics v_n = row_count;
+    return v_n;
 end;
 $$;
 
