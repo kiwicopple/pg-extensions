@@ -4,7 +4,7 @@
 #   test/run.sh                                       # against the extension (pg_permissions--0.0.1.sql)
 #   test/run.sh --impl prototypes/a-tuple-core.sql    # against a prototype
 #   test/run.sh rbac                                  # only spec files whose name contains "rbac"
-#   test/run.sh --design b --impl X.sql               # force the design (a|b|c|none)
+#   test/run.sh --design b --impl X.sql               # force the design (a|b|c|d|none)
 #   test/run.sh -v                                    # show every assertion, not just failures
 #   test/run.sh --external                            # use the server from PGHOST/PGPORT/PGUSER
 #
@@ -46,13 +46,13 @@ IMPL=$(resolve_impl "$IMPL")
 if [ -z "$DESIGN" ]; then
     impl_base=$(basename "$IMPL" .sql)
     case "$impl_base" in
-        [abc]-*) DESIGN=${impl_base%%-*} ;;
+        [abcd]-*) DESIGN=${impl_base%%-*} ;;
         *) DESIGN=none ;;
     esac
 fi
 case "$DESIGN" in
-    a|b|c|none) ;;
-    *) echo "error: unknown design: $DESIGN (expected a, b, c or none)" >&2; exit 2 ;;
+    a|b|c|d|none) ;;
+    *) echo "error: unknown design: $DESIGN (expected a, b, c, d or none)" >&2; exit 2 ;;
 esac
 
 if [ -t 1 ]; then GREEN=$'\033[32m'; RED=$'\033[31m'; DIM=$'\033[2m'; RESET=$'\033[0m'
