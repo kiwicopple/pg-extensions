@@ -10,8 +10,10 @@
 #
 # Options:
 #   --versions 16,17,18   which servers, in this order (default all three)
-#   --designs a,b,c       which prototypes, in this order (default all three);
-#                         `ext` is the extension file pg_permissions--0.0.1.sql
+#   --designs a,b,c       which prototypes, in this order (default a, b and c);
+#                         `d` is prototypes/d-per-model.sql (tests only so far:
+#                         it has no benchmark seeds yet), `ext` the extension
+#                         file pg_permissions--0.0.1.sql
 #   --keep-running        leave the last server running (default: compose down)
 #   -- ARGS               passed to test/run.sh or bench/run.sh
 #                         (--external and --impl are added here)
@@ -61,8 +63,9 @@ impl_for() {
         a) echo prototypes/a-tuple-core.sql ;;
         b) echo prototypes/b-policy-first.sql ;;
         c) echo prototypes/c-compiled-model.sql ;;
+        d) echo prototypes/d-per-model.sql ;;
         ext) echo pg_permissions--0.0.1.sql ;;
-        *) echo "unknown design: $1 (expected a, b, c or ext)" >&2; return 1 ;;
+        *) echo "unknown design: $1 (expected a, b, c, d or ext)" >&2; return 1 ;;
     esac
 }
 IFS=, read -r -a VERSION_LIST <<<"$VERSIONS"
