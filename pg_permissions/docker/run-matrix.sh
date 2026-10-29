@@ -118,7 +118,7 @@ for v in "${VERSION_LIST[@]}"; do
             -e PGHOST=/var/run/postgresql -e PGUSER=postgres -e TZ="${TZ_NAME:-UTC}" \
             -e BENCH_ENVIRONMENT=docker -e BENCH_HOST="$host" \
             "$svc" "/pg_permissions/$MODE/run.sh" --external --impl "$impl" ${PASS[@]+"${PASS[@]}"} 2>&1 |
-            grep -v -E '^ ?Container .*(Creating|Created|Starting|Started|Running|Waiting|Healthy)' | tee "$out_file"
+            grep --line-buffered -v -E '^ ?Container .*(Creating|Created|Starting|Started|Running|Waiting|Healthy)' | tee "$out_file"
         status=${PIPESTATUS[0]}
         secs=$(( $(date +%s) - start ))
         if [ "$MODE" = test ]; then

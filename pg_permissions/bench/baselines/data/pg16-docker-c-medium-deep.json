@@ -1,0 +1,34 @@
+{
+  "run_id": "pg16-docker-c-medium-deep",
+  "date": "2026-10-29T00:17:46Z",
+  "environment": "docker",
+  "host": "Apple M4, 10 CPU, 24 GB; container cpus=4 mem=6g",
+  "pg_version": "16.15",
+  "design": "c",
+  "scale": "medium", "shape": "deep", "clients": 4, "duration_s": 10,
+  "workloads": [
+    {"name": "rbac_check", "p50_ms": 0.28, "p95_ms": 0.35, "tps": 15388, "budget_ms": 1},
+    {"name": "rbac_select_page", "p50_ms": 0.57, "p95_ms": 0.69, "tps": 7101, "budget_ms": 2},
+    {"name": "rbac_select_count", "p50_ms": 0.47, "p95_ms": 0.58, "tps": 8701, "budget_ms": 2},
+    {"name": "rbac_update_one", "p50_ms": 0.68, "p95_ms": 0.85, "tps": 6040, "budget_ms": 3},
+    {"name": "write_assign_role", "p50_ms": 0.22, "p95_ms": 0.29, "tps": 17523, "budget_ms": 1},
+    {"name": "share_list_objects", "p50_ms": 0.29, "p95_ms": 0.39, "tps": 13939, "budget_ms": 1},
+    {"name": "share_select_page", "p50_ms": 0.89, "p95_ms": 1.37, "tps": 4217, "budget_ms": 3},
+    {"name": "write_share", "p50_ms": 0.19, "p95_ms": 0.27, "tps": 20134, "budget_ms": 1},
+    {"name": "parents_proj_select_page", "p50_ms": 0.8, "p95_ms": 1.19, "tps": 4692, "budget_ms": 4},
+    {"name": "parents_proj_select_count", "p50_ms": 1.11, "p95_ms": 1.33, "tps": 3562, "budget_ms": 4},
+    {"name": "parents_select_page", "p50_ms": 5.24, "p95_ms": 5.99, "tps": 744, "budget_ms": 25},
+    {"name": "parents_select_count", "p50_ms": 4.22, "p95_ms": 4.89, "tps": 929, "budget_ms": 23},
+    {"name": "write_nest_team", "p50_ms": 352.63, "p95_ms": 459.99, "tps": 11, "budget_ms": 1},
+    {"name": "nest_check", "p50_ms": 0.32, "p95_ms": 0.4, "tps": 13082, "budget_ms": 2}
+  ],
+  "seeds": [
+    {"phase": "rbac", "seconds": 0.83, "size_mb": 2.9},
+    {"phase": "sharing", "seconds": 2.18, "size_mb": 15},
+    {"phase": "parents_proj", "seconds": 0.19, "size_mb": 15.5},
+    {"phase": "parents", "seconds": 1.56, "size_mb": 31.5},
+    {"phase": "nesting", "seconds": 0.17, "size_mb": 33.1}
+  ],
+  "checksums": {"rbac": "d394663f", "sharing": "7cf80111", "parents_proj": "3261b092", "parents": "3261b092"},
+  "report": "bench/baselines/pg16-docker-c-medium-deep.md"
+}

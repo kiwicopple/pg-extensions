@@ -18,7 +18,10 @@
 #   --out DIR                    default: bench/baselines/data
 #
 # run_id is pg<major>-<environment>-<design>-<scale>-<shape>[-<tag>], so
-# a later run with the same settings replaces the earlier file.
+# a later run with the same settings replaces the earlier file. A report that
+# is itself in bench/baselines/ (a committed reference run) also gets a
+# "report" field with its path from pg_permissions/, which the docs site
+# links to as the raw report.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -91,12 +94,17 @@ for report in "${REPORTS[@]}"; do
         checksums="$checksums${checksums:+, }$(json_str "$policy"): $(json_str "$sum")"
     done
 
+    report_field=""
+    report_abs="$(cd "$(dirname "$report")" && pwd)/$(basename "$report")"
+    [ "$(dirname "$report_abs")" != "$HERE/baselines" ] ||
+        report_field="$(json_str "bench/baselines/$(basename "$report_abs")")"
+
     out_file="$OUT/$run_id.json"
     awk -v run_id="$(json_str "$run_id")" -v date="$(json_str "$date_iso")" \
         -v env="$(json_str "$ENVIRONMENT")" -v host="$(json_str "$HOST_DESC")" \
         -v pgv="$(json_str "$pg_version")" -v design="$(json_str "$design")" \
         -v scale="$(json_str "$scale")" -v shape="$(json_str "$shape")" \
-        -v clients="$clients" -v duration="$duration" -v checksums="$checksums" '
+        -v clients="$clients" -v duration="$duration" -v checksums="$checksums" -v report="$report_field" '
         function num(v) { return (v ~ /^[0-9]+(\.[0-9]+)?$/) ? v + 0 : "null" }
         function cell(s) { gsub(/^ +| +$/, "", s); return s }
         /^\| workload \| p50 ms/ { tbl = "w"; next }
@@ -126,7 +134,8 @@ for report in "${REPORTS[@]}"; do
             print "  \"seeds\": ["
             for (i = 1; i <= ns; i++) print s[i] (i < ns ? "," : "")
             print "  ],"
-            printf "  \"checksums\": {%s}\n", checksums
+            printf "  \"checksums\": {%s}%s\n", checksums, (report != "" ? "," : "")
+            if (report != "") printf "  \"report\": %s\n", report
             print "}"
         }' "$report" > "$out_file"
     echo "$out_file"

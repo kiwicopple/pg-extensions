@@ -1,0 +1,34 @@
+{
+  "run_id": "pg16-docker-c-medium-wide",
+  "date": "2026-10-29T00:41:15Z",
+  "environment": "docker",
+  "host": "Apple M4, 10 CPU, 24 GB; container cpus=4 mem=6g",
+  "pg_version": "16.15",
+  "design": "c",
+  "scale": "medium", "shape": "wide", "clients": 4, "duration_s": 10,
+  "workloads": [
+    {"name": "rbac_check", "p50_ms": 0.28, "p95_ms": 0.35, "tps": 14915, "budget_ms": 1},
+    {"name": "rbac_select_page", "p50_ms": 0.57, "p95_ms": 0.68, "tps": 7143, "budget_ms": 2},
+    {"name": "rbac_select_count", "p50_ms": 0.48, "p95_ms": 0.56, "tps": 8623, "budget_ms": 2},
+    {"name": "rbac_update_one", "p50_ms": 0.67, "p95_ms": 0.8, "tps": 6155, "budget_ms": 3},
+    {"name": "write_assign_role", "p50_ms": 0.22, "p95_ms": 0.29, "tps": 17205, "budget_ms": 1},
+    {"name": "share_list_objects", "p50_ms": 4.08, "p95_ms": 4.52, "tps": 966, "budget_ms": 13},
+    {"name": "share_select_page", "p50_ms": 9.4, "p95_ms": 12.27, "tps": 409, "budget_ms": 42},
+    {"name": "write_share", "p50_ms": 0.19, "p95_ms": 0.25, "tps": 20504, "budget_ms": 1},
+    {"name": "parents_proj_select_page", "p50_ms": 9.61, "p95_ms": 11.39, "tps": 406, "budget_ms": 51},
+    {"name": "parents_proj_select_count", "p50_ms": 10.15, "p95_ms": 12.36, "tps": 385, "budget_ms": 31},
+    {"name": "parents_select_page", "p50_ms": 14.27, "p95_ms": 16.85, "tps": 276, "budget_ms": 46},
+    {"name": "parents_select_count", "p50_ms": 12.77, "p95_ms": 16.59, "tps": 303, "budget_ms": 40},
+    {"name": "write_nest_team", "p50_ms": 148.12, "p95_ms": 191.07, "tps": 26, "budget_ms": 1},
+    {"name": "nest_check", "p50_ms": 0.34, "p95_ms": 0.43, "tps": 12248, "budget_ms": 2}
+  ],
+  "seeds": [
+    {"phase": "rbac", "seconds": 0.8, "size_mb": 2.9},
+    {"phase": "sharing", "seconds": 181.49, "size_mb": 191.6},
+    {"phase": "parents_proj", "seconds": 0.21, "size_mb": 192.2},
+    {"phase": "parents", "seconds": 1.61, "size_mb": 208.2},
+    {"phase": "nesting", "seconds": 0.07, "size_mb": 209.1}
+  ],
+  "checksums": {"rbac": "d394663f", "sharing": "6f7c008d", "parents_proj": "f2867b7f", "parents": "f2867b7f"},
+  "report": "bench/baselines/pg16-docker-c-medium-wide.md"
+}

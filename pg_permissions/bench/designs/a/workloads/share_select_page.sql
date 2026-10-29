@@ -1,4 +1,4 @@
--- PROVISIONAL (sharing): first page through the two-branch RLS policy (org roles or shares).
+-- Sharing: first page through the two-branch RLS policy (org roles or shares).
 \set u random(1, :users)
 begin;
 select set_config('permissions.subject_id', md5('user' || :u)::uuid::text, true);

@@ -31,7 +31,7 @@ Latencies are p50 ms from CMP unless noted. One run per configuration, so gaps u
 | Blessed path (`rbac` preset) | G3-G5 17/17, 13/13, 15/15; graduation 5/5; RLS 12/12 (GOALS). Thin wrappers of about 50 lines; roles defined twice, `app` and `tenant` (A §6). | Same results. Generated `managed_by` policies; graduating introduces policies, a second concept (B, Blessed path). | Same results. Each `create_role` is a new model version; text signatures, uuid underneath; non-uuid scope gives false on reads and `22P02` on writes (C §8). |
 | Correctness and safety | G2 14/14 on all. Cycles terminate via `union` (A §12.1). | Cycles and depth over 10 rejected on write (B, Closure maintenance). | Cycles rejected on write (`23514`), depth over 10 raises `54001` (C §5, §9). Strongest validation: typed subjects, unknown names raise on write (PLAN §8 table). |
 | Identity decoupling | G1 11/11 | 11/11 | 11/11 |
-| TLE fit | G14 9/9 for non-superuser install; the pg_tle path was not run (GOALS) | same | same |
+| TLE fit | G14 9/9: non-superuser install, and `pgtle.install_extension` + `create extension` on PG 16, 17, 18 with pg_tle 1.5.3 (GOALS, docker/README) | same | same |
 | Evolvability | Policy layer for conditions, CEL and Cedar is "the least designed part" (A §9). | Natural home: forbid, conditions, later CEL and Cedar are policy shapes (PLAN §8 table). | CEL would compile to SQL text at model time; Cedar `when`/`unless` over arbitrary attributes doesn't compile to lookups (C §9). |
 | Budgets, `--check` at small | Fails 4: both `parents_proj_*`, both single-branch `parents_*` | Fails 4: single-branch `parents_*`, `write_nest_team`, `nest_check` | Fails 1: `write_nest_team` |
 
@@ -84,10 +84,10 @@ None of these has been built or measured.
 ## What hasn't been measured
 
 - **Single-client writes at large.** CMP's `write_nest_team` runs with 4 clients and includes queueing on the lock (CMP, Caveats). The only single-client figure is C's 14 ms at small (C §11); B's single-client nest is not measured.
-- **pg_tle.** Never run; `03_tle_install` checks the non-superuser path only (GOALS, Not yet covered by tests).
+- **pg_tle beyond the install test.** `03_tle_install` now runs `pgtle.install_extension` + `create extension` as a non-superuser on PG 16, 17 and 18 with pg_tle 1.5.3, and passes for A, B and C (Docker, GOALS G14). Not run: installing through database.dev (`dbdev install`), or on a hosted platform. The benchmarks load the engines with `psql -f`, not through pg_tle.
 - **Real hardware and durability.** One Apple Silicon laptop, `fsync=off`, `full_page_writes=off`; every write rolls back, so commit cost isn't measured (CMP, Caveats).
 - **Concurrency mixes.** Each workload runs alone. No reads under concurrent membership writes, and no mixed read/write load.
-- **PG versions other than 16.** Measured on 16.4. A's `_reach` is PL/pgSQL because Postgres 16 re-plans SQL function bodies on every call (prototypes/README).
+- **PG versions: measured in Docker only.** 16.15, 17.11 and 18.6, large default, medium deep and medium wide, all engines ([VERSIONS](./bench/baselines/VERSIONS.md)). Results: identical checksums, and the same engine ordering. 17 performs like 16. 18 is 10-15% faster on RBAC reads and 21-37% faster on `rbac_update_one` for every engine. C's single-branch parents count is 22-28% faster on 17 and 18. Docker and local numbers differ by up to 2x per workload (VERSIONS, Calibration), so they aren't interchangeable. Not measured: 17 and 18 outside Docker, small and medium default on 17 and 18, and whether A's `_reach` (PL/pgSQL because Postgres 16 re-plans SQL function bodies on every call, prototypes/README) would be faster as a SQL function on 18.
 - **Repeat runs, confidence intervals, bloat from churn,** and checksums beyond 8 sample users (CMP, Caveats).
 - **A user who sees most of 1M documents,** and a 1M-element array from `accessible()` (C §11). Sample users see about 20k at large.
 - **Large model changes.** C's full `memberships` rebuild at millions of rows (C §12.5); runtime `create_role` churn.

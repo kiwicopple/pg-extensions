@@ -21,7 +21,7 @@ Status as of 2026-10-29, from `test/run.sh --impl <implementation>`:
 | G11 | Public access (`user:*`); null subject is denied | §10 | `<design>/51_public` | ❌ | ✅ 7/7 | ✅ 7/7 | ✅ 7/7 |
 | G12 | Forbid beats grants, including parent-derived ones | §10 | `<design>/52_forbid` | ❌ | ✅ 9/9 | ✅ 9/9 | ✅ 9/9 |
 | G13 | Conditions: document status, expired grants | §10 | `<design>/53_conditions` | ❌ | ✅ 6/6 | ✅ 6/6 | ✅ 6/6 |
-| G14 | Installs as a non-superuser; via `pgtle.install_extension` if pg_tle is available | §10 | `03_tle_install` | ❌ | ✅ 9/9 (pg_tle path not tested) | ✅ 9/9 (same) | ✅ 9/9 (same) |
+| G14 | Installs as a non-superuser; via `pgtle.install_extension` if pg_tle is available | §10 | `03_tle_install` | ❌ | ✅ 9/9 (pg_tle path on PG 16-18 in Docker) | ✅ 9/9 (same) | ✅ 9/9 (same) |
 | | Design-specific: B fails closed on forbids with missing inputs | | `b/54_fail_closed` | | | ✅ 16/16 | |
 | | Design-specific: C materialized memberships stay correct | | `c/32_memberships` | | | | ✅ 31/31 |
 | | Design-specific: C `who_can` reports public grants | | `c/54_who_can_public` | | | | ✅ 8/8 |
@@ -57,10 +57,12 @@ Large-scale p95 (ms) from the serial runs of 2026-10-28 (`bench/baselines/<desig
 
 `bench/run.sh --check` at small scale (2026-10-29): A fails 4 (`parents_proj_select_page`, `parents_proj_select_count`, `parents_select_page`, `parents_select_count`), B fails 4 (`parents_select_page`, `parents_select_count`, `write_nest_team`, `nest_check`), C fails 1 (`write_nest_team`). Every engine passes every session-1 budget.
 
+On Postgres 16.15, 17.11 and 18.6 in Docker (2026-10-29, [`bench/baselines/VERSIONS.md`](./bench/baselines/VERSIONS.md)), the large-scale budget results are the same as the table above, with two exceptions. First, `parents_proj_select_count` (9 ms) is over or within 10% of the budget for every engine on every version: A 10.3-12.1 ms p95; B 9.97, 9.15 and 8.46 on 16, 17 and 18; C 9.50, 8.94 and 8.50. The cause is that current minor releases read every heap page for that bitmap count, while 16.4 skipped them (VERSIONS.md, Calibration). Second, B's `nest_check` passes (1.4-1.7 ms). Between versions, the only budget that flips is that borderline `parents_proj_select_count`.
+
 The `share_*`, `parents*`, `write_share`, `write_nest_team` and `nest_check` workloads are per-design (`bench/designs/<design>/`, native API) over identical data (`bench/seed_shape.sql`); the budgets are shared. All three engines return identical visible-document checksums for every read policy at every scale and shape measured.
 
-Large scale is 1M documents, 10k users, 100 orgs and 500 teams nested about 5 levels deep; medium is 100k documents, 5k users, 50 orgs, 200 teams. Measured on Postgres 16 on an Apple Silicon laptop with 4 pgbench clients, one run per configuration. Writes roll back and run on a throwaway cluster with `fsync` off, so they're optimistic.
+Large scale is 1M documents, 10k users, 100 orgs and 500 teams nested about 5 levels deep; medium is 100k documents, 5k users, 50 orgs, 200 teams. Measured on Postgres 16 on an Apple Silicon laptop with 4 pgbench clients, one run per configuration; Postgres 16, 17 and 18 in Docker on the same laptop in [`bench/baselines/VERSIONS.md`](./bench/baselines/VERSIONS.md). Writes roll back and run on a throwaway cluster with `fsync` off, so they're optimistic.
 
 ## Not yet covered by tests
 
-- [ ] pg_tle install path (`03_tle_install` tests the non-superuser install only; pg_tle isn't available locally)
+- [x] pg_tle install path: `03_tle_install` runs `pgtle.install_extension` + `create extension` as a non-superuser on Postgres 16, 17 and 18 with pg_tle 1.5.3 (`docker/run-matrix.sh test`, 2026-10-29). Locally, without pg_tle, it still checks only the non-superuser install

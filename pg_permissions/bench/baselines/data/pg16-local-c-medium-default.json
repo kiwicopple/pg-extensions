@@ -29,5 +29,6 @@
     {"phase": "parents", "seconds": 1.59, "size_mb": 27},
     {"phase": "nesting", "seconds": 0.11, "size_mb": 27.8}
   ],
-  "checksums": {"rbac": "d394663f", "sharing": "9b43a472", "parents_proj": "afbedca5", "parents": "afbedca5"}
+  "checksums": {"rbac": "d394663f", "sharing": "9b43a472", "parents_proj": "afbedca5", "parents": "afbedca5"},
+  "report": "bench/baselines/c-medium-default.md"
 }

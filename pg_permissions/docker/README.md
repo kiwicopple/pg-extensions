@@ -63,12 +63,12 @@ Running the harness from the host also works (`PGHOST=localhost PGPORT=54318 PGU
 
 ### How long a full serial run takes
 
-Estimated from the local serial runs on 2026-10-28/29 (finish-to-finish times of the reports, 10 s per workload, 14 workloads, so about 2.5 minutes is pgbench alone), plus about 10 s per run for container start and stop:
+Measured on 2026-10-29 (10 s per workload, 14 workloads, so about 2.5 minutes of each run is pgbench), including container start and stop:
 
 | Benchmark | One version, A + B + C | 3 versions x 3 engines |
 | --- | --- | --- |
-| `--scale large` (default shape) | about 13 min (A ~4, B ~6, C ~3) | about 40 min |
-| `--scale medium --shape deep` | about 8 min | about 25 min |
-| `--scale medium --shape wide` | about 13 min (C's wide seed is the slowest) | about 40 min |
+| `--scale large` (default shape) | about 11 min (A 3.2, B 4.8, C 3.0) | 32 min |
+| `--scale medium --shape deep` | about 7.5 min | 22 min |
+| `--scale medium --shape wide` | about 11 min (C 5.5: its wide sharing seed takes 3 min) | 34 min |
 
-With 4 CPUs instead of 10, seeds (index builds, `VACUUM FULL`) may be somewhat slower than local; budget up to 25% more.
+Results from these runs are in [`../bench/baselines/VERSIONS.md`](../bench/baselines/VERSIONS.md).
