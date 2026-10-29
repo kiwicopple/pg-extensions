@@ -1,6 +1,6 @@
 # pg_permissions: Plan
 
-> Status: requirements and summary, with the session 4 direction (per-model tables, RBAC and OpenFGA first) in "Current plan" below. Sections that assumed one generic API are marked superseded and kept as history. The requirements and the A/B/C comparison below were written before that decision.
+> Status: requirements and summary, with the session 4 direction (per-model tables, RBAC and OpenFGA first) in "Current plan" below. D is the chosen engine (end of session 4); the ordered work plan is "Next work (session 5 onward)" right after it, and the decisions are in [`DECISION.md`](./DECISION.md), "Decisions at the end of session 4". Sections that assumed one generic API are marked superseded and kept as history. The requirements and the A/B/C comparison below were written before that decision.
 >
 > Earlier status: requirements and summary. The extension itself isn't implemented yet (`pg_permissions--0.0.1.sql` is empty). All three designs are built as prototypes in [`prototypes/`](./prototypes/), pass the test suite and have been benchmarked; the choice between them is open. See [`DECISION.md`](./DECISION.md).
 >
@@ -20,6 +20,108 @@ Decided 2026-10-29. The reasons and the evidence are in [`DECISION.md`](./DECISI
 - First spike: the `rbac_*` tables plus an OpenFGA core subset (direct relations, computed usersets, tuple-to-userset, wildcards `user:*`), run against OpenFGA's own test cases, plus one table whose RLS combines RBAC and FGA, benchmarked against the current numbers (§8).
 - Second stage: OpenFGA conditions (CEL). In pg_tle this means a parser and compiler in SQL or PL/pgSQL, the largest single cost, so it follows the core.
 - Prototypes: A is the starting point for `fga_*` (C's materialized memberships remain a possible optimization if wide reads need it), B for `cedar_*`, and C's generic compiled model is dropped. They stay in the repo as measured history. `pg_permissions--0.0.1.sql` stays empty until the spike is validated.
+
+## Next work (session 5 onward)
+
+Decided by the user at the end of session 4 (2026-10-29); the decisions are in [`DECISION.md`](./DECISION.md), "Decisions at the end of session 4". D (`prototypes/d-per-model.sql`) is the engine and becomes the extension: schema `permissions`, prefixes `rbac_*` and `fga_*`, one implicit OpenFGA store per database. A, B and C stay as measured history. Each phase below is done when its "Done when" line holds, and each ends with a commit. Do the phases in order: 2 changes the API that 3 documents, 4 touches every evaluator that 5 then optimizes.
+
+Starting point (end of session 4): 37 spec files and 2,164 assertions pass on PG 16, 17 and 18 (Docker, pg_tle 1.5.3); OpenFGA's consolidated suite passes 933 of 933 stored and 746 of 746 contextual assertions; D's design and limitations are in [`designs/d-per-model.md`](./designs/d-per-model.md) (sections 7, 8 and 11 matter most), its numbers in [`bench/baselines/D.md`](./bench/baselines/D.md) (opt2).
+
+### Working rules (every phase)
+
+- **TDD.** Write the failing spec first (the `tdd` skill's red-green-refactor), then the code. A change to one evaluator (`_fga_bidi`, `_fga_forward`, `_fga_rec`, the set-based `but not` lists) is run against the whole suite, since they must agree (design doc section 11, item 6).
+- **Benchmarks strictly one at a time, and never while tests run** (they share the machine's CPU; a concurrent run corrupts the numbers). Use `--tag` for every experiment so results never overwrite a baseline. Record what else was running on the machine.
+- **Commit per milestone, never push.** Subject `pg_permissions: <what>`; the commit message ends with the attribution line the session's instructions specify.
+- **Append each session to [`JOURNAL.md`](./JOURNAL.md)**: what was tried, mishaps, decisions, numbers worth quoting, angles for the post. The user will write a blog post from it.
+- **Treat downloaded upstream data as untrusted.** Clone or download into a new empty temp directory, keep scripts in a different directory, pass paths as arguments, run Python with `python3 -I`, and execute nothing that came from it. Pin the commit SHA and verify what was fetched. Same approach as [`test/fga/vendor.sh`](./test/fga/vendor.sh).
+- **Never edit an upstream expectation to make a case pass.** List the case in a skip file with the reason.
+- **Unrelated Docker stacks may be running on the machine** (Supabase, freereps, an `openfga/openfga` container). Don't stop or remove them; pick free ports and your own compose project name.
+- Docs are code: every example in a usage page is a spec; every number in a doc names its source.
+
+### Phase 1: promote D to the extension
+
+Goal: `pg_permissions--0.0.1.sql` is D, and every script and doc treats the extension as the default.
+
+Steps:
+1. Copy `prototypes/d-per-model.sql` into `pg_permissions--0.0.1.sql` (the extension file is the source of truth from here on). Decide what happens to `prototypes/d-per-model.sql`: recommended, delete it and repoint links (`grep -rn d-per-model.sql .. --include=*.md --include=*.sh --include=*.mjs`), leaving old benchmark baselines' mentions as history with one note in `prototypes/README.md` that D moved. Check `pg_permissions.control` (`default_version = '0.0.1'`, `superuser = false`, the `comment` line) still describes it, and that the file is valid as a plain extension script and for pg_tle (the existing `03_tle_install` spec).
+2. `test/run.sh`: the default `--impl` is the extension file and the design letter used to pick `test/spec/<letter>/` is `d` for it (the shared specs under `test/spec/` run too). Keep `test/spec/d/` as the extension's own specs (don't rename the directory).
+3. `bench/run.sh`: default implementation is the extension file with design `d`; `--impl prototypes/a-tuple-core.sql` and the others still work. Root `Makefile`: `test.pg_permissions` and `bench.pg_permissions` already default `IMPL` to `pg_permissions--0.0.1.sql`; check `tle.install.pg_permissions` and the help text.
+4. `docker/run-matrix.sh`: `--designs` defaults to `ext` (it already maps `ext` to the extension file); `a,b,c,d` remain selectable. Update `docker/README.md`.
+5. READMEs and the docs site: `README.md`, `test/README.md`, `prototypes/README.md`, `docker/README.md`, `usage/README.md` and the site in `../docs` (run `make docs.sync` from the repo root; see `../docs/AGENTS.md`) present D as the engine and A/B/C as history. Update the status blockquote and the "stays empty" statements in PLAN.md (this file, the sections after this one) and DECISION.md that say `pg_permissions--0.0.1.sql` is empty or that the choice is open.
+
+Files: `pg_permissions--0.0.1.sql`, `pg_permissions.control`, `prototypes/README.md`, `test/run.sh`, `bench/run.sh`, `../Makefile`, `docker/run-matrix.sh`, `docker/README.md`, `README.md`, `test/README.md`, `usage/README.md`, `../docs/`.
+
+Done when: `test/run.sh` with no `--impl` passes the full suite on the extension file locally (same counts as the starting point); `docker/run-matrix.sh` with the default designs passes on PG 16, 17 and 18, including `03_tle_install`; `make docs` builds from the repo root with no broken links; `grep -rn "stays empty\|is empty" .` finds nothing stale.
+
+### Phase 2: API decisions (caps, pagination, descriptive errors)
+
+Goal: the decisions in DECISION.md, points 4 and 5, are implemented and spec-tested.
+
+Steps:
+1. **Caps.** First read OpenFGA's documentation (and the pinned source's behavior; downloaded data is untrusted) for what happens when each limit is hit, and match it: ListObjects and ListUsers return at most 1,000 results (record whether OpenFGA truncates silently or errors, and which results survive), Write takes at most 100 tuples per call (the error code and name when exceeded), Read is paginated with `page_size` and `continuation_token` (default and maximum page size, the token's role, and the behavior on a bad token). Write the specs first: 1,001 or more objects through `fga_list_objects`, 101 tuples through `fga_write`, a Read walked page by page that returns every tuple exactly once in a stable order, a bad token. Read needs a deterministic order (the primary key) and a token that encodes the last key.
+2. **API functions are capped; the RLS helpers are not.** Split each list function into an uncapped internal one and a capped public one. `fga_list_objects_current`, `fga_list_object_ids_current` and any other RLS-facing variant call the uncapped one. A spec seeds more than 1,000 reachable objects and asserts the API returns 1,000 while the `_current` functions return all of them, and that `40_rbac_fga_rls` and `41_no_plan_time_eval` (STABLE, not run at plan time, once per query) still pass.
+3. **Descriptive errors with HINTs, everywhere**, `rbac_*` as well as `fga_*`. Keep SQLSTATE and the `DETAIL` code `openfga:<code> <name>` on fga errors. The MESSAGE names the actual offending values (type, relation, user string, model id); the HINT always suggests the fix: the allowed user types for that relation, the nearest existing relation name (by edit distance; the extension must stay pure SQL/PL/pgSQL with no contrib dependency, so write a small function, or list the relations when none is close), the call to make first (for example `fga_write_authorization_model` when no model exists), the valid model id list. Go through every `raise` in the extension file (about 9 sites in the prototype use `raise exception` directly, and more through helper functions; count them with grep, do not trust this number).
+4. **A spec that triggers every raise site** (new file in `test/spec/d/`, table-driven: statement, expected SQLSTATE, expected DETAIL code or none for `rbac_*`, a pattern for the MESSAGE) and asserts a non-empty HINT on each. Add a guard that fails when a raise site has no HINT, for example by scanning `pg_proc.prosrc` for the extension's functions for `raise` statements without `hint`. All existing OpenFGA suite error-code assertions must keep passing.
+5. Update `designs/d-per-model.md`: section 4 (caps, pagination), section 7 (error table, HINTs), section 8 deviation 4 (no longer a deviation, except the RLS helpers), and the exact behaviors found in step 1.
+
+Files: `pg_permissions--0.0.1.sql`, `test/spec/d/30_fga_api.sql` and a new spec file for the errors and the caps, `designs/d-per-model.md`, `usage/` (phase 3 rewrites it; fix examples that break).
+
+Done when: the new specs fail before and pass after; the full suite is green locally and on the docker matrix (PG 16, 17, 18); the OpenFGA consolidated suite is still 933/746; the every-raise-site spec passes and the guard fails if a HINT is removed (check by deleting one).
+
+### Phase 3: hardening and usage docs
+
+Goal: model validation is complete, the usage docs describe D, and the old findings list is closed or carried.
+
+Steps:
+1. **Complete model validation.** The gaps are in `designs/d-per-model.md` section 8, item 8: relations with no entrypoint (`define a: b`, `define b: a`) and OpenFGA's other graph checks (cycles in computed relations and anything else the validator rejects). Use openfga/language's `tests/data/dsl-semantic-validation-cases.yaml` (Apache-2.0) as the oracle, with the same vendoring approach as [`test/fga/`](./test/fga/): a new vendor script that fetches the repository at a pinned SHA into an empty temp directory, verifies the SHA, copies the file with its LICENSE and a SOURCE file (repository, commit, CLI image, date), converts each case's DSL model to JSON with the pinned `openfga/cli` image by digest (stdin, no network; if the transformer refuses invalid models, say so, find the pinned CLI's way to emit JSON without validating, or record those cases in the skip file with the reason), and commits the result. A `generate.py` (run with `python3 -I`) writes TAP specs. For each case assert accepted versus rejected by `fga_write_authorization_model` and, for rejected ones, the error code (`openfga:2056`) and a non-empty HINT; the upstream error text is the language library's, not the server's, so do not match messages. A skip list (`skip.tsv`) with a reason for each case not run; never edit an expectation. Report how many cases pass.
+2. Implement the missing checks in `fga_write_authorization_model` until every non-skipped case passes. Re-check the existing suite: a stricter validator must not reject any model in the consolidated suite. Add mutants (disable one check, see the cases fail) and record the counts.
+3. **Rewrite the usage docs for D.** `usage/` today has pages for A, B and C. Write the D page (one page for the extension, or `rbac` and `fga` pages plus the combined RLS page) and rewrite `usage/README.md`; every example is a spec (pattern: `test/spec/90_usage_rbac.sql` and `test/spec/a/90_*`; add `test/spec/d/90_usage_*.sql`). Cover: the RBAC API, writing a model (DSL converted to JSON with `fga model transform`), tuples, Check, ListObjects, ListUsers, Read with pagination, contextual tuples, composing RBAC and FGA in RLS (the `40_rbac_fga_rls` pattern), the plan-time guard, caps and errors, privileges. The usage docs must say that row attributes that exist only in RLS are invisible to the check functions: either the check functions are advisory and RLS is final, or row attributes are passed in (this file's "Current plan (session 4)", the "No separate ABAC model" bullet; DECISION, "Session 4 direction", point 6).
+4. **Re-check "Findings from writing the usage docs" in DECISION.md against D**, bullet by bullet: for each, write one of "closed: not applicable to D (reason)", "closed: fixed in D (the spec that proves it)" or "carried: D has it (what to do)". Most are A, B or C specific and close as not applicable, but check D for the analogues (a typo in a relation name giving silent no-access, which D should raise as 2022; forbid semantics, which in D are `but not`; the RLS-only attribute gap; `delete_subject` spanning both models, design doc section 11 item 5). Any item claimed fixed gets a spec.
+5. Update `designs/d-per-model.md` section 8 (item 8 removed or narrowed) and `GOALS.md` if a goal's status changed.
+
+Files: `pg_permissions--0.0.1.sql`, a new `test/fga_lang/` (or similar) directory with `vendor.sh`, `generate.py`, `skip.tsv`, `upstream/`, `cases.json`, new `test/spec/d/6x_*` generated specs, `usage/`, `test/spec/d/90_usage_*.sql`, `DECISION.md`, `designs/d-per-model.md`.
+
+Done when: the validation oracle passes except the listed skips (each with a reason); the consolidated suite is still 933/746; every usage example is a spec and the specs pass; each finding in DECISION.md has a closing note; docs site builds.
+
+### Phase 4: OpenFGA conditions (CEL)
+
+Goal: conditions on tuples, type restrictions and models work as in OpenFGA, with the CEL evaluator written in PL/pgSQL (the user wants it in the database: no external service, no extension beyond pg_tle's limits). The largest single cost in the plan.
+
+Steps:
+1. **Vendor the oracle.** `assets/tests/abac_tests.yaml` (33 cases) from the same repository and the same pinned SHA as the consolidated suite (`44054f542f64e9b9589dd26a595081b3d2cfd942`), extending `test/fga/vendor.sh` (or a sibling script) and `generate.py`: same pinned CLI image, same skip file, same stored and contextual-tuple runs, same TAP naming. Condition cases pass `context` on the request and on tuples. Before writing any code, list from the cases which CEL types, operators and functions they use, and from OpenFGA's documentation the supported condition parameter types (any, bool, string, int, uint, double, duration, timestamp, map, list, ipaddress) and functions; that list is the scope.
+2. **Write `designs/d-conditions.md` first** (a short design doc: grammar subset, token and AST shapes, how the compiled form is stored, how it is evaluated, error mapping, how walks consult it, performance expectations), and check it against the cases before coding. Recommended shape: a tokenizer and a precedence-climbing parser in PL/pgSQL producing an AST; store the compiled form at model-write time (rows in a new `fga_condition_*` table or jsonb on `fga_models`; no parsing at Check time); evaluate with a recursive PL/pgSQL function over typed values. Whatever is chosen, say why.
+3. **Model write:** parse every condition expression when the model is written; reject a syntax error, an unknown parameter name, a parameter type that is not one of OpenFGA's, a condition that is not boolean, and a tuple or type restriction naming an undefined condition, with the error code OpenFGA gives (look it up in the cases and docs) and a descriptive HINT. Store the parameter types. Remove the `0A000` `conditions_not_supported` error.
+4. **Evaluation:** typed parameters (OpenFGA's condition parameter types) with the tuple's stored context and the request's context merged exactly as OpenFGA does (find which side wins in the docs and cases and pin it with a spec); a missing parameter raises 2000 as upstream does, a type mismatch likewise; an evaluation error in one branch follows the same rules as other branch errors (it loses to a branch that decides). `fga_write` validates a tuple's condition name and context types as OpenFGA does; Read returns conditions with the tuple.
+5. **Wire conditions into every evaluator:** `_fga_bidi`, `_fga_forward`, `_fga_backward`, `_fga_rec`, the set-based `but not` lists, ListObjects, ListUsers, and contextual tuples. A walk edge through a conditioned tuple is taken only when the condition evaluates true. Keep the unconditioned fast path as fast as it is now (compare `fga_check` and ListObjects timings on the existing benchmark before and after, tag the run).
+6. Update `designs/d-per-model.md` (sections 2, 4, 7, 8 deviation 2) and `usage/` (a conditions page with specs, for example expiry and IP range).
+
+Files: `pg_permissions--0.0.1.sql`, `designs/d-conditions.md`, `test/fga/vendor.sh` and `generate.py` (or siblings), `test/fga/upstream/abac_tests.yaml`, `cases.json` (or a second JSON), `test/fga/skip.tsv`, generated `test/spec/d/6x_*` specs, new in-house specs for CEL expressions the cases don't reach, `usage/`.
+
+Done when: the abac suite passes fully in both runs (stored and contextual-tuple), with any skip listed with a reason; the consolidated suite is still 933/746; mutants are caught (ignore the condition, treat a missing parameter as false, swap context precedence, skip the type check: each fails at least one assertion; record the counts); `d/41_no_plan_time_eval` still passes (no plan-time evaluation); the full suite is green locally and on the docker matrix (PG 16, 17 and 18).
+
+### Phase 5: performance pass 2
+
+Goal: close the hotspots listed in [`bench/baselines/D.md`](./bench/baselines/D.md) ("Remaining gaps and hotspots") and measure what conditions cost. Everything is tested before and after; a change that doesn't pay is reverted and written up.
+
+Candidates, from D.md and the journal:
+1. **Check** is 1.3-1.4x A: `_fga_bidi` runs too many statements per round (two `_fga_bstep` calls, a probe and a meet test). Matters for per-row RLS (`fga_check_current` in an update policy). Folding the user probe into the step was considered and not done because it changes the level accounting for userset users; the depth specs (`d/33`) and the OpenFGA depth cases guard that.
+2. **Writes** are 1.5-1.7x A: `fga_write_tuple` builds JSON that `fga_write` re-parses and validates with six lookups. Add a typed write path (validate and insert without the JSON round trip) behind both.
+3. **Wide ListObjects** (1.15x A, 1.5x C): the final leaf join does an index probe plus a heap fetch per tuple because the user index has no `object_id`. A covering index would make it index-only (-33% on large fan-outs, +120 MB at large: decide on the numbers); also the sort-based `group by` that keeps each target's lowest level and the three PL/pgSQL result tuplestores.
+4. **Non-monotone paths** outside the set-based form (intersections, `but not (a or b)`, a base that depends on a non-monotone relation): about 2 s per wide ListObjects, because each candidate is checked top-down without memoization. Look for a set-based form for intersections and a union-of-subtracts, or memoization.
+5. **Cyclic userset data**: the leveled walk re-expands a node once per level up to 25. `_fga_forward_ids` (one row per node) is the alternative; needs data with cycles, which the benchmark doesn't have, so add a cyclic shape or a side script first.
+6. **Conditions** (phase 4): what a conditioned edge costs in Check, ListObjects and ListUsers against the unconditioned version of the same data.
+
+Steps: pick the order by the numbers; for each change write or extend a spec that pins the behavior (the existing specs plus the OpenFGA suite are the safety net; add a mutant if the change adds a path), implement, run the whole suite (not at the same time as a benchmark), then benchmark one configuration at a time with a new tag (for example `opt3`) on PG 18 in Docker: large default, medium deep, medium wide, all four designs for comparison where the earlier numbers exist. Move the `but not` ListObjects block-list workload from the side script (`designs/d/but_not_list_objects.sql`) into the pgbench workloads. Update `bench/baselines/D.md` with a new section comparing opt2 and opt3 (and A, B, C), including budgets and `--check`; update `designs/d-per-model.md` section 5 and 10.
+
+Done when: each candidate above is either done with before/after numbers or rejected with a measurement; checksums still identical across designs; the suite is green on the docker matrix; `D.md` has the opt3 section; budgets in `bench/budgets.tsv` are re-checked.
+
+### Phase 6: loose ends
+
+1. **Small and medium scale benchmarks in Docker** for the extension (and A, B, C for comparison): small and medium default shape after the optimizations, which were never measured (DECISION, "What hasn't been measured"). One run at a time, tagged.
+2. **Re-baseline the large `parents_proj_select_count` budget** in `bench/budgets.tsv`. It misses (11.55 ms against 9 ms) for every engine, a heap-fetch floor on current Postgres patch releases that no engine can reach. Change the budget to a number every engine can meet with a recorded reason, not an engine-specific exemption; say so in `bench/baselines/D.md` and `DECISION.md`.
+3. Close the open items in DECISION.md ("What hasn't been measured", open questions) that the work above settled, and record the rest.
+
+Done when: small and medium results are committed under `bench/baselines/`; `--check` at large passes; DECISION.md's lists are current.
 
 ## Goal
 

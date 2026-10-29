@@ -807,3 +807,15 @@ This is the part of the session worth the most space. D passed all 138 of OpenFG
 - opt2 (PG18 Docker): `but not` ListObjects 2,079 -> 4.16 ms (per-candidate path 2,234 ms on the same build); wide `share_list_objects` 17.77 -> 5.12 ms (A 4.44, C 3.41); wide `parents_proj_select_page` 38.63 -> 10.87 ms (A 14.98, C 8.73); deep `share_list_objects` 0.78 -> 0.33 ms; `folder#viewer` ListObjects 13.7 -> 0.04 ms in-server.
 - Budget misses: five (four wide, one deep) plus the shared large one before; only the large `parents_proj_select_count` (11.55 > 9 ms) after.
 - Tests after opt2: 37 of 37 spec files, 2,164 assertions on PG 16, 17 and 18; OpenFGA suite 933 of 933 and 746 of 746.
+
+### End of session 4: decisions
+
+The user made these calls after the opt2 benchmarks and the upstream report. They are recorded in `DECISION.md` ("Decisions at the end of session 4") and turned into an ordered work plan in `PLAN.md` ("Next work (session 5 onward)").
+
+- **D is the engine and becomes the extension.** A, B and C stay as measured history. The schema is `permissions`, with `rbac_*` and `fga_*` prefixes (closes open question 10). One implicit OpenFGA store per database; the latest model by default, older model ids still evaluate.
+- **Caps follow OpenFGA on the API functions:** ListObjects and ListUsers at most 1,000 results, Write at most 100 tuples per call, Read paginated with `page_size` and `continuation_token`. The RLS helper functions (`fga_list_objects_current`, `fga_list_object_ids_current`, any RLS-facing variant) stay uncapped, because a cap there would silently hide rows from a user.
+- **Descriptive errors:** OpenFGA's numeric code stays in `DETAIL`; the message names the actual offending values and every error carries a `HINT` that says how to fix it (allowed user types, the nearest relation name, the call to make first). This covers `rbac_*` errors as well.
+- **Cycle semantics stay as implemented:** least fixpoint for positive recursion beneath an exclusion, which differs from OpenFGA v1.22.1.
+- **The pg_tle managed-host test is dropped** ("don't worry about the PG TLE"). The Docker install spec stays green; nothing more.
+- **The user reached out to the OpenFGA team with the report** (`upstream/openfga-cycle-but-not-inconsistency.md`). No answer yet; if upstream decides the other way, D changes again.
+- **Next:** the plan has six phases in order: promote D to the extension, the API decisions, hardening and usage docs (with openfga/language's semantic validation cases as a second oracle), conditions with a CEL parser and evaluator in PL/pgSQL (OpenFGA's 33 ABAC cases as the oracle), a second performance pass, and the loose ends (small and medium benchmarks, the large `parents_proj_select_count` budget).
