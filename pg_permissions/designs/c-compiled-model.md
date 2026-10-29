@@ -491,3 +491,29 @@ New `test/spec/c/33_incremental_memberships.sql` (13 assertions): a shortcut low
 - **Deletes recompute.** Revoking a nesting recomputes every member of the subject (now with a set-level walk). A delta delete would need per-path counts, a bigger change to the derived data.
 
 **Expected in the serial confirmation run** (4 clients, as in `COMPARISON.md`): `write_nest_team` large from 333 to about 55-65 ms (11 to about 60 tps), wide from 145 to about 60 ms, small from 62 to about 15-25 ms. `parents_select_page` large from 9.6 to about 5 ms; `parents_select_count` from 22 to about 14-16 ms. Wide sharing seed from 183 s to about 25 s. Wide reads and `nest_check` unchanged within noise. Checksums identical to A and B.
+
+### 15.8 `scopes_with_permission` is VOLATILE (the STABLE double-execution trap)
+
+**Finding.** While optimizing A, `list_objects` turned out to run twice per query: once while planning, once while executing (`designs/a-tuple-core.md` §13). The policies call these functions with constant arguments inside `array(select unnest(...))`. To estimate the unnest's row count, the planner pre-evaluates STABLE functions with constant arguments (`estimate_expression_value`). Marking them VOLATILE removed the plan-time run (A's wide `share_select_page` went from 207 to 110 ms on that change alone).
+
+**Does C have it? Yes, for `scopes_with_permission`; not for `accessible()` in the policy form.** `EXPLAIN (ANALYZE, BUFFERS)` as user 1 on medium wide, with the sharing policy `org_id = any (array(select unnest(scopes_with_permission('documents.read'))::uuid)) or id = any ((select accessible('document', 'viewer'))::uuid[])`:
+- `Planning: Buffers: shared hit=1422` is exactly the buffer count of the `scopes_with_permission` InitPlan at execution (1,422). Planning Time was 1.27 ms (7.7 ms on the first, cold run) against 11.3 ms execution.
+- The `accessible()` arm doesn't appear in the planning buffers: `(select accessible(...))::uuid[]` is a scalar subquery, which the planner doesn't pre-evaluate.
+- After `VOLATILE`, the planning buffers are gone and Planning Time is 0.03 ms (0.3 ms cold).
+- The same call outside the blessed form does double-execute: `id = any (array(select unnest(accessible(...))))` and the bare `id = any (accessible(...)::uuid[])` both show the plan-time evaluation (about 1,213 extra planning buffers, 3-4 ms of planning). Those aren't the documented policy form, so `accessible()` stays STABLE: VOLATILE would also stop the bare form from being an index qual. Use `(select accessible(...))::uuid[]`, as in section 7.
+- `has_permission`, `has_role` and `can` (boolean quals, shown as One-Time Filter) and the single-branch / projection policies (`parents_select_*`, `parents_proj_*`, which only call `accessible()` as a subquery) show no plan-time evaluation, so nothing changed for them.
+
+**Change.** `scopes_with_permission` is `language sql volatile` (it still only reads). The planner now assumes 10 elements for the unnest instead of the real count; the plans didn't change in any workload.
+
+**Measured.** Interleaved old/new/new/old/old/new, 3 rounds each, `bench/run.sh --only ... --clients 1 --tag opt-c2`, Postgres 16.4 local, 10 s per run. The old file is kept as `bench/results/optc2/c-orig.sql`, git-ignored. Other agents were benchmarking on the same machine; one old run (round 3) and one new run (round 2) were visibly disturbed, so medians matter more than means. p50 ms, per round (old | new):
+
+| Workload | Old | New | Median old / new |
+| --- | --- | --- | --- |
+| medium default `rbac_select_page` | 0.41, 0.62, 1.98 | 0.33, 0.35, 0.33 | 0.62 / 0.33 (best-of: 0.41 / 0.33) |
+| medium default `rbac_select_count` | 0.36, 0.50, 0.37 | 0.28, 0.26, 0.27 | 0.37 / 0.27 (best-of: 0.36 / 0.26) |
+| medium wide `share_select_page` | 10.84, 11.95, 11.21 | 10.52, 14.97, 11.52 | 11.21 / 11.52 (best-of: 10.84 / 10.52) |
+| medium wide `share_list_objects` (no scopes call) | 3.31, 3.34, 3.35 | 3.29, 3.77, 3.42 | 3.34 / 3.42 (control) |
+
+RBAC reads get 20-30% faster, because planning was a big part of a 0.4 ms query. The wide sharing page gains about 1.2 ms of 11 (the plan-time call), which is inside the noise of this machine; the best-of figures agree with it but don't prove it. C gains little there because its `scopes_with_permission` is a lookup in materialized memberships (about 1.2 ms), where A's was a 100 ms walk. `parents_*` workloads don't call `scopes_with_permission`, so they were not re-run.
+
+**Checks.** The runs printed identical checksums for old and new (rbac `d394663f...`, sharing `6f7c008d...`), and "same" against A's and B's latest equivalence files. The full suite is unchanged: 18/18 files, 217/217 assertions.

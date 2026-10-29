@@ -1907,9 +1907,17 @@ $$;
 
 -- RLS fast path for tenant scoping. text[] as in PLAN.md §6; policies use
 -- org_id = any (array(select unnest(permissions.scopes_with_permission(...))::uuid)).
+--
+-- VOLATILE on purpose, although it only reads. Inside array(select unnest(...))
+-- the planner estimates the unnest's row count by pre-evaluating STABLE
+-- functions with constant arguments, so a STABLE version ran the whole call
+-- at plan time and again at execution. VOLATILE isn't pre-evaluated.
+-- accessible() stays STABLE: the policy form (select accessible(...))::uuid[]
+-- isn't pre-evaluated, and VOLATILE would stop a bare `id = any (...)` from
+-- being an index qual.
 create function permissions.scopes_with_permission(p_permission text)
 returns text[]
-language sql stable security definer
+language sql volatile security definer
 set search_path = ''
 as $$
     select array(select x::text from unnest(permissions._accessible(
