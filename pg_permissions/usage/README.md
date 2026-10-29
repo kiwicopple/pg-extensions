@@ -1,8 +1,8 @@
 # Using pg_permissions
 
-How to use `pg_permissions` in an application: install it, tell it who the current user is, define roles, and write RLS policies that use it. This page covers what is the same on all three engines. Every SQL example here runs as written in [`test/spec/90_usage_rbac.sql`](../test/spec/90_usage_rbac.sql), against engines A, B and C.
+How to use `pg_permissions` in an application: install it, tell it who the current user is, define roles, and write RLS policies that use it. This page covers identity, the `rbac` preset and the RLS rules, which are the same on the extension (design D) and on the prototypes A, B and C. Every SQL example here runs as written in [`test/spec/90_usage_rbac.sql`](../test/spec/90_usage_rbac.sql), against the extension and against A, B and C.
 
-The extension is still a prototype. The three engines are single SQL files in [`prototypes/`](../prototypes/), and `pg_permissions--0.0.1.sql` is empty until one is chosen ([`DECISION.md`](../DECISION.md)). What this page documents is the part that won't change with the choice: identity, the `rbac` preset and the RLS rules.
+The extension, [`pg_permissions--0.0.1.sql`](../pg_permissions--0.0.1.sql), is design D: `rbac_*` tables plus an OpenFGA-compatible `fga_*` model ([`designs/d-per-model.md`](../designs/d-per-model.md)). A, B and C stay in [`prototypes/`](../prototypes/) as measured history ([`DECISION.md`](../DECISION.md) records why D was chosen). The `fga_*` API has no usage page yet (PLAN.md, phase 3); the engine pages below describe A, B and C, and this page documents the part that all four share: identity, the `rbac` preset and the RLS rules.
 
 Examples use psql variables for IDs. `:'alice'` is Alice's user ID, and so on:
 
@@ -21,7 +21,9 @@ In your application these are parameters. They are UUIDs because engine C requir
 
 Statements that change roles run as the role that installed the extension (the "admin" below). Examples that start with `set local role authenticated` show what a client sees.
 
-## Which engine?
+## Which engine? (history)
+
+The extension is D, so there is nothing to choose for a new install. This table is the choice as it stood before D, and the three pages are the usage guides of the prototypes.
 
 | Engine | Pick it if | Usage page |
 | --- | --- | --- |
@@ -29,18 +31,18 @@ Statements that change roles run as the role that installed the extension (the "
 | **B: policy-first** | You need forbid on groups or conditions evaluated by the engine, your roadmap is Cedar-like policies, or your keys are text or bigint. You want generated RLS. | [Engine B: policy-first](b-policy-first.md) |
 | **C: compiled model** | Reads dominate and groups are wide or deep. Your IDs are UUIDs and you want typed validation (unknown names raise on write). Nesting teams is rare. | [Engine C: compiled model](c-compiled-model.md) |
 
-The `rbac` preset has the same functions, the same answers and the same error codes on all three, and its latency is within about 0.1 ms across engines ([DECISION.md](../DECISION.md)). If you only use roles and permissions, the choice doesn't affect your code. It starts to matter when you add per-object sharing: each engine page covers that.
+The `rbac` preset has the same functions, the same answers and the same error codes on all three (and on D), and its latency is within about 0.1 ms across engines ([DECISION.md](../DECISION.md)). If you only use roles and permissions, the choice doesn't affect your code. It starts to matter when you add per-object sharing: each engine page covers that.
 
 The rest of this page is engine-independent.
 
 ## Install
 
-The prototypes need no extensions and no C. They were tested on Postgres 16, 17 and 18.
+The extension needs no other extensions and no C. It was tested on Postgres 16, 17 and 18.
 
 ### Plain psql
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prototypes/b-policy-first.sql   # or a-tuple-core.sql, c-compiled-model.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f pg_permissions--0.0.1.sql   # prototypes: prototypes/a-tuple-core.sql etc.
 ```
 
 This creates the schema `permissions`, its tables and its functions, all owned by the role you connected as. Run it once per database: the files aren't re-runnable (a second run fails with `relation ... already exists`), and there is no upgrade path yet.
@@ -49,7 +51,7 @@ On Supabase, paste the file into the SQL editor, or run it with `psql` as the `p
 
 ### Non-superuser install
 
-The installing role needs no superuser rights. It needs `CREATE` on the database (the file creates the schema `permissions`); owning the database is not required. Everything it creates is owned by that role, and that role is the "admin" in this page. [`03_tle_install.sql`](../test/spec/03_tle_install.sql) checks this on every engine: a non-superuser that owns the database installs it, every object ends up owned by that role, and no function is written in C.
+The installing role needs no superuser rights. It needs `CREATE` on the database (the file creates the schema `permissions`); owning the database is not required. Everything it creates is owned by that role, and that role is the "admin" in this page. [`03_tle_install.sql`](../test/spec/03_tle_install.sql) checks this on the extension and on every prototype: a non-superuser that owns the database installs it, every object ends up owned by that role, and no function is written in C.
 
 ### pg_tle
 
@@ -63,7 +65,7 @@ grant pgtle_admin to app_owner;   -- the role that installs
 Then, as that role in psql:
 
 ```sql
-\set body `cat prototypes/b-policy-first.sql`
+\set body `cat pg_permissions--0.0.1.sql`
 select pgtle.install_extension('pg_permissions', '0.0.1', 'pg_permissions', :'body');
 create extension pg_permissions;
 ```
@@ -79,14 +81,14 @@ cd docker
 docker compose build
 docker compose up -d --wait pg17
 cd ..
-psql -h localhost -p 54317 -U postgres -v ON_ERROR_STOP=1 -f prototypes/a-tuple-core.sql
+psql -h localhost -p 54317 -U postgres -v ON_ERROR_STOP=1 -f pg_permissions--0.0.1.sql
 ```
 
 The containers use `trust` authentication on 127.0.0.1. They are for local testing.
 
-### The extension file is empty
+### The extension file
 
-`pg_permissions--0.0.1.sql` and `pg_permissions.control` are the future extension, and the SQL file has no functions yet. `dbdev install kiwicopple-pg_permissions` is not available. Until an engine is chosen, install a prototype as above. When one is chosen its file becomes `pg_permissions--0.0.1.sql`, and everything on this page stays valid.
+`pg_permissions--0.0.1.sql` and `pg_permissions.control` are the extension: install them as above. `dbdev install kiwicopple-pg_permissions` is not available yet (not published). To try a prototype instead, install one of the files in `prototypes/` the same way.
 
 ## Identity
 
@@ -625,4 +627,4 @@ The second line is engine-specific, so it isn't runnable here. Each engine page 
 - An engine page, for sharing, groups, the cleanup trigger and engine-only functions: [A](a-tuple-core.md), [B](b-policy-first.md), [C](c-compiled-model.md).
 - [`PLAN.md`](../PLAN.md): the goals, the `rbac` preset API and the RLS requirements these examples come from.
 - [`DECISION.md`](../DECISION.md): choosing between the engines.
-- [`test/spec/90_usage_rbac.sql`](../test/spec/90_usage_rbac.sql): the tested version of every example here. Run it with `./test/run.sh 90_usage_rbac --impl prototypes/<engine>.sql`.
+- [`test/spec/90_usage_rbac.sql`](../test/spec/90_usage_rbac.sql): the tested version of every example here. Run it with `./test/run.sh 90_usage_rbac` (the extension), or add `--impl prototypes/<engine>.sql` for a prototype.

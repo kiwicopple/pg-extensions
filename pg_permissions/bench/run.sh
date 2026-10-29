@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Benchmark a pg_permissions implementation with pgbench.
 #
-#   bench/run.sh --impl prototypes/a-tuple-core.sql              # small scale, 10s per workload
-#   bench/run.sh --impl prototypes/a-tuple-core.sql --scale large
+#   bench/run.sh                                                 # the extension (design d), small scale, 10s per workload
+#   bench/run.sh --scale large
+#   bench/run.sh --impl prototypes/a-tuple-core.sql              # a prototype, for comparison
 #   bench/run.sh --impl ... --shape wide --scale medium          # stress shape
 #   bench/run.sh --impl ... --only parents,write_nest_team       # rerun some workloads
 #   bench/run.sh --impl ... --check                              # exit 1 if any p95 is over budget
@@ -17,7 +18,8 @@
 #   --only NAME[,NAME...]        run only workloads whose name contains one of these;
 #                                phases after the last selected workload aren't seeded
 #   --design a|b|c|d|none        default: the letter before the first dash of the
-#                                --impl file name (a-tuple-core.sql -> a), else none
+#                                --impl file name (a-tuple-core.sql -> a), d for the
+#                                extension file (pg_permissions--*.sql), else none
 #   --external                   use the server from PGHOST/PGPORT/PGUSER
 #   --tag NAME                   appended to the JSON run_id (e.g. smoke)
 #   --check                      exit 1 if a p95 is over budget or a workload fails
@@ -106,7 +108,8 @@ IMPL_NAME=$(basename "$IMPL" .sql)
 
 if [ -z "$DESIGN" ]; then
     case "$IMPL_NAME" in
-        [abcd]-*) DESIGN=${IMPL_NAME%%-*} ;;
+        [abc]-*) DESIGN=${IMPL_NAME%%-*} ;;
+        pg_permissions--*) DESIGN=d ;;
         *) DESIGN=none ;;
     esac
 fi

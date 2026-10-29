@@ -35,14 +35,15 @@ psql -h localhost -p 54317 -U postgres   # from the host
 [`run-matrix.sh`](./run-matrix.sh) loops over versions and designs, strictly one at a time: for each version it stops the other servers, starts this one, runs every design, and stops it. At the end it runs `docker compose down` (images and volumes stay). From `pg_permissions/`:
 
 ```bash
-docker/run-matrix.sh test                                     # 3 versions x A, B, C
-docker/run-matrix.sh test --versions 18 --designs c -- -v 03_tle
-docker/run-matrix.sh bench -- --scale large                   # 9 large runs
-docker/run-matrix.sh bench --versions 17 --designs a,b -- --scale medium --shape wide
+docker/run-matrix.sh test                                     # 3 versions x the extension
+docker/run-matrix.sh test --versions 18 --designs ext -- -v 03_tle
+docker/run-matrix.sh test --designs ext,a,b,c                 # the extension and the prototypes
+docker/run-matrix.sh bench -- --scale large                   # 3 large runs of the extension
+docker/run-matrix.sh bench --versions 17 --designs ext,a,b -- --scale medium --shape wide
 docker/run-matrix.sh bench --designs c -- --scale small --duration 2 --tag smoke
 ```
 
-`--versions` and `--designs` (`a`, `b`, `c`, `d`, or `ext` for the extension file; `d` isn't in the default list) filter and order the loop; everything after `--` goes to `test/run.sh` or `bench/run.sh`. Output is also saved to `bench/results/matrix-<test|bench>-<timestamp>.log`, and a summary (exit status, time, result line or saved files) is printed at the end.
+`--versions` and `--designs` (`ext`, the extension file and the default, also spelled `d`; `a`, `b` and `c` are the prototypes in `prototypes/`, kept as history) filter and order the loop; everything after `--` goes to `test/run.sh` or `bench/run.sh`. Output is also saved to `bench/results/matrix-<test|bench>-<timestamp>.log`, and a summary (exit status, time, result line or saved files) is printed at the end.
 
 Each run happens in a throwaway client container (`docker compose run`) from the same image as the server, so `psql` and `pgbench` match the server version. It connects over the server's Unix socket, like the local throwaway cluster, and has its own 4-CPU limit, so pgbench doesn't take CPU from the server. By hand, the same thing is:
 
@@ -50,7 +51,7 @@ Each run happens in a throwaway client container (`docker compose run`) from the
 docker compose -f docker/compose.yaml up -d --wait pg18
 docker compose -f docker/compose.yaml run --rm --no-deps -T --entrypoint bash -u postgres \
     -e PGHOST=/var/run/postgresql -e PGUSER=postgres -e BENCH_ENVIRONMENT=docker \
-    pg18 /pg_permissions/bench/run.sh --external --impl prototypes/c-compiled-model.sql --scale medium
+    pg18 /pg_permissions/bench/run.sh --external --impl pg_permissions--0.0.1.sql --scale medium
 ```
 
 Running the harness from the host also works (`PGHOST=localhost PGPORT=54318 PGUSER=postgres ./test/run.sh --external --impl ...`), but then the client is your local Postgres version and every query crosses Docker Desktop's port forwarding, which adds latency. Fine for tests, not for benchmark numbers.
@@ -71,4 +72,4 @@ Measured on 2026-10-29 (10 s per workload, 14 workloads, so about 2.5 minutes of
 | `--scale medium --shape deep` | about 7.5 min | 22 min |
 | `--scale medium --shape wide` | about 11 min (C 5.5: its wide sharing seed takes 3 min) | 34 min |
 
-Results from these runs are in [`../bench/baselines/VERSIONS.md`](../bench/baselines/VERSIONS.md).
+These timings are for the three prototypes (D was measured later, see [`../bench/baselines/D.md`](../bench/baselines/D.md)). Results from these runs are in [`../bench/baselines/VERSIONS.md`](../bench/baselines/VERSIONS.md).

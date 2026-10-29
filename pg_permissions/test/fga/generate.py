@@ -2,7 +2,7 @@
 """Generate TAP spec files from OpenFGA's consolidated test suite, and report results.
 
     python3 -I test/fga/generate.py                 # write test/spec/d/6x_fga_oracle_*.sql, print counts
-    test/run.sh --impl prototypes/d-per-model.sql -v fga_oracle > /tmp/fga.out
+    test/run.sh -v fga_oracle > /tmp/fga.out
     python3 -I test/fga/generate.py report /tmp/fga.out   # counts: run, passed, failed, skipped by reason
 
 Input: test/fga/cases.json (written by vendor.sh: one upstream test case per

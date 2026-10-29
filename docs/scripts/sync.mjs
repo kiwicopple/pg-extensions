@@ -45,7 +45,7 @@ const PAGES = [
 	{ src: 'designs/a-tuple-core.md', route: 'designs/a-tuple-core', label: 'A: tuple core' },
 	{ src: 'designs/b-policy-first.md', route: 'designs/b-policy-first', label: 'B: policy first' },
 	{ src: 'designs/c-compiled-model.md', route: 'designs/c-compiled-model', label: 'C: compiled model' },
-	{ src: 'designs/d-per-model.md', route: 'designs/d-per-model', label: 'D: per-model tables' },
+	{ src: 'designs/d-per-model.md', route: 'designs/d-per-model', label: 'D: per-model tables (the extension)' },
 	{ src: 'prototypes/README.md', route: 'designs/prototypes', label: 'Prototypes' },
 	{ src: 'test/README.md', route: 'testing/test-suite', label: 'Test suite and bench harness' },
 	{ src: 'JOURNAL.md', route: 'journal/build-journal', label: 'Build journal' },

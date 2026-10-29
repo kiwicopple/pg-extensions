@@ -2,36 +2,36 @@
 
 Each goal is a spec file in [`test/spec/`](./test/spec/). A goal is met when its file passes. Write the test first, then the code. See [`test/README.md`](./test/README.md) for how to run things.
 
-Status as of 2026-10-29, from `test/run.sh --impl <implementation>`:
+Status as of 2026-10-29, from `test/run.sh` (the extension) and `test/run.sh --impl prototypes/<file>.sql`:
 
 ## Functional goals
 
 | # | Goal | PLAN.md | Spec | Extension | Prototype A | Prototype B | Prototype C |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| G1 | Identity from JWT `sub`, falling back to `permissions.subject_id`; no `auth` schema | §3 | `01_identity` | ❌ | ✅ 11/11 | ✅ 11/11 | ✅ 11/11 |
-| G2 | Clients can't read or write permission data or act for other users | §3, §4 | `02_security` | ❌ | ✅ 14/14 | ✅ 14/14 | ✅ 14/14 |
-| G3 | `rbac` preset: app-wide roles, inheritance, `has_permission`, `has_role` | §6 | `10_rbac_app_wide` | ❌ | ✅ 17/17 | ✅ 17/17 | ✅ 17/17 |
-| G4 | `rbac` preset: tenant-scoped roles, `scopes_with_permission` | §6 | `11_rbac_tenant` | ❌ | ✅ 13/13 | ✅ 13/13 | ✅ 13/13 |
-| G5 | `rbac` preset: assign, unassign, create, drop, validation | §6 | `12_rbac_management` | ❌ | ✅ 15/15 | ✅ 15/15 | ✅ 15/15 |
-| G6 | RLS enforcement as `authenticated`; fast path is an InitPlan | §4, §6 | `20_rls` | ❌ | ✅ 12/12 | ✅ 12/12 | ✅ 12/12 |
-| G7 | Reference scenario: per-object relations, implied relations, groups | §5 | `<design>/30_zanzibar_reference` | ❌ | ✅ 14/14 | ✅ 14/14 | ✅ 14/14 |
-| G8 | Nested groups, cycles, revocation, expiry, cleanup | §2, §3 | `<design>/31_zanzibar_groups` | ❌ | ✅ 11/11 | ✅ 11/11 | ✅ 11/11 |
-| G9 | Graduation: add sharing to an rbac app without migrating | §6 | `<design>/40_graduation` | ❌ | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 |
-| G10 | Parent inheritance: org → folder → document, single fast-path RLS branch, cycles terminate | §10 | `<design>/50_parents` | ❌ | ✅ 13/13 | ✅ 13/13 | ✅ 13/13 |
-| G11 | Public access (`user:*`); null subject is denied | §10 | `<design>/51_public` | ❌ | ✅ 7/7 | ✅ 7/7 | ✅ 7/7 |
-| G12 | Forbid beats grants, including parent-derived ones | §10 | `<design>/52_forbid` | ❌ | ✅ 9/9 | ✅ 9/9 | ✅ 9/9 |
-| G13 | Conditions: document status, expired grants | §10 | `<design>/53_conditions` | ❌ | ✅ 6/6 | ✅ 6/6 | ✅ 6/6 |
-| G14 | Installs as a non-superuser; via `pgtle.install_extension` if pg_tle is available | §10 | `03_tle_install` | ❌ | ✅ 9/9 (pg_tle path on PG 16-18 in Docker) | ✅ 9/9 (same) | ✅ 9/9 (same) |
-| | RLS policies don't run `scopes_with_permission` at plan time (call-count probe; each design also has `a/58`, `b/56`, `c/57` for its own list function: 3/3, 8/8, 3/3) | §4 | `22_no_plan_time_eval` | ❌ | ✅ 6/6 | ✅ 6/6 | ✅ 6/6 |
+| G1 | Identity from JWT `sub`, falling back to `permissions.subject_id`; no `auth` schema | §3 | `01_identity` | ✅ 11/11 | ✅ 11/11 | ✅ 11/11 | ✅ 11/11 |
+| G2 | Clients can't read or write permission data or act for other users | §3, §4 | `02_security` | ✅ 14/14 | ✅ 14/14 | ✅ 14/14 | ✅ 14/14 |
+| G3 | `rbac` preset: app-wide roles, inheritance, `has_permission`, `has_role` | §6 | `10_rbac_app_wide` | ✅ 17/17 | ✅ 17/17 | ✅ 17/17 | ✅ 17/17 |
+| G4 | `rbac` preset: tenant-scoped roles, `scopes_with_permission` | §6 | `11_rbac_tenant` | ✅ 13/13 | ✅ 13/13 | ✅ 13/13 | ✅ 13/13 |
+| G5 | `rbac` preset: assign, unassign, create, drop, validation | §6 | `12_rbac_management` | ✅ 15/15 | ✅ 15/15 | ✅ 15/15 | ✅ 15/15 |
+| G6 | RLS enforcement as `authenticated`; fast path is an InitPlan | §4, §6 | `20_rls` | ✅ 12/12 | ✅ 12/12 | ✅ 12/12 | ✅ 12/12 |
+| G7 | Reference scenario: per-object relations, implied relations, groups | §5 | `<design>/30_zanzibar_reference` | see `d/` (own scenarios) | ✅ 14/14 | ✅ 14/14 | ✅ 14/14 |
+| G8 | Nested groups, cycles, revocation, expiry, cleanup | §2, §3 | `<design>/31_zanzibar_groups` | see `d/` (own scenarios) | ✅ 11/11 | ✅ 11/11 | ✅ 11/11 |
+| G9 | Graduation: add sharing to an rbac app without migrating | §6 | `<design>/40_graduation` | see `d/` (own scenarios) | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 |
+| G10 | Parent inheritance: org → folder → document, single fast-path RLS branch, cycles terminate | §10 | `<design>/50_parents` | see `d/` (own scenarios) | ✅ 13/13 | ✅ 13/13 | ✅ 13/13 |
+| G11 | Public access (`user:*`); null subject is denied | §10 | `<design>/51_public` | see `d/` (own scenarios) | ✅ 7/7 | ✅ 7/7 | ✅ 7/7 |
+| G12 | Forbid beats grants, including parent-derived ones | §10 | `<design>/52_forbid` | see `d/` (own scenarios) | ✅ 9/9 | ✅ 9/9 | ✅ 9/9 |
+| G13 | Conditions: document status, expired grants | §10 | `<design>/53_conditions` | see `d/` (own scenarios) | ✅ 6/6 | ✅ 6/6 | ✅ 6/6 |
+| G14 | Installs as a non-superuser; via `pgtle.install_extension` if pg_tle is available | §10 | `03_tle_install` | ✅ 9/9 | ✅ 9/9 (pg_tle path on PG 16-18 in Docker) | ✅ 9/9 (same) | ✅ 9/9 (same) |
+| | RLS policies don't run `scopes_with_permission` at plan time (call-count probe; each design also has `a/58`, `b/56`, `c/57` for its own list function: 3/3, 8/8, 3/3) | §4 | `22_no_plan_time_eval` | ✅ 6/6 | ✅ 6/6 | ✅ 6/6 | ✅ 6/6 |
 | | Design-specific: B fails closed on forbids with missing inputs | | `b/54_fail_closed` | | | ✅ 16/16 | |
 | | Design-specific: C materialized memberships stay correct | | `c/32_memberships` | | | | ✅ 31/31 |
 | | Design-specific: C `who_can` reports public grants | | `c/54_who_can_public` | | | | ✅ 8/8 |
 | | Design-specific: C tenant as a parent type | | `c/55_tenant_parent` | | | | ✅ 9/9 |
-| | **Total** | | | ❌ | **18/18 files, 199 assertions** | **18/18 files, 189 assertions** | **21/21 files, 229 assertions** |
+| | **Total** | | | **37/37 files, 2,164 assertions** | **18/18 files, 199 assertions** | **18/18 files, 189 assertions** | **21/21 files, 229 assertions** |
 
 Zanzibar-level spec files (`30`+, in `test/spec/<design>/`) are per-design: each design has its own copy of the same scenario written in its native API, with the same assertions, so results compare one to one. G10–G14 are the v0.0.2 scenarios from PLAN.md §10.
 
-The extension (`pg_permissions--0.0.1.sql`) is still empty, so every goal is red there.
+The extension (`pg_permissions--0.0.1.sql`) is design D. It passes the engine-independent specs (G1-G6, G14 and the plan-time probe) like A, B and C. G7-G13 are per-design specs in the prototypes' native API; D's equivalents are the `d/` specs (the OpenFGA API, cycles, set-based walks, RBAC plus FGA in RLS, and OpenFGA's own consolidated suite), so those rows read "see `d/`". The extension's total is the whole local run: 37 files, 2,164 assertions.
 
 ## Performance goals
 

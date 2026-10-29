@@ -1,9 +1,9 @@
 ---
 title: pg_permissions
-description: A pure SQL authorization extension for Postgres, usable inside RLS policies. Three prototype engines, one decision to make.
+description: A pure SQL authorization extension for Postgres, usable inside RLS policies. Design D (RBAC plus an OpenFGA-compatible model) is the extension; A, B and C are the measured prototypes it was chosen from.
 template: splash
 hero:
-  tagline: One schema for RBAC and Zanzibar-style relationships in Postgres, usable inside RLS policies. Three engines are built and benchmarked; this site is where you compare them and pick one.
+  tagline: RBAC and an OpenFGA-compatible relationship model in one Postgres schema, usable inside RLS policies. The extension is design D, chosen from three benchmarked prototypes; this site has the decision, the numbers and the usage docs.
   actions:
     - text: Read the decision guide
       link: ./decision/guide/
@@ -25,13 +25,13 @@ call it from inside row-level security, so the database enforces access, not the
 ## Status
 
 <CardGrid>
-	<Card title="Engine not chosen yet" icon="pencil">
-		The extension file `pg_permissions--0.0.1.sql` is intentionally empty. Three candidate engines live in
-		`prototypes/` as single SQL files.
+	<Card title="Design D is the extension" icon="approve-check">
+		`pg_permissions--0.0.1.sql` is design D: `rbac_*` tables and an OpenFGA-compatible `fga_*` model. It passes the
+		whole suite (37 spec files, 2,164 assertions), including OpenFGA's own test suite, on Postgres 16, 17 and 18.
 	</Card>
-	<Card title="All three pass the same tests" icon="approve-check">
-		The shared goals G1-G14 pass on A, B and C (14/14, 15/15 and 17/17 spec files). The `rbac` preset gives the same
-		answers on all of them.
+	<Card title="A, B and C are history" icon="pencil">
+		The three earlier prototypes stay in `prototypes/` as measured history, selectable with `--impl`. They pass the
+		same shared goals G1-G14, and the `rbac` preset gives the same answers on all of them.
 	</Card>
 	<Card title="Benchmarked on identical data" icon="rocket">
 		Serial pgbench runs at 10k, 100k and 1M documents, three team shapes. Every read policy returns identical
@@ -42,12 +42,12 @@ call it from inside row-level security, so the database enforces access, not the
 	</Card>
 </CardGrid>
 
-## The three engines at a glance
+## The three prototypes at a glance (history)
 
 <EngineCards />
 
-The headline: RBAC is a wash, with every engine within about 0.2 ms. The choice only matters once an app graduates to
-per-object sharing, where the engines trade read cost against nesting cost and complexity.
+The headline: RBAC is a wash, with every engine within about 0.2 ms. The choice only mattered once an app graduates to
+per-object sharing, where the engines trade read cost against nesting cost and complexity; D's numbers are on the [design D report](./benchmarks/design-d-report/).
 
 ## Where to start
 
@@ -58,7 +58,7 @@ per-object sharing, where the engines trade read cost against nesting cost and c
 	<LinkCard title="Optimizations" description="Before and after the optimization pass, per engine, with ranking changes." href="./benchmarks/optimizations/" />
 	<LinkCard title="Postgres versions" description="pg16, pg17 and pg18 side by side, within one environment and engine build." href="./benchmarks/postgres-versions/" />
 	<LinkCard title="Plan and goals" description="What it must do, the rbac preset API, evaluation criteria." href="./overview/plan/" />
-	<LinkCard title="Design docs" description="One per engine: A tuple core, B policy first, C compiled model." href="./designs/a-tuple-core/" />
+	<LinkCard title="Design docs" description="D per-model tables (the extension), then A, B and C as history." href="./designs/d-per-model/" />
 	<LinkCard title="Build journal" description="How it was built, including the dead ends." href="./journal/build-journal/" />
 </CardGrid>
 

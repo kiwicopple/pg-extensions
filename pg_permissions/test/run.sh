@@ -11,7 +11,8 @@
 # Spec files in test/spec/ are engine-independent and run for every
 # implementation. Files in test/spec/<design>/ use that design's native API
 # and run only with it. --design defaults to the first letter of the --impl
-# file name before a dash (a-tuple-core.sql -> a); anything else is "none".
+# file name before a dash (a-tuple-core.sql -> a), "d" for the extension file
+# (pg_permissions--*.sql); anything else is "none".
 # Files from both directories are sorted by file name; patterns match both.
 #
 # Each spec file runs in a fresh database cloned from a template that has the
@@ -35,7 +36,7 @@ while [ $# -gt 0 ]; do
         --design=*) DESIGN=${1#--design=}; shift ;;
         --external) EXTERNAL=1; shift ;;
         -v|--verbose) VERBOSE=1; shift ;;
-        -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) PATTERNS+=("$1"); shift ;;
     esac
 done
@@ -46,7 +47,8 @@ IMPL=$(resolve_impl "$IMPL")
 if [ -z "$DESIGN" ]; then
     impl_base=$(basename "$IMPL" .sql)
     case "$impl_base" in
-        [abcd]-*) DESIGN=${impl_base%%-*} ;;
+        [abc]-*) DESIGN=${impl_base%%-*} ;;
+        pg_permissions--*) DESIGN=d ;;
         *) DESIGN=none ;;
     esac
 fi

@@ -1,6 +1,6 @@
 # Design D benchmarked
 
-Design D ([`../../designs/d-per-model.md`](../../designs/d-per-model.md), [`../../prototypes/d-per-model.sql`](../../prototypes/d-per-model.sql)) measured on 2026-10-29 with exactly the workloads, scales and shapes of A, B and C, and compared with their session 3 optimized runs in [`OPTIMIZATIONS.md`](./OPTIMIZATIONS.md). Same setup: Docker, Postgres 18.6 with pg_tle 1.5.3, `cpus: 4`, `mem_limit: 6g`, 4 pgbench clients, 10 s per workload, one run per configuration, strictly serial (`docker/run-matrix.sh bench --versions 18 --designs d -- --scale <s> --shape <sh> --tag opt --check`). The D files use the same `opt` tag so they sit next to A, B and C's in the docs site's primary series: `pg18-docker-d-{large-default,medium-deep,medium-wide}-opt.{md,json}`. D itself is unoptimized: this is a measurement, nothing in the prototype was changed. The second pass, which acts on the diagnosis below, is in section "opt2".
+Design D ([`../../designs/d-per-model.md`](../../designs/d-per-model.md), [`../../pg_permissions--0.0.1.sql`](../../pg_permissions--0.0.1.sql), which was `prototypes/d-per-model.sql` when this was measured) measured on 2026-10-29 with exactly the workloads, scales and shapes of A, B and C, and compared with their session 3 optimized runs in [`OPTIMIZATIONS.md`](./OPTIMIZATIONS.md). Same setup: Docker, Postgres 18.6 with pg_tle 1.5.3, `cpus: 4`, `mem_limit: 6g`, 4 pgbench clients, 10 s per workload, one run per configuration, strictly serial (`docker/run-matrix.sh bench --versions 18 --designs d -- --scale <s> --shape <sh> --tag opt --check`). The D files use the same `opt` tag so they sit next to A, B and C's in the docs site's primary series: `pg18-docker-d-{large-default,medium-deep,medium-wide}-opt.{md,json}`. D itself is unoptimized: this is a measurement, nothing in the prototype was changed. The second pass, which acts on the diagnosis below, is in section "opt2".
 
 ## Summary
 
@@ -17,7 +17,7 @@ Design D ([`../../designs/d-per-model.md`](../../designs/d-per-model.md), [`../.
 
 The fixes this report's diagnosis proposed, applied to the prototype and measured exactly as before (Docker, Postgres 18.6, `cpus: 4`, 4 clients, 10 s per workload, strictly serial: `docker/run-matrix.sh bench --versions 18 --designs d -- --scale <s> --shape <sh> --tag opt2 --check`). The files are tagged `opt2` (`pg18-docker-d-{large-default,medium-deep,medium-wide}-opt2.{md,json}`), so the `opt` files above, and the docs site's primary series, are unchanged. The design is in [`../../designs/d-per-model.md`](../../designs/d-per-model.md) §5.
 
-**What changed** (`prototypes/d-per-model.sql`):
+**What changed** (`prototypes/d-per-model.sql`, now `pg_permissions--0.0.1.sql`):
 
 1. **Target-pruned walk steps, compiled at model write.** `fga_reach` holds reachability between (type, relation) pairs in the positive graph; `fga_walk_steps` holds, per target relation, every `d`/`t` edge joined with the computed closure of its destination, kept only if the node it yields can reach the target, with `expand` when that node has steps of its own toward it. 13 rows for the benchmark model.
 2. **ListObjects is one recursive CTE** (`_fga_forward`), A's `_reach` shape, over those steps: one `fga_tuples` probe per node and step. The recursion produces only expandable nodes; leaves come from one final join of the reached nodes (each at its lowest level) to the steps that yield the target. Levels are kept per row (a node is re-expanded once per distinct level, a cycle until level 25), which keeps the depth-25 rule exact; if an expandable node is first reached at 25, a level-free walk (`_fga_forward_ids`) finishes behind it. The list functions stream the result instead of `array_agg` then `unnest`.
@@ -327,4 +327,4 @@ To compare the engines on A's single-branch walk, after the large run the databa
 
 - Reports: `pg18-docker-d-large-default-opt.md`, `pg18-docker-d-medium-deep-opt.md`, `pg18-docker-d-medium-wide-opt.md` (plans, per-table storage, per-user checksums); JSON in `data/`. The second pass: the same names with `-opt2`.
 - The `but not` measurement: [`../designs/d/but_not_list_objects.sql`](../designs/d/but_not_list_objects.sql).
-- Seeds and workloads: [`../designs/d/`](../designs/d/). `bench/run.sh` accepts `--design d` (inferred from `d-per-model.sql`).
+- Seeds and workloads: [`../designs/d/`](../designs/d/). `bench/run.sh` accepts `--design d` (the default for the extension file, `pg_permissions--0.0.1.sql`).

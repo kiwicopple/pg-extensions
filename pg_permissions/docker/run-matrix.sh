@@ -2,18 +2,19 @@
 # Run the test suite or the benchmark against Postgres 16, 17 and 18 (Docker),
 # for each design, strictly one at a time.
 #
-#   docker/run-matrix.sh test                                  # 3 versions x designs a, b, c
-#   docker/run-matrix.sh test --versions 18 --designs c -- -v 03_tle
-#   docker/run-matrix.sh bench -- --scale large                # 3 x 3 large runs
+#   docker/run-matrix.sh test                                  # 3 versions x the extension
+#   docker/run-matrix.sh test --versions 18 --designs ext -- -v 03_tle
+#   docker/run-matrix.sh test --designs ext,a,b,c              # the extension and the prototypes
+#   docker/run-matrix.sh bench -- --scale large                # 3 large runs of the extension
 #   docker/run-matrix.sh bench --versions 16,17 -- --scale medium --shape wide
-#   docker/run-matrix.sh bench --designs a -- --scale small --duration 2 --tag smoke
+#   docker/run-matrix.sh bench --designs a -- --scale small --duration 2 --tag smoke   # prototype A
 #
 # Options:
 #   --versions 16,17,18   which servers, in this order (default all three)
-#   --designs a,b,c       which prototypes, in this order (default a, b and c);
-#                         `d` is prototypes/d-per-model.sql (not in the
-#                         default list), `ext` the extension file
-#                         pg_permissions--0.0.1.sql
+#   --designs ext,a,b,c   which implementations, in this order (default ext);
+#                         `ext` (or `d`) is the extension file
+#                         pg_permissions--0.0.1.sql, `a`, `b` and `c` are the
+#                         prototypes in prototypes/ (measured history)
 #   --keep-running        leave the last server running (default: compose down)
 #   -- ARGS               passed to test/run.sh or bench/run.sh
 #                         (--external and --impl are added here)
@@ -44,7 +45,7 @@ case "$MODE" in
 esac
 
 VERSIONS=16,17,18
-DESIGNS=a,b,c
+DESIGNS=ext
 KEEP=0
 PASS=()
 while [ $# -gt 0 ]; do
@@ -63,8 +64,7 @@ impl_for() {
         a) echo prototypes/a-tuple-core.sql ;;
         b) echo prototypes/b-policy-first.sql ;;
         c) echo prototypes/c-compiled-model.sql ;;
-        d) echo prototypes/d-per-model.sql ;;
-        ext) echo pg_permissions--0.0.1.sql ;;
+        d|ext) echo pg_permissions--0.0.1.sql ;;
         *) echo "unknown design: $1 (expected a, b, c, d or ext)" >&2; return 1 ;;
     esac
 }

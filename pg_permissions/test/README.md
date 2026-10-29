@@ -1,6 +1,6 @@
 # pg_permissions test suite
 
-Tests are the spec. Each file in `spec/` is one goal from [`../GOALS.md`](../GOALS.md), written against the public API in [`../PLAN.md`](../PLAN.md), not against any one engine. The same files run against the extension or any prototype. Files in `spec/<design>/` (`a/`, `b/`, `c/`) cover the Zanzibar-level goals: each design has its own copy of the same scenario in its native API, with the same assertions.
+Tests are the spec. Each file in `spec/` is one goal from [`../GOALS.md`](../GOALS.md), written against the public API in [`../PLAN.md`](../PLAN.md), not against any one engine. The same files run against the extension or any prototype. Files in `spec/<design>/` use that design's native API: `a/`, `b/` and `c/` cover the Zanzibar-level goals, one copy of the same scenario per prototype with the same assertions, and `d/` is the extension's own spec directory (the extension is design D).
 
 No dependencies beyond Postgres binaries (`initdb`, `pg_ctl`, `psql`; `pgbench` for benchmarks). Postgres.app is detected automatically; otherwise set `PGBIN`.
 
@@ -12,17 +12,17 @@ From `pg_permissions/`:
 ./test/run.sh                                     # the extension: pg_permissions--0.0.1.sql
 ./test/run.sh --impl prototypes/a-tuple-core.sql  # a prototype
 ./test/run.sh rbac                                # only spec files whose name contains "rbac"
-./test/run.sh --design b --impl my.sql            # force the design (a|b|c|none)
+./test/run.sh --design b --impl my.sql            # force the design (a|b|c|d|none)
 ./test/run.sh -v                                  # print every assertion
 ```
 
-Or from the repo root: `make test.pg_permissions` (and `IMPL=prototypes/a-tuple-core.sql make test.pg_permissions`).
+Or from the repo root: `make test.pg_permissions` (and `IMPL=prototypes/a-tuple-core.sql make test.pg_permissions` for a prototype).
 
-`--design` picks which `spec/<design>/` directory runs on top of the shared files. By default it comes from the `--impl` file name: the letter before the first dash (`a-tuple-core.sql` is `a`, `b-policy-first.sql` is `b`, `c-compiled-model.sql` is `c`). Anything else, including the extension, is `none`, which runs only the shared files. Files from both directories are sorted by file name, the name filter applies to both, and design files are listed with their directory (`a/30_zanzibar_reference`).
+`--design` picks which `spec/<design>/` directory runs on top of the shared files. By default it comes from the `--impl` file name: the letter before the first dash (`a-tuple-core.sql` is `a`, `b-policy-first.sql` is `b`, `c-compiled-model.sql` is `c`), and it is `d` for the extension file (`pg_permissions--*.sql`). Anything else is `none`, which runs only the shared files. Files from both directories are sorted by file name, the name filter applies to both, and design files are listed with their directory (`a/30_zanzibar_reference`).
 
 By default the runner starts a throwaway Postgres in a temp directory. It listens on a Unix socket only, so it never conflicts with a server you have running, and it's deleted when the run ends. Each spec file gets a fresh database cloned from a template with the implementation installed. To use an existing server instead, pass `--external` and set `PGHOST`, `PGPORT`, `PGUSER` (the user must be able to create databases and roles).
 
-To run against Postgres 16, 17 and 18 with pg_tle installed, use Docker: `docker/run-matrix.sh test` runs A, B and C on each version, one server at a time (see [`../docker/README.md`](../docker/README.md)). That is the only way the `pgtle.install_extension` branch of `03_tle_install.sql` runs; without pg_tle it passes with a `SKIP` assertion.
+To run against Postgres 16, 17 and 18 with pg_tle installed, use Docker: `docker/run-matrix.sh test` runs the extension on each version (`--designs ext,a,b,c` adds the prototypes), one server at a time (see [`../docker/README.md`](../docker/README.md)). That is the only way the `pgtle.install_extension` branch of `03_tle_install.sql` runs; without pg_tle it passes with a `SKIP` assertion.
 
 The runner creates Supabase's client roles (`anon`, `authenticated`, `service_role`) so RLS tests run the way Supabase clients do.
 
@@ -36,7 +36,7 @@ test/
   fixtures/ids.sql   fixed UUIDs for the PLAN.md scenarios (psql variables :alice, :acme, ...)
   fixtures/rbac_roles.sql  the viewer/editor/admin roles from PLAN.md §6
   spec/              engine-independent files, one per goal
-  spec/a/ b/ c/      per-design files: same scenarios, each design's native API
+  spec/a/ b/ c/ d/   per-design files: same scenarios, each design's native API (d/ is the extension)
 ```
 
 | Prefix | Area | Where |
@@ -106,9 +106,10 @@ On 2026-10-28 the suite was checked against 8 deliberately broken copies of Prot
 See `bench/run.sh --help`. In short:
 
 ```bash
-./bench/run.sh --impl prototypes/a-tuple-core.sql                  # small: 10k docs, ~2.5 min
-./bench/run.sh --impl prototypes/a-tuple-core.sql --scale medium   # 100k docs, 5k users
-./bench/run.sh --impl prototypes/a-tuple-core.sql --scale large    # 1M docs, 10k users
+./bench/run.sh                                                     # the extension, small: 10k docs, ~2.5 min
+./bench/run.sh --scale medium                                      # 100k docs, 5k users
+./bench/run.sh --scale large                                       # 1M docs, 10k users
+./bench/run.sh --impl prototypes/a-tuple-core.sql                  # a prototype, for comparison
 ./bench/run.sh --impl ... --shape deep                             # teams nested 9 deep
 ./bench/run.sh --impl ... --shape wide                             # 50 teams per user, 50 shares per team
 ./bench/run.sh --impl ... --only parents,nest_check                # rerun some workloads
@@ -127,7 +128,7 @@ A run has five phases. Each loads a seed, times it, runs `VACUUM FULL ANALYZE` o
 
 Both parents policies have no `org_id` branch, and they see the same documents. The projection shape measures the engine on a few folder ids; the single-branch shape measures it on every visible document, and the per-document link it needs is counted in the parents seed time and storage.
 
-The design is inferred from the `--impl` file name like in `test/run.sh`, or set with `--design a|b|c|none`. Phases 2 to 5 are skipped when the design has no files for them. Workloads in `bench/workloads/` are shared; the rest are in the design's `workloads/`. Each runs with pgbench as `authenticated` under RLS. Writes roll back, so a faster engine doesn't end up with more rows in later phases.
+The design is inferred from the `--impl` file name like in `test/run.sh`, or set with `--design a|b|c|d|none` (the extension file is design `d`). Phases 2 to 5 are skipped when the design has no files for them. Workloads in `bench/workloads/` are shared; the rest are in the design's `workloads/`. Each runs with pgbench as `authenticated` under RLS. Writes roll back, so a faster engine doesn't end up with more rows in later phases.
 
 **Same data for every engine.** `bench/seed_shape.sql` generates the teams, memberships, shares, folders and folder viewers as integer tables in schema `bench`. Each design's seed reads them and writes the same facts through its own API. `--shape` changes them: `default` (one team per user, 5 shares per team, 4-ary team tree), `deep` (teams in chains 9 deep, users in the leaf teams, so `write_nest_team` reaches depth 10, the most B and C accept), `wide` (4x the teams, each user in 50, 50 shares per team).
 

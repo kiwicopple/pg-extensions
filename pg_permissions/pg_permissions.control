@@ -1,4 +1,4 @@
 # pg_permissions extension
-comment = 'Flexible authorization (RBAC, ReBAC) for RLS policies.'
+comment = 'Authorization for RLS policies: RBAC and an OpenFGA-compatible relationship engine (Check, ListObjects, ListUsers).'
 default_version = '0.0.1'
 superuser = false
