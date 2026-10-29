@@ -45,6 +45,11 @@ create table permissions.tuples (
 
 create index on permissions.tuples (subject_type, subject_id, subject_relation);
 create index on permissions.tuples (object_type, object_id, relation);
+-- Which (subject_type, subject_relation) pairs have usersets, and which types
+-- are parents: the walk only expands nodes that can have an outgoing edge
+-- (see _reach). Small: usersets and parent links only, deduplicated keys.
+create index tuples_edge_kinds_idx on permissions.tuples (subject_type, subject_relation)
+    where subject_relation <> '' or relation = 'parent';
 
 create table permissions.entities (
     entity_type text not null,
@@ -271,19 +276,32 @@ $$;
 -- enters a node the subject is excluded from (unless, G12), so nothing derived
 -- through an excluded node is reached either.
 --
+-- Only nodes that can have an outgoing edge are expanded (`expandable`): their
+-- (type, relation) has usersets, is implied_by another relation, or is
+-- inherited from_parent by a type that has parent links. Everything else (most
+-- of the walk: the documents a team or folder reaches) is a leaf, kept but
+-- never probed. The usersets and parent types come from a loose index scan of
+-- tuples_edge_kinds_idx (`kinds`, one probe per distinct pair). Without this,
+-- every leaf cost three index probes, which was most of the time of a wide walk.
+--
 -- PL/pgSQL rather than SQL only so the plan is cached per session: Postgres 16
 -- re-plans a SQL function body on every call, which cost ~0.25 ms per check
--- once the query grew the parent and exclusion steps.
+-- once the query grew the parent and exclusion steps. Generic plan forced: the
+-- custom plans the plan cache otherwise keeps choosing cost ~0.3 ms to plan,
+-- every call.
 create function permissions._reach(p_subject_type text, p_subject_id text)
 returns table (object_type text, object_id text, relation text)
 language plpgsql stable security definer
 set search_path = ''
+set plan_cache_mode = force_generic_plan
 as $$
 #variable_conflict use_column
 begin
     return query
     with recursive
-    blocked(object_type, object_id, relation) as (
+    -- materialized: computed once. Inlined, the planner sometimes turns the
+    -- anti-join below into one index probe per reached node.
+    blocked(object_type, object_id, relation) as materialized (
         select t.object_type, t.object_id, rel.relation
         from permissions.tuples t
         join permissions.relations rel on rel.object_type = t.object_type and t.relation = any (rel.unless)
@@ -293,6 +311,34 @@ begin
           and t.condition is null
           and (t.expires_at is null or t.expires_at > now())
     ),
+    kinds(t, r) as (
+        (select x.subject_type, x.subject_relation
+         from permissions.tuples x
+         where x.subject_relation <> '' or x.relation = 'parent'
+         order by x.subject_type, x.subject_relation
+         limit 1)
+      union all
+        select y.subject_type, y.subject_relation
+        from kinds k
+        cross join lateral (
+            select x.subject_type, x.subject_relation
+            from permissions.tuples x
+            where (x.subject_relation <> '' or x.relation = 'parent')
+              and (x.subject_type, x.subject_relation) > (k.t, k.r)
+            order by x.subject_type, x.subject_relation
+            limit 1
+        ) y
+    ),
+    expandable(t, r) as materialized (
+        select k.t, k.r from kinds k where k.r <> ''
+      union
+        select rel.object_type, x from permissions.relations rel cross join unnest(rel.implied_by) x
+      union
+        select k.t, x from kinds k cross join permissions.relations rel cross join unnest(rel.from_parent) x
+        where k.r = ''
+      union
+        select p_subject_type, ''
+    ),
     reach(object_type, object_id, relation) as (
         select p_subject_type, s, ''::text
         from unnest(array[p_subject_id, '*']) s
@@ -300,6 +346,7 @@ begin
       union
         select n.object_type, n.object_id, n.relation
         from reach r
+        join expandable e on e.t = r.object_type and e.r = r.relation
         cross join lateral (
             select t.object_type, t.object_id, t.relation
             from permissions.tuples t
@@ -334,29 +381,214 @@ end;
 $$;
 
 -- Explicit-subject variants: admin only (see the grants at the end).
+--
+-- check_for is a bidirectional search over the same graph as _reach: forwards
+-- from the subject (the edges above), backwards from the target (the tuples on
+-- a node, the relations that imply it, the relations it inherits from its
+-- parent), each step expanding the smaller frontier, until they meet. Both
+-- sides skip excluded nodes, so the answer is what _reach would say. A user in
+-- 50 teams with 50 documents each no longer walks 2,500 documents to check one:
+-- the target's side is a handful of nodes. Backwards, direct subjects other
+-- than the subject itself are dropped (a team's members are dead ends).
 create function permissions.check_for(
     p_subject_type text, p_subject_id text,
     p_object_type text, p_object_id text, p_relation text
 )
 returns boolean
-language sql stable security definer
+language plpgsql stable security definer
 set search_path = ''
+set plan_cache_mode = force_generic_plan
 as $$
-    select exists (
-        select 1 from permissions._reach(p_subject_type, p_subject_id) r
-        where r.object_type = p_object_type and r.object_id = p_object_id and r.relation = p_relation
+declare
+    ft text[]; fi text[]; fr text[];   -- forward frontier
+    st text[]; si text[]; sr text[];   -- forward: every node reached
+    gt text[]; gi text[]; gr text[];   -- backward frontier
+    ut text[]; ui text[]; ur text[];   -- backward: every node reached (all lead to the target)
+    bt text[]; bi text[]; br text[];   -- nodes the subject is excluded from (G12)
+    starts text[];
+    hit boolean;
+    blocked_target boolean;
+begin
+    if p_subject_id is null then
+        return false;
+    end if;
+    starts := array[p_subject_id, '*'];
+    if p_relation = '' and p_object_type = p_subject_type and p_object_id = any (starts) then
+        return true;
+    end if;
+
+    -- The subject's own tuples give both its exclusions (G12) and the first
+    -- forward step, so they are read once.
+    with d as materialized (
+        select t.subject_id, t.object_type, t.object_id, t.relation
+        from permissions.tuples t
+        where t.subject_type = p_subject_type
+          and t.subject_id = any (starts)
+          and t.subject_relation = ''
+          and t.condition is null
+          and (t.expires_at is null or t.expires_at > now())
+    ),
+    b as materialized (
+        select d.object_type, d.object_id, rel.relation
+        from d
+        join permissions.relations rel on rel.object_type = d.object_type and d.relation = any (rel.unless)
+        where d.subject_id = p_subject_id
+    ),
+    n as materialized (
+        (
+            select d.object_type, d.object_id, d.relation from d
+          union all
+            select p_subject_type, s, rel.relation
+            from unnest(starts) s
+            join permissions.relations rel on rel.object_type = p_subject_type and '' = any (rel.implied_by)
+          union all
+            select c.object_type, c.object_id, rel.relation
+            from permissions.tuples c
+            join permissions.relations rel on rel.object_type = c.object_type and '' = any (rel.from_parent)
+            where c.subject_type = p_subject_type
+              and c.subject_id = any (starts)
+              and c.subject_relation = ''
+              and c.relation = 'parent'
+              and c.condition is null
+              and (c.expires_at is null or c.expires_at > now())
+        )
+      except
+        select * from b
     )
+    select (select coalesce(array_agg(b.object_type), '{}') from b),
+           (select coalesce(array_agg(b.object_id), '{}') from b),
+           (select coalesce(array_agg(b.relation), '{}') from b),
+           (select array_agg(n.object_type) from n),
+           (select array_agg(n.object_id) from n),
+           (select array_agg(n.relation) from n),
+           exists (select 1 from n where n.object_type = p_object_type and n.object_id = p_object_id and n.relation = p_relation),
+           exists (select 1 from b where b.object_type = p_object_type and b.object_id = p_object_id and b.relation = p_relation)
+    into bt, bi, br, ft, fi, fr, hit, blocked_target;
+
+    if blocked_target then
+        return false;   -- the walk never enters an excluded node
+    elsif hit then
+        return true;
+    elsif ft is null then
+        return false;
+    end if;
+    st := array[p_subject_type, p_subject_type] || ft;
+    si := starts || fi;
+    sr := array['', ''] || fr;
+    gt := array[p_object_type]; gi := array[p_object_id]; gr := array[p_relation];
+    ut := gt; ui := gi; ur := gr;
+
+    loop
+        if cardinality(ft) <= cardinality(gt) then
+            -- one step forwards from the subject side
+            with n as materialized (
+                (
+                    select t.object_type, t.object_id, t.relation
+                    from unnest(ft, fi, fr) f(t, i, r)
+                    join permissions.tuples t
+                      on t.subject_type = f.t and t.subject_id = f.i and t.subject_relation = f.r
+                    where t.condition is null
+                      and (t.expires_at is null or t.expires_at > now())
+                  union all
+                    select f.t, f.i, rel.relation
+                    from unnest(ft, fi, fr) f(t, i, r)
+                    join permissions.relations rel on rel.object_type = f.t and f.r = any (rel.implied_by)
+                  union all
+                    select c.object_type, c.object_id, rel.relation
+                    from unnest(ft, fi, fr) f(t, i, r)
+                    join permissions.tuples c
+                      on c.subject_type = f.t and c.subject_id = f.i and c.subject_relation = ''
+                    join permissions.relations rel on rel.object_type = c.object_type and f.r = any (rel.from_parent)
+                    where c.relation = 'parent'
+                      and c.condition is null
+                      and (c.expires_at is null or c.expires_at > now())
+                )
+              except
+                select * from unnest(st, si, sr)
+              except
+                select * from unnest(bt, bi, br)
+            )
+            select array_agg(n.object_type), array_agg(n.object_id), array_agg(n.relation),
+                   exists (select 1 from n join unnest(ut, ui, ur) u(t, i, r)
+                             on u.t = n.object_type and u.i = n.object_id and u.r = n.relation)
+            into ft, fi, fr, hit
+            from n;
+
+            if hit then
+                return true;
+            end if;
+            exit when ft is null;
+            st := st || ft; si := si || fi; sr := sr || fr;
+        else
+            -- one step backwards from the object side
+            with n as materialized (
+                (
+                    -- usersets granted the node. Direct subjects are dead ends here:
+                    -- either not the subject, or its own tuples, which the first
+                    -- forward step already followed.
+                    select tu.subject_type, tu.subject_id, tu.subject_relation
+                    from unnest(gt, gi, gr) g(t, i, r)
+                    join permissions.tuples tu
+                      on tu.object_type = g.t and tu.object_id = g.i and tu.relation = g.r
+                    where tu.subject_relation <> ''
+                      and tu.condition is null
+                      and (tu.expires_at is null or tu.expires_at > now())
+                  union all
+                    select g.t, g.i, x
+                    from unnest(gt, gi, gr) g(t, i, r)
+                    join permissions.relations rel on rel.object_type = g.t and rel.relation = g.r
+                    cross join unnest(rel.implied_by) x
+                  union all
+                    select pt.subject_type, pt.subject_id, x
+                    from unnest(gt, gi, gr) g(t, i, r)
+                    join permissions.relations rel on rel.object_type = g.t and rel.relation = g.r
+                    cross join unnest(rel.from_parent) x
+                    join permissions.tuples pt
+                      on pt.object_type = g.t and pt.object_id = g.i and pt.relation = 'parent'
+                    where pt.subject_relation = ''
+                      and pt.condition is null
+                      and (pt.expires_at is null or pt.expires_at > now())
+                )
+              except
+                select * from unnest(ut, ui, ur)
+              except
+                select * from unnest(bt, bi, br)
+            )
+            select array_agg(n.subject_type), array_agg(n.subject_id), array_agg(n.subject_relation),
+                   exists (select 1 from n join unnest(st, si, sr) s(t, i, r)
+                             on s.t = n.subject_type and s.i = n.subject_id and s.r = n.subject_relation)
+            into gt, gi, gr, hit
+            from n;
+
+            if hit then
+                return true;
+            end if;
+            exit when gt is null;
+            ut := ut || gt; ui := ui || gi; ur := ur || gr;
+        end if;
+    end loop;
+    return false;
+end;
 $$;
 
+-- Unordered. _reach returns each node once, so the ids are already distinct:
+-- `array_agg(distinct)` sorted them with the database collation, 25 ms for
+-- 10k ids under en_US-style collations.
+--
+-- VOLATILE, like list_objects and scopes_with_permission: a policy calls them
+-- with constant arguments inside `array(select unnest(...))`, and for a STABLE
+-- function the planner evaluates the whole call while planning, to estimate
+-- the unnest's row count (estimate_expression_value), then the executor runs
+-- it again. Every policy query paid for two walks.
 create function permissions.list_objects_for(
     p_subject_type text, p_subject_id text,
     p_object_type text, p_relation text
 )
 returns text[]
-language sql stable security definer
+language sql volatile security definer
 set search_path = ''
 as $$
-    select coalesce(array_agg(distinct r.object_id), '{}')
+    select coalesce(array_agg(r.object_id), '{}')
     from permissions._reach(p_subject_type, p_subject_id) r
     where r.object_type = p_object_type and r.relation = p_relation
 $$;
@@ -421,7 +653,7 @@ $$;
 
 create function permissions.list_objects(p_object_type text, p_relation text)
 returns text[]
-language sql stable security definer
+language sql volatile security definer
 set search_path = ''
 as $$
     select permissions.list_objects_for(
@@ -566,7 +798,7 @@ $$;
 
 create function permissions.scopes_with_permission(p_permission text)
 returns text[]
-language sql stable security definer
+language sql volatile security definer
 set search_path = ''
 as $$
     select permissions.list_objects('tenant', p_permission)

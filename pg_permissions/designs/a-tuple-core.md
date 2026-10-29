@@ -129,7 +129,7 @@ permissions.set_parent(object_type, object_id, parent_type, parent_id)  -- repla
 permissions.sync_parent()  -- trigger function: keeps parent tuples in sync with an app column
 ```
 
-Checks (STABLE, SECURITY DEFINER, `set search_path = ''`):
+Checks (SECURITY DEFINER, `set search_path = ''`; STABLE except the `list_objects*` functions and `scopes_with_permission`, which are VOLATILE since session 3, §13):
 
 ```sql
 -- Client-facing: always the current subject
@@ -177,9 +177,9 @@ from reach
 where object_type = p_object_type and relation = p_relation;
 ```
 
-`union` (not `union all`) removes duplicate rows, so cycles terminate: the set of reachable `(type, id, relation)` nodes is finite. `check` is the same query with `object_id = p_object_id` and `limit 1`. `list_subjects` walks the same edges in reverse.
+`union` (not `union all`) removes duplicate rows, so cycles terminate: the set of reachable `(type, id, relation)` nodes is finite. `check` was the same query with `object_id = p_object_id` and `limit 1`; since session 3 it searches from both ends instead (§13). `list_subjects` walks the same edges in reverse.
 
-v0.0.2 adds a third edge (parents), a second starting node (`user:*`) and a filter (exclusions) to the same query. See §12; the shape above is unchanged.
+v0.0.2 adds a third edge (parents), a second starting node (`user:*`) and a filter (exclusions) to the same query. See §12; the shape above is unchanged. Session 3 (§13) only expands nodes that can have an outgoing edge.
 
 ## 5. Reference scenario
 
@@ -356,7 +356,7 @@ This preset was built on top of the §4 engine and run on Postgres 16 with a non
 ## 7. RLS performance
 
 - **SELECT on 1M rows:** each `list_objects` runs once per statement. Cost is proportional to the number of tuples the subject can reach, not the table size. The table needs an index on `id` (and `org_id`) so `= any(array)` can use it, which is why the policy converts the array to `uuid` rather than casting the column to `text`. The cast fails the whole query if any stored ID for that type isn't a valid UUID, so `grant` should validate IDs per object type.
-- **Single-row check:** one recursive query bounded by the subject's group memberships. Typically a few index lookups.
+- **Single-row check:** a bidirectional search (§13), bounded by the smaller of the subject's and the object's side. Typically a few index lookups.
 - **Writes:** one row insert or delete per grant. Nothing is recomputed.
 - **Worst case:** a subject who can reach a very large number of objects gets a large array back on every query. The fix is to grant at a coarser scope (org instead of each document) rather than tuning the extension.
 
@@ -580,3 +580,63 @@ create policy documents_select on public.documents for select to authenticated u
 | Expiry ignored in the walk | `53_conditions` (Gina), `31_zanzibar_groups` |
 
 The status rule lives in the spec's RLS policy, not the engine, so it has no engine mutant.
+
+## 13. Optimizations (session 3)
+
+Session 3 went after the weak spots in `bench/baselines/COMPARISON.md`: wide sharing reads, the single-branch parents policy, and `nest_check`. A had to stay A. Nothing is derived, and there are no closures, membership tables or triggers maintaining caches. Every answer still comes from `tuples` plus a walk at read time. Semantics are unchanged: 156/156 assertions pass, and the per-user checksums of all four read policies still match B and C at medium wide and large default (fresh `bench/run.sh --only nest_check` seeds with the final prototype). An ad hoc graph with an exclusion in the middle of a parent chain, a wildcard reached through a parent, a group cycle and an expired membership gave the same `check_for`, `list_objects_for` and `list_subjects` answers as the session-2 engine for every user, object and relation.
+
+**How it was measured.** One throwaway cluster, with the databases seeded by `bench/run.sh --only ...` using the session-2 prototype. The function versions were swapped in place with `create or replace` between pgbench runs (the data is identical, and the new partial index stays present for every version). Each run is 1 client and 10 s. The versions were interleaved (v0, v1, v2, ... then repeat) for 3 rounds, and the tables show the median p50 over the rounds. Two other agents were benchmarking on the same machine, so the absolute numbers are noisy, but the before/after pairs ran side by side. The baselines in COMPARISON.md used 4 clients, so compare within this section only.
+
+### 13.1 What changed
+
+Each change is separable. The columns add one change at a time, left to right (p50 ms, single client, interleaved):
+
+| workload | before | + VOLATILE lists | + no `distinct` | + pruned walk | + bidirectional check |
+| --- | --- | --- | --- | --- | --- |
+| medium wide `share_select_page` | 207 | 110 | 91 | 18.2 | 18.1 |
+| medium wide `share_list_objects` | 59.4 | 59.4 | 41.6 | 5.05 | 4.98 |
+| large `parents_select_page` | 505 | 245 | 178 | 34.6 | 35.5 |
+| large `parents_select_count` | 491 | 251 | 193 | 50.6 | 52.2 |
+| large `nest_check` | 0.60 | 0.59 | 0.59 | 0.25 | 0.24 |
+| medium wide `nest_check` | 1.96 | | | 0.33 | 0.26 |
+| medium wide `parents_select_page` | 240 | | | 17.4 | 17.0 |
+| medium wide `parents_select_count` | 230 | | | 15.7 | 15.5 |
+
+There were no regressions elsewhere (before → after, same method): medium `rbac_check` 0.24 → 0.23, `rbac_select_page` 0.55 → 0.43, `rbac_select_count` 0.45 → 0.37, `rbac_update_one` 0.71 → 0.54. `write_assign_role`, `write_share` and `write_nest_team` stayed at 0.10.
+
+**1. `list_objects`, `list_objects_for` and `scopes_with_permission` are VOLATILE.** EXPLAIN showed planning time equal to execution time (100 ms each for wide `share_select_page`), with the same buffer count. The policies call these functions with constant arguments inside `array(select unnest(...))`. To estimate the unnest's row count, `array_unnest_support` calls `estimate_expression_value`, and in estimate mode the planner pre-evaluates STABLE functions. So the whole walk ran once at plan time and again at execution. VOLATILE functions aren't pre-evaluated. The cost is that the planner now assumes 10 elements instead of knowing the real count. That changed no plan in these workloads, because the `= any($0)` index scan is chosen either way. `check` and `has_permission` stay STABLE: a boolean qual isn't pre-evaluated. **This affects B and C too.** Their `scopes_with_permission` and C's `accessible()` are STABLE, so every policy query there also evaluates the engine call twice.
+
+**2. `list_objects_for` drops `array_agg(distinct ...)`.** `_reach` returns each node once, so the ids are already distinct. The distinct sorted them with the database collation (en_SG.UTF-8 here), which took 25 ms for 6,652 ids. The array is now unordered. The specs compare with `set_eq`, and the policies only use `= any`.
+
+**3. The walk only expands nodes that can have an outgoing edge.** Most of what a walk reaches is leaves: the 50 documents of each team, or the 1,000 documents of each folder. The session-2 walk probed every node three times (tuples where it's the subject, implied relations, children through `parent`), and almost every probe found nothing. Now a node is expanded only if its (type, relation) has an edge of some kind:
+- usersets exist with that subject type and relation;
+- it's in some relation's `implied_by`;
+- it's in some relation's `from_parent`, and that type has parent links.
+
+The usersets and the parent types come from a new partial index, `tuples_edge_kinds_idx` on `(subject_type, subject_relation) where subject_relation <> '' or relation = 'parent'`, read with a loose index scan (the recursive `kinds` CTE, one index probe per distinct pair, a handful in practice). Its keys deduplicate: 6.8 MB at large with 1M parent links (404 MB total, was 398) and under 1 MB at medium wide. Leaves are still returned, and `union` still deduplicates.
+
+It's still one recursive CTE in one statement, close to the session-2 shape. The function is pinned to `plan_cache_mode = force_generic_plan`, because the plan cache kept choosing custom plans and re-planned on every call (about 0.3 ms). The `blocked` CTE is `materialized`. Without that, after some rolled-back writes had shifted the statistics, the generic plan turned the exclusion anti-join into one index probe per reached node, and the wide walk went from 5 ms to 85 ms in the middle of a benchmark run. The walk alone went from 42 to 4 ms (wide user, 6,795 nodes) and from about 200 to 15–20 ms (large user, 20,038 nodes). A tiny RBAC walk costs about 25 µs more than before (the `kinds` and `expandable` CTEs), which the end-to-end RBAC numbers absorb.
+
+**4. `check_for` is a bidirectional search.** Before, `check_for` was `exists (select from _reach(...))`. The walk runs to completion inside a PL/pgSQL function, so a check cost as much as listing everything the subject can reach. A wide user's check walked 2,500 documents (45 ms), and a large user's `has_permission` after the parent links were seeded walked 20k documents (174 ms). It's now a PL/pgSQL breadth-first search from both ends:
+- forwards from the subject, along the same edges as `_reach`;
+- backwards from the target, through usersets granted the node, the relations in its `implied_by`, and the relations it inherits through its parent.
+
+Each step expands the smaller frontier, one set-based statement per step, with frontiers kept as parallel `text[]` arrays. The search stops when the two sides meet, or when one side runs out. Both sides skip excluded nodes, so a path through an excluded node is never found from either end. The subject's own tuples are read once, for both its exclusions and the first forward step. Backwards, direct subjects are dropped: they're either somebody else (a team's 1,000 members are dead ends) or the subject's own tuples, which the first step already followed. Wide `nest_check` went from 1.96 to 0.26 ms. In large `nest_check` the forward walk is already small, so the new walk alone gets it to 0.25 ms. The search is what keeps checks cheap when the subject's side is big: about 0.13 ms in-session for a large-scale `has_permission`, against 25 ms with the new walk and an `exists`. It's also pinned to generic plans: with custom plans each check cost 0.9 ms, all planning.
+
+### 13.2 Ideas that didn't work
+
+- **A level-by-level PL/pgSQL loop over arrays** (one set-based statement per BFS level, `except` against the visited set) as the `_reach` engine. Wide 42 → 30 ms, then 8 ms once leaves were classified per level, but large got worse (31 ms against 15–20 ms for the single statement). The per-statement overhead, the array unnests and the `except` against a growing visited set cost more than they saved. The bidirectional check uses this style, because its frontiers stay small.
+- **Correlated `exists` probes to classify leaves.** Under the generic plan the planner estimated 125k matching rows for `subject_type = $1 and subject_relation = $2`, and chose a seq scan (900 ms for one large walk). `order by ... limit 1` didn't force the index, because the order by is redundant with the equality on a parameter. Semi-joins fixed it, and the loose index scan replaced them.
+- **Bidirectional check without forcing generic plans:** 0.9 ms against 0.57 before (re-planning).
+- **Check by `exists` over the new walk** (no bidirectional search): fine for small subjects (large `nest_check` 0.25), but 7 ms for a wide user's random document check and 25 ms for a large `has_permission` after parent links. Kept only as the reference the bidirectional check was validated against.
+- **Classifying leaves inside the bidirectional forward step:** no measurable gain, dropped for simplicity.
+- **Pruning leaves that don't match the requested type** in `list_objects_for` (a second walk function taking the target; leaves of other types are never added to the CTE): wide `share_select_page` 18.1 → 16.4 ms because the `scopes_with_permission` arm stops collecting documents, but `share_list_objects` 4.9 → 5.3 ms. Within noise either way, and a second walk to maintain, so not kept.
+- Not tried: a covering subject index, so parent links could be read without heap fetches. An index-only scan still has to check `condition` and `expires_at`, and covering columns disable key deduplication (the subject index is 8 MB at large thanks to it).
+
+### 13.3 What's left, and why
+
+- **The single-branch parents policy is O(visible documents) by construction.** One `list_objects` call has to produce every visible id (about 20k at large). The walk reaches them from 20 folder probes, but each parent link is a heap fetch (the subject index doesn't cover the object columns), the CTE deduplicates 20k rows, and the policy then unnests, casts and probes 20k ids. That leaves 35 ms (page) and 52 ms (count) at large, against C's baseline 9.6 and 22 ms (4 clients). The count's extra 17 ms is the 20k-key index scan in the policy, which C pays as well. The projection policy (`folder_id = any(...)`) avoids all of it.
+- **Wide `share_select_page` runs two full walks plus a linear filter.** `scopes_with_permission` walks the user's whole graph to find 2 tenants, `list_objects` walks it again for 10k documents (about 5 ms each), and `id = any($1)` against a 6.6k-element array is checked linearly for each of the ~540 rows the index scan visits (about 8 ms, measured in the baseline EXPLAIN). The last part is the policy's shape, the same for every engine.
+- **Read cost still grows with what the subject reaches.** `list_objects` cost is linear in reached nodes, now with a much smaller constant. Only checks escape it.
+- **Small fixed overheads:** a tiny walk pays about 25 µs for the edge-kind scan, and the bidirectional check runs 2–4 statements instead of 1. The RBAC workloads didn't get slower end to end, because removing the plan-time evaluation saved more.
+- **Plan pinning is a trade-off.** Generic plans assume 10 elements per array and a default number of reached rows. They're right for these index-nested-loop shapes and stable across statistics changes, but they will never pick a hash join for a huge frontier.
