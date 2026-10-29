@@ -567,7 +567,7 @@ create policy documents_select on public.documents for select to authenticated u
 
 ### 12.5 Testing
 
-`./test/run.sh --impl prototypes/a-tuple-core.sql`: 14/14 files, 156/156 assertions. Each new feature was broken once on purpose ("mutants"), and every mutant failed a spec:
+`./test/run.sh --impl prototypes/a-tuple-core.sql`: 14/14 files, 156/156 assertions at the time of the v0.0.2 build (now 18/18 files, 199 assertions, see GOALS.md). Each new feature was broken once on purpose ("mutants"), and every mutant failed a spec:
 
 | Mutant | Caught by |
 | --- | --- |
@@ -583,7 +583,7 @@ The status rule lives in the spec's RLS policy, not the engine, so it has no eng
 
 ## 13. Optimizations (session 3)
 
-Session 3 went after the weak spots in `bench/baselines/COMPARISON.md`: wide sharing reads, the single-branch parents policy, and `nest_check`. A had to stay A. Nothing is derived, and there are no closures, membership tables or triggers maintaining caches. Every answer still comes from `tuples` plus a walk at read time. Semantics are unchanged: 156/156 assertions pass, and the per-user checksums of all four read policies still match B and C at medium wide and large default (fresh `bench/run.sh --only nest_check` seeds with the final prototype). An ad hoc graph with an exclusion in the middle of a parent chain, a wildcard reached through a parent, a group cycle and an expired membership gave the same `check_for`, `list_objects_for` and `list_subjects` answers as the session-2 engine for every user, object and relation.
+Session 3 went after the weak spots in `bench/baselines/COMPARISON.md`: wide sharing reads, the single-branch parents policy, and `nest_check`. A had to stay A. Nothing is derived, and there are no closures, membership tables or triggers maintaining caches. Every answer still comes from `tuples` plus a walk at read time. Semantics are unchanged: the suite passed at the time of that session (156/156 assertions; now 18/18 files, 199 assertions), and the per-user checksums of all four read policies still match B and C at medium wide and large default (fresh `bench/run.sh --only nest_check` seeds with the final prototype). An ad hoc graph with an exclusion in the middle of a parent chain, a wildcard reached through a parent, a group cycle and an expired membership gave the same `check_for`, `list_objects_for` and `list_subjects` answers as the session-2 engine for every user, object and relation.
 
 **How it was measured.** One throwaway cluster, with the databases seeded by `bench/run.sh --only ...` using the session-2 prototype. The function versions were swapped in place with `create or replace` between pgbench runs (the data is identical, and the new partial index stays present for every version). Each run is 1 client and 10 s. The versions were interleaved (v0, v1, v2, ... then repeat) for 3 rounds, and the tables show the median p50 over the rounds. Two other agents were benchmarking on the same machine, so the absolute numbers are noisy, but the before/after pairs ran side by side. The baselines in COMPARISON.md used 4 clients, so compare within this section only.
 
@@ -618,7 +618,7 @@ Check, `EXPLAIN (ANALYZE, BUFFERS)` as user 1, medium wide, the sharing policy `
 | VOLATILE | 0.23 ms | 109 |
 | STABLE + `_unfolded_null()` default | 0.22 ms | 112 |
 
-The 109-112 buffers are catalog lookups, not the walk. An EXPLAIN on B showed that B's `scopes_with_permission(text)` has no dummy argument, so B's wide sharing policy still folds it (3.7-4.1 ms of planning, 1,000 buffers, medium default); B's `ids()` does not.
+The 109-112 buffers are catalog lookups, not the walk. An EXPLAIN on B at the time showed that B's `scopes_with_permission(text)` had no dummy argument, so B's wide sharing policy still folded it (3.7-4.1 ms of planning, 1,000 buffers, medium default); B's `ids()` did not. B has since fixed this (`scopes_with_permission(text, jsonb default permissions._unfolded_null())`, [design B](./b-policy-first.md), optimization step 7): planning buffers are 112 and planning time 0.24 ms.
 
 **2. `list_objects_for` drops `array_agg(distinct ...)`.** `_reach` returns each node once, so the ids are already distinct. The distinct sorted them with the database collation (en_SG.UTF-8 here), which took 25 ms for 6,652 ids. The array is now unordered. The specs compare with `set_eq`, and the policies only use `= any`.
 

@@ -2,7 +2,7 @@
 
 > One of three candidate designs. See [../PLAN.md](../PLAN.md) for the shared goals, requirements and evaluation criteria.
 >
-> **Status (2026-10-28):** built as [`prototypes/c-compiled-model.sql`](../prototypes/c-compiled-model.sql). It passes every shared spec file and its own `test/spec/c/` files (30–33, 40, 50–55): 18 files, 217 assertions. This document describes what was built. Section 13 lists where the build departed from the earlier draft, and why; section 15 lists the session 3 optimizations (2026-10-29).
+> **Status (2026-10-28):** built as [`prototypes/c-compiled-model.sql`](../prototypes/c-compiled-model.sql). It passes every shared spec file and its own `test/spec/c/` files (30–33, 40, 50–57): 21 files, 229 assertions (18 files and 217 assertions before the session 3 specs). This document describes what was built. Section 13 lists where the build departed from the earlier draft, and why; section 15 lists the session 3 optimizations (2026-10-29).
 
 ## 1. Summary
 
@@ -467,7 +467,7 @@ For the wide seed, adding a user to their k-th team used to recompute all k of t
 
 ### 15.5 Tests
 
-New `test/spec/c/33_incremental_memberships.sql` (13 assertions): a shortcut lowering a stored depth, closing a cycle, a multi-row insert of a whole chain, an implied userset (`admin` implies `member`), the depth limit reached through a delta (and nothing left behind), `grant_many`, and 400 seeded random grants, revokes, multi-row inserts and multi-row deletes over 10 teams and 12 users, with `verify()` clean after every one. Its membership cases (all but `grant_many`, which is new) also pass on the original prototype. Four deliberately broken copies of the delta were each caught: members of a userset subject ignored (`c/31`, `c/32`, `c/33`), no upward walk (`c/32`, `c/33`), depth never lowered (only `c/33`), no depth check (`c/32`, `c/33`). Full suite: 18/18 files, 217/217 assertions.
+New `test/spec/c/33_incremental_memberships.sql` (13 assertions): a shortcut lowering a stored depth, closing a cycle, a multi-row insert of a whole chain, an implied userset (`admin` implies `member`), the depth limit reached through a delta (and nothing left behind), `grant_many`, and 400 seeded random grants, revokes, multi-row inserts and multi-row deletes over 10 teams and 12 users, with `verify()` clean after every one. Its membership cases (all but `grant_many`, which is new) also pass on the original prototype. Four deliberately broken copies of the delta were each caught: members of a userset subject ignored (`c/31`, `c/32`, `c/33`), no upward walk (`c/32`, `c/33`), depth never lowered (only `c/33`), no depth check (`c/32`, `c/33`). Full suite at the time: 18/18 files, 217/217 assertions (now 21/21 files, 229 assertions).
 
 **Lock: unchanged.** It is still one global advisory lock. The new insert path reads the stored memberships and walks the tuples after taking the lock, like the old one. Re-checked with two real sessions in both orders (session 1 adds Carol to `eng` and holds its transaction open; session 2 nests `eng` into `platform`, and the reverse). `verify()` was clean and Carol was in `platform` both times. With `_lock_graph()` replaced by a no-op, both orders left Carol's `platform` membership missing, and `verify()` reported it.
 
@@ -528,4 +528,4 @@ The 109-112 buffers are catalog lookups. Checksums are unchanged (sharing `9b43a
 
 RBAC reads get 20-30% faster, because planning was a big part of a 0.4 ms query. The wide sharing page gains about 1.2 ms of 11 (the plan-time call), which is inside the noise of this machine; the best-of figures agree with it but don't prove it. C gains little there because its `scopes_with_permission` is a lookup in materialized memberships (about 1.2 ms), where A's was a 100 ms walk. `parents_*` workloads don't call `scopes_with_permission`, so they were not re-run.
 
-**Checks.** The runs printed identical checksums for old and new (rbac `d394663f...`, sharing `6f7c008d...`), and "same" against A's and B's latest equivalence files. The full suite is unchanged: 18/18 files, 217/217 assertions.
+**Checks.** The runs printed identical checksums for old and new (rbac `d394663f...`, sharing `6f7c008d...`), and "same" against A's and B's latest equivalence files. The full suite was unchanged at the time of that run: 18/18 files, 217/217 assertions (now 21/21 files, 229 assertions, after the plan-time and volatility specs).

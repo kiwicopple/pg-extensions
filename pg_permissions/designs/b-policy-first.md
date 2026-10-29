@@ -317,7 +317,7 @@ All parent writes serialize on one advisory lock. (Session 2 numbers, before the
 
 ## Optimizations (session 3)
 
-Goal: cut B's measured weak spots without changing the policy model, the closure-on-write approach or the concurrency rules. Semantics are unchanged: the suite still passes (15/15 files, 172/172 assertions) and the per-user checksums of all four read policies match A and C at small, medium (default, deep, wide) and large.
+Goal: cut B's measured weak spots without changing the policy model, the closure-on-write approach or the concurrency rules. Semantics are unchanged: the suite still passes (18/18 files, 189 assertions after step 7; it was 15/15 files, 172/172 assertions before steps 6 and 7 added specs) and the per-user checksums of all four read policies match A and C at small, medium (default, deep, wide) and large.
 
 **How it was measured.** Two other agents were benchmarking on the same machine, so absolute numbers are noisy and **every before/after below is interleaved**: the original prototype (kept as `bench/results/optb/b-orig.sql`, git-ignored) and each step were loaded into separate databases of one private cluster with the same seeds and the same `VACUUM FULL ANALYZE` steps as `bench/run.sh`. pgbench then alternated between them with the bench's own workload files, 5-10 s per run, at least two rounds each. Values are p50 ms, 1 client unless marked "4c". Each step was also checked with `EXPLAIN (ANALYZE, BUFFERS)` and with auto_explain on the functions' nested statements, after warming up so the plan cache had chosen its steady-state plan. Seed times and sizes are single runs on a loaded machine and are not interleaved.
 

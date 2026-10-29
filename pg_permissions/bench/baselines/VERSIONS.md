@@ -310,4 +310,4 @@ What it shows:
 - **Minor versions differ**: the local baselines are 16.4 and Docker is 16.15, 17.11, 18.6. Calibration shows one minor-release effect; there may be others.
 - **Docker isn't production either**: Linux in a VM on a laptop, `fsync=off`, `full_page_writes=off`, every write rolled back. Write numbers are optimistic in both environments.
 - **Budgets** were set from the local 16.4 runs; they have not been re-derived from Docker.
-- The pg_tle install path (`test/spec/03_tle_install.sql`) passes on all three versions for A, B and C (`docker/run-matrix.sh test`: A 14/14 files, B 15/15, C 17/17 on each version). The benchmark installs the engines with plain `psql -f`, not through pg_tle.
+- The pg_tle install path (`test/spec/03_tle_install.sql`) passes on all three versions for A, B and C (`docker/run-matrix.sh test`: A 14/14 files, B 15/15, C 17/17 on each version at the time of that run; the current suites are A 18/18, B 18/18, C 21/21, and [OPTIMIZATIONS.md](./OPTIMIZATIONS.md) records them passing on all three versions). The benchmark installs the engines with plain `psql -f`, not through pg_tle.
