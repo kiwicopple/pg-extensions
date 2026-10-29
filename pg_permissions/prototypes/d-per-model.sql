@@ -346,6 +346,13 @@ create table permissions.fga_relations (
     monotone    boolean not null default true,
     -- used as the tupleset of a tupleToUserset somewhere in its type
     is_tupleset boolean not null default false,
+    -- `base but not subtract` that ListObjects and ListUsers evaluate set-based
+    -- (see fga_write_authorization_model): the subtract's computed relation,
+    -- and its tupleset for `but not r from ts`. Null otherwise.
+    diff_relation text collate "C",
+    diff_tupleset text collate "C",
+    -- the subtract can recurse or is deep: recheck what it removes with _fga_rec
+    diff_recheck  boolean not null default false,
     primary key (model_id, type, relation),
     foreign key (model_id, type) references permissions.fga_types on delete cascade
 );
@@ -422,6 +429,45 @@ create table permissions.fga_paths (
     wildcard      boolean not null,
     primary key (model_id, type, relation, user_type, user_relation, wildcard)
 );
+
+-- Reachability in the positive graph between (type, relation) pairs: a node of
+-- (type, relation) leads to target_type#target_relation through d, c and t
+-- edges (relation '' is a plain object: the user end). Reflexive for every
+-- relation; `strict` when through at least one edge, so a reflexive row with
+-- strict true is on a cycle. Used to compile fga_walk_steps and the
+-- set-based differences.
+create table permissions.fga_reach (
+    model_id        text collate "C" not null references permissions.fga_models on delete cascade,
+    target_type     text collate "C" not null,
+    target_relation text collate "C" not null,
+    type            text collate "C" not null,
+    relation        text collate "C" not null,
+    strict          boolean not null,
+    primary key (model_id, target_type, target_relation, type, relation)
+);
+
+-- ListObjects' forward walk, compiled per target relation: every d and t edge
+-- joined with the computed closure of its destination (so one tuple probe
+-- yields every relation the hit implies), kept only if the node it yields can
+-- reach the target. A step reads tuples object_type:x#tuple_relation whose
+-- user is the source node with user_relation, and yields
+-- object_type:x#out_relation. `expand`: that node has steps of its own toward
+-- the target (otherwise it is a leaf, or the target itself).
+create table permissions.fga_walk_steps (
+    model_id        text collate "C" not null references permissions.fga_models on delete cascade,
+    target_type     text collate "C" not null,
+    target_relation text collate "C" not null,
+    kind            "char" not null,   -- d: costs the source node's weight; t: costs 1
+    src_type        text collate "C" not null,
+    src_relation    text collate "C" not null,
+    src_wildcard    boolean not null,
+    user_relation   text collate "C" not null,   -- src_relation for d, '' for t
+    object_type     text collate "C" not null,
+    tuple_relation  text collate "C" not null,   -- dst_relation for d, via for t
+    out_relation    text collate "C" not null,
+    expand          boolean not null default false
+);
+create index on permissions.fga_walk_steps (model_id, target_type, target_relation);
 
 create table permissions.fga_tuples (
     object_type   text collate "C" not null,
@@ -541,12 +587,21 @@ create function permissions._fga_parse_object(p_m text, p_object text, p_relatio
 language plpgsql stable
 as $$
 begin
-    select s.object_type, s.object_id into object_type, object_id from permissions._fga_split_object(p_object) s;
+    -- _fga_split_object, inline (a plain expression, no statement)
+    if p_object ~ '^[^:# [:cntrl:]]+:[^:# [:cntrl:]]+$' then
+        object_type := split_part(p_object, ':', 1);
+        object_id := substr(p_object, strpos(p_object, ':') + 1);
+    end if;
     if object_type is null then
         perform permissions._fga_error(p_code, format('invalid ''object'' field format: %s', p_object));
     end if;
     if object_id = '*' then
         perform permissions._fga_error(p_code, format('the ''object'' field cannot reference a typed wildcard: %s', p_object));
+    end if;
+    -- the relation exists (so does its type): one probe. Otherwise find which error, in OpenFGA's order.
+    if exists (select 1 from permissions.fga_relations r
+               where r.model_id = p_m and r.type = object_type and r.relation = p_relation) then
+        return;
     end if;
     if not exists (select 1 from permissions.fga_types t where t.model_id = p_m and t.type = object_type) then
         perform permissions._fga_error(p_code, format('type ''%s'' not found', object_type));
@@ -554,10 +609,7 @@ begin
     if p_relation is null or p_relation !~ '^[^:#@ [:cntrl:]]+$' then
         perform permissions._fga_error(p_code, format('the ''relation'' field is malformed: %s', p_relation));
     end if;
-    if not exists (select 1 from permissions.fga_relations r
-                   where r.model_id = p_m and r.type = object_type and r.relation = p_relation) then
-        perform permissions._fga_error(p_code, format('relation ''%s#%s'' not found', object_type, p_relation));
-    end if;
+    perform permissions._fga_error(p_code, format('relation ''%s#%s'' not found', object_type, p_relation));
 end;
 $$;
 
@@ -679,6 +731,21 @@ begin
     end loop;
     return s;
 end;
+$$;
+
+-- The types a subtract `p_rel` (or `p_rel from p_ts`) of p_type#... names:
+-- p_type itself, or the parent types p_ts allows that define p_rel.
+create function permissions._fga_subtract_types(p_m text, p_type text, p_rel text, p_ts text)
+returns setof text
+language sql stable
+as $$
+    select p_type where p_ts is null
+    union
+    select tr.user_type
+    from permissions.fga_type_restrictions tr
+    join permissions.fga_relations y on y.model_id = p_m and y.type = tr.user_type and y.relation = p_rel
+    where p_ts is not null and tr.model_id = p_m and tr.type = p_type and tr.relation = p_ts
+      and tr.user_relation = '' and not tr.wildcard
 $$;
 
 -- Validate a schema 1.1 JSON AuthorizationModel ({schema_version,
@@ -970,6 +1037,95 @@ begin
                     on n.model_id = m and n.type = p.user_type and n.relation = p.user_relation
                    and n.op in ('intersection', 'difference')
                   where p.model_id = m and p.type = r.type and p.relation = r.relation);
+
+    -- reachability between (type, relation) pairs in the positive graph
+    insert into permissions.fga_reach (model_id, target_type, target_relation, type, relation, strict)
+    with recursive g(st, sr, dt, dr) as (
+        select distinct e.src_type, e.src_relation, e.dst_type, e.dst_relation
+        from permissions.fga_edges e where e.model_id = m
+    ),
+    rc(type, relation, target_type, target_relation) as (
+        select x.type, x.relation, x.type, x.relation from permissions.fga_relations x where x.model_id = m
+      union
+        select g.st, g.sr, rc.target_type, rc.target_relation
+        from rc join g on g.dt = rc.type and g.dr = rc.relation
+    )
+    select m, rc.target_type, rc.target_relation, rc.type, rc.relation,
+           exists (select 1 from g join rc r2
+                     on r2.type = g.dt and r2.relation = g.dr
+                    and r2.target_type = rc.target_type and r2.target_relation = rc.target_relation
+                   where g.st = rc.type and g.sr = rc.relation)
+    from rc;
+
+    -- the forward walk's steps per target (pruned to nodes that reach it)
+    insert into permissions.fga_walk_steps (model_id, target_type, target_relation, kind, src_type, src_relation,
+                                            src_wildcard, user_relation, object_type, tuple_relation, out_relation)
+    select distinct m, rc.target_type, rc.target_relation, e.kind, e.src_type, e.src_relation, e.src_wildcard,
+           case e.kind when 'd' then e.src_relation else '' end,
+           e.dst_type, case e.kind when 'd' then e.dst_relation else e.via end, o.out_relation
+    from permissions.fga_edges e
+    cross join lateral (
+        select e.dst_relation
+      union
+        select cc.dst_relation from permissions.fga_computed_closure cc
+        where cc.model_id = m and cc.type = e.dst_type and cc.src_relation = e.dst_relation
+    ) o(out_relation)
+    join permissions.fga_reach rc on rc.model_id = m and rc.type = e.dst_type and rc.relation = o.out_relation
+    where e.model_id = m and e.kind in ('d', 't');
+    update permissions.fga_walk_steps w set expand = true
+    where w.model_id = m
+      and exists (select 1 from permissions.fga_walk_steps x
+                  where x.model_id = m and x.target_type = w.target_type and x.target_relation = w.target_relation
+                    and x.src_type = w.object_type and x.src_relation = w.out_relation and not x.src_wildcard);
+
+    -- Set-based differences: `base but not subtract` where
+    --   - the base is a positive expression (no `and`, no nested `but not`)
+    --     over monotone relations, the relation itself not among them, so the
+    --     positive walk to the relation is exactly the base;
+    --   - the subtract is `r` or `r from ts`, with r monotone on every type it
+    --     names. _fga_rec evaluates a monotone relation by the bidirectional
+    --     search, under a subtract too, so the subtract is true for an object
+    --     exactly when the subtract's own walk reaches it.
+    -- ListObjects and ListUsers compute base minus subtract with two walks;
+    -- Check and every other non-monotone relation keep _fga_rec. The one
+    -- thing a walk doesn't settle is the depth limit on the subtract: if r can
+    -- recurse (a relation it depends on is on a cycle) or depends on as many
+    -- relations as the limit (plus one for `from`), diff_recheck is set and
+    -- the objects (users) the subtract removes are checked one by one with
+    -- _fga_rec. Otherwise no evaluation of the subtract can reach depth 25.
+    update permissions.fga_relations r set diff_relation = s.computed, diff_tupleset = s.tupleset
+    from permissions.fga_rewrite_nodes root
+    join permissions.fga_rewrite_nodes s
+      on s.model_id = m and s.type = root.type and s.relation = root.relation and s.parent = 1 and s.in_subtract
+    where root.model_id = m and root.node = 1 and root.op = 'difference'
+      and r.model_id = m and r.type = root.type and r.relation = root.relation
+      and s.op in ('computed', 'ttu')
+      and not exists (select 1 from permissions.fga_rewrite_nodes x
+                      where x.model_id = m and x.type = r.type and x.relation = r.relation
+                        and x.node > 1 and x.op in ('intersection', 'difference'))
+      and not exists (select 1 from permissions.fga_reach rc
+                      join permissions.fga_relations x on x.model_id = m and x.type = rc.type and x.relation = rc.relation
+                      where rc.model_id = m and rc.target_type = r.type and rc.target_relation = r.relation
+                        and ((x.type, x.relation) <> (r.type, r.relation) and not x.monotone
+                             or (x.type, x.relation) = (r.type, r.relation) and rc.strict))
+      and not exists (
+          select 1
+          from permissions._fga_subtract_types(m, r.type, s.computed, s.tupleset) st
+          join permissions.fga_relations y on y.model_id = m and y.type = st and y.relation = s.computed
+          where not y.monotone);
+    update permissions.fga_relations r set diff_recheck = true
+    where r.model_id = m and r.diff_relation is not null
+      and exists (
+          select 1
+          from permissions._fga_subtract_types(m, r.type, r.diff_relation, r.diff_tupleset) st
+          where exists (select 1 from permissions.fga_reach rc
+                        join permissions.fga_reach cyc
+                          on cyc.model_id = m and cyc.target_type = rc.type and cyc.target_relation = rc.relation
+                         and cyc.type = rc.type and cyc.relation = rc.relation and cyc.strict
+                        where rc.model_id = m and rc.target_type = st and rc.target_relation = r.diff_relation)
+             or (select count(*) from permissions.fga_reach rc
+                 where rc.model_id = m and rc.target_type = st and rc.target_relation = r.diff_relation
+                   and rc.relation <> '') + (r.diff_tupleset is not null)::int > 24);
     return m;
 end;
 $$;
@@ -1327,21 +1483,25 @@ begin
     end if;
 
     -- forward start: the user, and for a userset user the relations it computes
-    select array_agg(n.t), array_agg(n.i), array_agg(n.r), array_agg(0), array_agg(n.w)
-    into ft, fi, fr, fl, fw
-    from (
-        select x.t, x.i, x.r, min(x.w) as w
+    if p_urel = '' then
+        ft := xt; fi := xi; fr := xr;
+        fl := array_fill(0, array[cardinality(xt)]); fw := fl;
+    else
+        select array_agg(n.t), array_agg(n.i), array_agg(n.r), array_agg(0), array_agg(n.w)
+        into ft, fi, fr, fl, fw
         from (
-            select s.t, s.i, s.r, 0 as w from unnest(xt, xi, xr) s(t, i, r)
-          union all
-            select s.t, s.i, cc.dst_relation, 1
-            from unnest(xt, xi, xr) s(t, i, r)
-            join permissions.fga_computed_closure cc
-              on cc.model_id = p_m and cc.type = s.t and cc.src_relation = s.r
-            where s.r <> ''
-        ) x
-        group by x.t, x.i, x.r
-    ) n;
+            select x.t, x.i, x.r, min(x.w) as w
+            from (
+                select s.t, s.i, s.r, 0 as w from unnest(xt, xi, xr) s(t, i, r)
+              union all
+                select s.t, s.i, cc.dst_relation, 1
+                from unnest(xt, xi, xr) s(t, i, r)
+                join permissions.fga_computed_closure cc
+                  on cc.model_id = p_m and cc.type = s.t and cc.src_relation = s.r
+            ) x
+            group by x.t, x.i, x.r
+        ) n;
+    end if;
     st := ft; si := fi; sr := fr; sl := fl;
 
     -- backward start: the target, and the relations that compute it
@@ -1356,9 +1516,12 @@ begin
     ) n;
     ut := gt; ui := gi; ur := gr; ul := gl;
 
-    select min(f.l + b.l) into best
-    from unnest(st, si, sr, sl) f(t, i, r, l)
-    join unnest(ut, ui, ur, ul) b(t, i, r, l) on b.t = f.t and b.i = f.i and b.r = f.r;
+    -- a plain user's nodes (relation '') never are relation nodes
+    if p_urel <> '' then
+        select min(f.l + b.l) into best
+        from unnest(st, si, sr, sl) f(t, i, r, l)
+        join unnest(ut, ui, ur, ul) b(t, i, r, l) on b.t = f.t and b.i = f.i and b.r = f.r;
+    end if;
 
     loop
         if best is not null then
@@ -1403,9 +1566,27 @@ begin
 end;
 $$;
 
--- Every object of p_type the user reaches through p_rel in the positive graph,
--- with the level it is first reached at. Exact for a monotone relation, a
--- superset otherwise.
+-- ListObjects' forward walk: every object of p_type the user reaches through
+-- p_rel in the positive graph, with the lowest level it is reached at (25
+-- meaning 25 or more). Exact for a monotone relation, a superset otherwise.
+--
+-- One recursive CTE, design A's _reach shape, over the steps compiled for this
+-- target (fga_walk_steps): each step is one probe of fga_tuples (or the
+-- contextual tuples) that already yields the computed closure of its hit, and
+-- only nodes that can reach the target are produced. The recursion produces
+-- only nodes with steps of their own toward the target (`expand`); the leaves
+-- (most of a wide walk: documents) come from one last join of the reached
+-- nodes, each at its lowest level, to the steps that yield the target.
+--
+-- Levels, as OpenFGA counts them (see Evaluation above): a direct edge costs
+-- the node's weight c (0 for the user itself and a userset user's own
+-- relation, 1 otherwise), a tupleToUserset 1. A node is a row per level it is
+-- reached at, so a node reached through paths of different lengths is
+-- expanded once per level, and a cycle goes around until level 25: the
+-- recursion stops expanding there, which bounds it. Below 25 the lowest level
+-- of every node is exact. If an expandable node is first reached at 25, the
+-- walk stopped short of what lies behind it: _fga_forward_ids walks the rest
+-- without levels, and every target found only there is reported at 25.
 create function permissions._fga_forward(
     p_m text, p_ut text, p_uid text, p_urel text, p_ctx permissions.fga_tuple[],
     p_type text, p_rel text)
@@ -1414,36 +1595,144 @@ language plpgsql stable
 rows 100
 as $$
 #variable_conflict use_column
-declare
-    ft text[]; fi text[]; fr text[]; fl int[]; fw int[];
-    st text[]; si text[]; sr text[];
 begin
-    select array_agg(n.t), array_agg(n.i), array_agg(n.r), array_agg(0), array_agg(n.w)
-    into ft, fi, fr, fl, fw
-    from (
-        select x.t, x.i, x.r, min(x.w) as w
-        from (
-            select p_ut::text as t, p_uid::text as i, p_urel::text as r, 0 as w
+    return query
+    with recursive
+    st as materialized (
+        select s.kind, s.src_type, s.src_relation, s.src_wildcard, s.user_relation,
+               s.object_type, s.tuple_relation, s.out_relation, s.expand
+        from permissions.fga_walk_steps s
+        where s.model_id = p_m and s.target_type = p_type and s.target_relation = p_rel
+    ),
+    w(t, i, r, l, c) as (
+        select p_ut::text collate "C", p_uid::text collate "C", p_urel::text collate "C", 0, 0
+      union all
+        select p_ut, '*', '', 0, 0 where p_urel = '' and p_uid <> '*'
+      union all
+        select p_ut, p_uid, cc.dst_relation, 0, 1
+        from permissions.fga_computed_closure cc
+        where cc.model_id = p_m and cc.type = p_ut and cc.src_relation = p_urel and p_urel <> ''
+      union
+        select n.t, n.i, n.r, n.l, 1
+        from w
+        join st on st.src_type = w.t and st.src_relation = w.r and st.src_wildcard = (w.i = '*') and st.expand
+        cross join lateral (
+            select tu.object_type, tu.object_id, st.out_relation,
+                   w.l + case when st.kind = 'd' then w.c else 1 end
+            from permissions.fga_tuples tu
+            where tu.user_type = w.t and tu.user_id = w.i and tu.user_relation = st.user_relation
+              and tu.object_type = st.object_type and tu.relation = st.tuple_relation
           union all
-            select p_ut, '*', '', 0 where p_urel = '' and p_uid <> '*'
+            select x.object_type, x.object_id, st.out_relation,
+                   w.l + case when st.kind = 'd' then w.c else 1 end
+            from unnest(p_ctx) x
+            where x.user_type = w.t and x.user_id = w.i and x.user_relation = st.user_relation
+              and x.object_type = st.object_type and x.relation = st.tuple_relation
+            offset 0
+        ) n(t, i, r, l)
+        where w.l < 25
+    ),
+    -- each reached node once: its lowest level, and the lowest level a direct
+    -- edge from it reaches
+    b(t, i, r, l, dl) as materialized (
+        select w.t, w.i, w.r, min(w.l), min(w.l + w.c) from w group by w.t, w.i, w.r
+    ),
+    tg(i, l) as (
+        select b.i, b.l from b where b.t = p_type and b.r = p_rel
+      union all
+        select n.i, n.l
+        from b
+        join st on st.src_type = b.t and st.src_relation = b.r and st.src_wildcard = (b.i = '*')
+               and st.object_type = p_type and st.out_relation = p_rel
+        cross join lateral (
+            select tu.object_id, case when st.kind = 'd' then b.dl else b.l + 1 end
+            from permissions.fga_tuples tu
+            where tu.user_type = b.t and tu.user_id = b.i and tu.user_relation = st.user_relation
+              and tu.object_type = st.object_type and tu.relation = st.tuple_relation
           union all
-            select p_ut, p_uid, cc.dst_relation, 1
-            from permissions.fga_computed_closure cc
-            where cc.model_id = p_m and cc.type = p_ut and cc.src_relation = p_urel and p_urel <> ''
-        ) x
-        group by x.t, x.i, x.r
-    ) n;
-    st := ft; si := fi; sr := fr;
-    return query select f.i, f.l from unnest(ft, fi, fr, fl) f(t, i, r, l) where f.t = p_type and f.r = p_rel;
-    loop
-        select array_agg(n.t), array_agg(n.i), array_agg(n.r), array_agg(n.l)
-        into ft, fi, fr, fl
-        from permissions._fga_fstep(p_m, p_ctx, ft, fi, fr, fl, fw, st, si, sr) n;
-        exit when ft is null;
-        fw := array_fill(1, array[cardinality(ft)]);
-        st := st || ft; si := si || fi; sr := sr || fr;
-        return query select f.i, f.l from unnest(ft, fi, fr, fl) f(t, i, r, l) where f.t = p_type and f.r = p_rel;
-    end loop;
+            select x.object_id, case when st.kind = 'd' then b.dl else b.l + 1 end
+            from unnest(p_ctx) x
+            where x.user_type = b.t and x.user_id = b.i and x.user_relation = st.user_relation
+              and x.object_type = st.object_type and x.relation = st.tuple_relation
+            offset 0
+        ) n(i, l)
+    ),
+    res(i, l) as materialized (
+        select tg.i, min(tg.l) from tg group by tg.i
+    )
+    select res.i, least(res.l, 25) from res
+    union all
+    select f, 25
+    from permissions._fga_forward_ids(p_m, p_ut, p_uid, p_urel, p_ctx, p_type, p_rel) f
+    where exists (select 1 from b where b.l >= 25)
+      and not exists (select 1 from res where res.i = f);
+end;
+$$;
+
+-- The same walk without levels: every object of p_type the user reaches
+-- through p_rel in the positive graph (a superset for a non-monotone
+-- relation: ListObjects' candidates). A node is one row, so cycles and
+-- reconverging paths cost nothing extra.
+create function permissions._fga_forward_ids(
+    p_m text, p_ut text, p_uid text, p_urel text, p_ctx permissions.fga_tuple[],
+    p_type text, p_rel text)
+returns setof text
+language plpgsql stable
+rows 100
+as $$
+#variable_conflict use_column
+begin
+    return query
+    with recursive
+    st as materialized (
+        select s.src_type, s.src_relation, s.src_wildcard, s.user_relation,
+               s.object_type, s.tuple_relation, s.out_relation, s.expand
+        from permissions.fga_walk_steps s
+        where s.model_id = p_m and s.target_type = p_type and s.target_relation = p_rel
+    ),
+    w(t, i, r) as (
+        select p_ut::text collate "C", p_uid::text collate "C", p_urel::text collate "C"
+      union all
+        select p_ut, '*', '' where p_urel = '' and p_uid <> '*'
+      union all
+        select p_ut, p_uid, cc.dst_relation
+        from permissions.fga_computed_closure cc
+        where cc.model_id = p_m and cc.type = p_ut and cc.src_relation = p_urel and p_urel <> ''
+      union
+        select n.t, n.i, n.r
+        from w
+        join st on st.src_type = w.t and st.src_relation = w.r and st.src_wildcard = (w.i = '*') and st.expand
+        cross join lateral (
+            select tu.object_type, tu.object_id, st.out_relation
+            from permissions.fga_tuples tu
+            where tu.user_type = w.t and tu.user_id = w.i and tu.user_relation = st.user_relation
+              and tu.object_type = st.object_type and tu.relation = st.tuple_relation
+          union all
+            select x.object_type, x.object_id, st.out_relation
+            from unnest(p_ctx) x
+            where x.user_type = w.t and x.user_id = w.i and x.user_relation = st.user_relation
+              and x.object_type = st.object_type and x.relation = st.tuple_relation
+            offset 0
+        ) n(t, i, r)
+    )
+    select w.i from w where w.t = p_type and w.r = p_rel
+    union
+    select n.i
+    from w
+    join st on st.src_type = w.t and st.src_relation = w.r and st.src_wildcard = (w.i = '*')
+           and st.object_type = p_type and st.out_relation = p_rel
+    cross join lateral (
+        select tu.object_id
+        from permissions.fga_tuples tu
+        where tu.user_type = w.t and tu.user_id = w.i and tu.user_relation = st.user_relation
+          and tu.object_type = st.object_type and tu.relation = st.tuple_relation
+      union all
+        select x.object_id
+        from unnest(p_ctx) x
+        where x.user_type = w.t and x.user_id = w.i and x.user_relation = st.user_relation
+          and x.object_type = st.object_type and x.relation = st.tuple_relation
+        offset 0
+    ) n(i);
 end;
 $$;
 
@@ -1508,11 +1797,14 @@ $$;
 -- is false, flagged as a cycle), a userset user is in itself, PathExists, then
 -- the rewrite tree. Results: 0 false, 1 true, 2 false through a cycle, 3 too
 -- deep. The cycle flag only matters under the subtract of a difference (a
--- cycle there makes the difference false); outside one (p_sub false) a
--- monotone relation goes to the set-based search instead.
+-- cycle there makes the difference false). A monotone relation, under a
+-- subtract or not, goes to the set-based search instead: its least fixpoint,
+-- in which a cycle of usersets contributes nobody (designs/d-per-model.md §5).
+-- So the flag only comes from recursion through a non-monotone relation, such
+-- as a relation that reaches itself through a subtract.
 create function permissions._fga_rec(
     p_m text, p_ot text, p_oid text, p_rel text, p_ut text, p_uid text, p_urel text,
-    p_ctx permissions.fga_tuple[], p_depth int, p_path text[], p_sub boolean)
+    p_ctx permissions.fga_tuple[], p_depth int, p_path text[])
 returns smallint
 language plpgsql stable
 as $$
@@ -1536,7 +1828,7 @@ begin
     if mono is null or not permissions._fga_path_exists(p_m, p_ot, p_rel, p_ut, p_urel) then
         return 0;
     end if;
-    if mono and not p_sub then
+    if mono then
         return permissions._fga_bidi(p_m, p_ot, p_oid, p_rel, p_ut, p_uid, p_urel, p_ctx, 25 - p_depth);
     end if;
     select array_agg(n.op order by n.node), array_agg(n.parent order by n.node),
@@ -1545,7 +1837,7 @@ begin
     from permissions.fga_rewrite_nodes n
     where n.model_id = p_m and n.type = p_ot and n.relation = p_rel;
     return permissions._fga_rec_node(p_m, ops, pars, cs, tss, 1, p_ot, p_oid, p_rel,
-                                     p_ut, p_uid, p_urel, p_ctx, p_depth, p_path || k, p_sub);
+                                     p_ut, p_uid, p_urel, p_ctx, p_depth, p_path || k);
 end;
 $$;
 
@@ -1553,7 +1845,7 @@ $$;
 create function permissions._fga_rec_node(
     p_m text, ops text[], pars int[], cs text[], tss text[], k int,
     p_ot text, p_oid text, p_rel text, p_ut text, p_uid text, p_urel text,
-    p_ctx permissions.fga_tuple[], p_depth int, p_path text[], p_sub boolean)
+    p_ctx permissions.fga_tuple[], p_depth int, p_path text[])
 returns smallint
 language plpgsql stable
 as $$
@@ -1601,7 +1893,7 @@ begin
             where tr.model_id = p_m and tr.type = p_ot and tr.relation = p_rel and tr.user_relation <> ''
         loop
             x := permissions._fga_rec(p_m, rec.user_type, rec.user_id, rec.user_relation, p_ut, p_uid, p_urel,
-                                      p_ctx, p_depth + 1, p_path, p_sub);
+                                      p_ctx, p_depth + 1, p_path);
             if x = 1 then return 1; end if;
             err := err or x = 3;
             cyc := cyc or x = 2;
@@ -1609,7 +1901,7 @@ begin
         return case when err then 3 when cyc then 2 else 0 end;
 
     when 'computed' then
-        return permissions._fga_rec(p_m, p_ot, p_oid, cs[k], p_ut, p_uid, p_urel, p_ctx, p_depth, p_path, p_sub);
+        return permissions._fga_rec(p_m, p_ot, p_oid, cs[k], p_ut, p_uid, p_urel, p_ctx, p_depth, p_path);
 
     when 'ttu' then
         for rec in
@@ -1632,7 +1924,7 @@ begin
               and tr.user_relation = '' and not tr.wildcard and t.user_id <> '*'
         loop
             x := permissions._fga_rec(p_m, rec.user_type, rec.user_id, cs[k], p_ut, p_uid, p_urel,
-                                      p_ctx, p_depth + 1, p_path, p_sub);
+                                      p_ctx, p_depth + 1, p_path);
             if x = 1 then return 1; end if;
             err := err or x = 3;
             cyc := cyc or x = 2;
@@ -1643,7 +1935,7 @@ begin
         for j in k + 1 .. cardinality(ops) loop
             continue when pars[j] is distinct from k;
             x := permissions._fga_rec_node(p_m, ops, pars, cs, tss, j, p_ot, p_oid, p_rel,
-                                           p_ut, p_uid, p_urel, p_ctx, p_depth, p_path, p_sub);
+                                           p_ut, p_uid, p_urel, p_ctx, p_depth, p_path);
             if x = 1 then return 1; end if;
             err := err or x = 3;
             cyc := cyc or x = 2;
@@ -1654,7 +1946,7 @@ begin
         for j in k + 1 .. cardinality(ops) loop
             continue when pars[j] is distinct from k;
             x := permissions._fga_rec_node(p_m, ops, pars, cs, tss, j, p_ot, p_oid, p_rel,
-                                           p_ut, p_uid, p_urel, p_ctx, p_depth, p_path, p_sub);
+                                           p_ut, p_uid, p_urel, p_ctx, p_depth, p_path);
             if x in (0, 2) then return x; end if;
             err := err or x = 3;
         end loop;
@@ -1666,10 +1958,10 @@ begin
             if first_child is null then first_child := j; else second_child := j; exit; end if;
         end loop;
         b := permissions._fga_rec_node(p_m, ops, pars, cs, tss, first_child, p_ot, p_oid, p_rel,
-                                       p_ut, p_uid, p_urel, p_ctx, p_depth, p_path, p_sub);
+                                       p_ut, p_uid, p_urel, p_ctx, p_depth, p_path);
         if b in (0, 2) then return b; end if;
         x := permissions._fga_rec_node(p_m, ops, pars, cs, tss, second_child, p_ot, p_oid, p_rel,
-                                       p_ut, p_uid, p_urel, p_ctx, p_depth, p_path, true);
+                                       p_ut, p_uid, p_urel, p_ctx, p_depth, p_path);
         if x = 1 then return 0; end if;
         if x = 2 then return 2; end if;
         if b = 3 or x = 3 then return 3; end if;
@@ -1685,6 +1977,34 @@ as $$
     select permissions._fga_error(2002, 'Authorization Model resolution required too many rewrite rules to be resolved. Try simplifying the Authorization Model.')
 $$;
 
+-- _fga_rec on a list candidate: true or false, raising 2002 when too deep.
+create function permissions._fga_rec_ok(
+    p_m text, p_ot text, p_oid text, p_rel text, p_ut text, p_uid text, p_urel text,
+    p_ctx permissions.fga_tuple[])
+returns boolean
+language plpgsql stable
+as $$
+declare
+    x smallint := permissions._fga_rec(p_m, p_ot, p_oid, p_rel, p_ut, p_uid, p_urel, p_ctx, 0, '{}');
+begin
+    if x = 3 then
+        perform permissions._fga_too_complex();
+    end if;
+    return x = 1;
+end;
+$$;
+
+-- For a list's filter: raises 2002 (an answer 25 levels deep or more).
+create function permissions._fga_deep()
+returns boolean
+language plpgsql
+as $$
+begin
+    perform permissions._fga_too_complex();
+    return false;
+end;
+$$;
+
 -- Check on parsed, validated input.
 create function permissions._fga_check_impl(
     p_m text, p_ot text, p_oid text, p_rel text, p_ut text, p_uid text, p_urel text,
@@ -1694,20 +2014,25 @@ language plpgsql stable
 as $$
 declare
     mono boolean;
+    has_path boolean;
     x smallint;
 begin
     if p_urel <> '' and p_ut = p_ot and p_uid = p_oid and p_urel = p_rel then
         return true;
     end if;
-    if not permissions._fga_path_exists(p_m, p_ot, p_rel, p_ut, p_urel) then
+    select r.monotone,
+           exists (select 1 from permissions.fga_paths p
+                   where p.model_id = p_m and p.type = p_ot and p.relation = p_rel
+                     and p.user_type = p_ut and p.user_relation = p_urel and (p_urel = '' or not p.wildcard))
+    into mono, has_path
+    from permissions.fga_relations r where r.model_id = p_m and r.type = p_ot and r.relation = p_rel;
+    if not coalesce(has_path, false) then
         return false;
     end if;
-    select r.monotone into mono
-    from permissions.fga_relations r where r.model_id = p_m and r.type = p_ot and r.relation = p_rel;
     if mono then
         x := permissions._fga_bidi(p_m, p_ot, p_oid, p_rel, p_ut, p_uid, p_urel, p_ctx, 25);
     else
-        x := permissions._fga_rec(p_m, p_ot, p_oid, p_rel, p_ut, p_uid, p_urel, p_ctx, 0, '{}', false);
+        x := permissions._fga_rec(p_m, p_ot, p_oid, p_rel, p_ut, p_uid, p_urel, p_ctx, 0, '{}');
     end if;
     if x = 3 then
         perform permissions._fga_too_complex();
@@ -1717,6 +2042,16 @@ end;
 $$;
 
 -- ListObjects on parsed, validated input: object ids, unordered.
+--   - monotone relation: the forward walk;
+--   - set-based difference (fga_relations.diff_relation, compiled): the
+--     walk to the relation (exactly its base) minus the walk to the subtract
+--     (for `r from ts`, the objects whose ts is one of the parents the user
+--     reaches through r). Results as _fga_rec's: a base deeper than the limit
+--     is an error unless the subtract removes it; a userset user always has
+--     its own relation; with diff_recheck, what the subtract removes is
+--     checked with _fga_rec (the depth limit on a recursive subtract).
+--   - otherwise: the candidates of the positive walk, each one checked by
+--     _fga_rec.
 create function permissions._fga_list_object_ids(
     p_m text, p_type text, p_rel text, p_ut text, p_uid text, p_urel text, p_ctx permissions.fga_tuple[])
 returns setof text
@@ -1725,28 +2060,63 @@ rows 100
 as $$
 declare
     mono boolean;
-    ids text[];
-    deepest int;
+    sub_rel text;
+    sub_ts text;
+    recheck boolean;
     c text;
     x smallint;
 begin
     if not permissions._fga_path_exists(p_m, p_type, p_rel, p_ut, p_urel) then
         return;
     end if;
-    select r.monotone into mono
+    select r.monotone, r.diff_relation, r.diff_tupleset, r.diff_recheck into mono, sub_rel, sub_ts, recheck
     from permissions.fga_relations r where r.model_id = p_m and r.type = p_type and r.relation = p_rel;
     if mono then
-        select array_agg(f.object_id), max(f.lvl) into ids, deepest
-        from permissions._fga_forward(p_m, p_ut, p_uid, p_urel, p_ctx, p_type, p_rel) f;
-        if deepest >= 25 then
-            perform permissions._fga_too_complex();
-        end if;
-        return query select unnest(ids);
+        return query
+        select f.object_id
+        from permissions._fga_forward(p_m, p_ut, p_uid, p_urel, p_ctx, p_type, p_rel) f
+        where case when f.lvl < 25 then true else permissions._fga_deep() end;
+        return;
+    end if;
+    if sub_rel is not null then
+        return query
+        with s(i) as materialized (
+            select f from permissions._fga_forward_ids(p_m, p_ut, p_uid, p_urel, p_ctx, p_type, sub_rel) f
+            where sub_ts is null
+          union
+            select n.i
+            from permissions.fga_type_restrictions tr
+            join permissions.fga_relations pr on pr.model_id = p_m and pr.type = tr.user_type and pr.relation = sub_rel
+            cross join lateral permissions._fga_forward_ids(p_m, p_ut, p_uid, p_urel, p_ctx, tr.user_type, sub_rel) p
+            cross join lateral (
+                select tu.object_id
+                from permissions.fga_tuples tu
+                where tu.user_type = tr.user_type and tu.user_id = p and tu.user_relation = ''
+                  and tu.object_type = p_type and tu.relation = sub_ts
+              union all
+                select x.object_id
+                from unnest(p_ctx) x
+                where x.user_type = tr.user_type and x.user_id = p and x.user_relation = ''
+                  and x.object_type = p_type and x.relation = sub_ts
+                offset 0
+            ) n(i)
+            where sub_ts is not null and tr.model_id = p_m and tr.type = p_type and tr.relation = sub_ts
+              and tr.user_relation = '' and not tr.wildcard
+        )
+        select b.object_id
+        from permissions._fga_forward(p_m, p_ut, p_uid, p_urel, p_ctx, p_type, p_rel) b
+        left join s on s.i = b.object_id
+        where case when s.i is not null and not (p_urel <> '' and p_ut = p_type and p_uid = b.object_id and p_urel = p_rel)
+                   then case when recheck
+                             then permissions._fga_rec_ok(p_m, p_type, b.object_id, p_rel, p_ut, p_uid, p_urel, p_ctx)
+                             else false end
+                   when b.lvl < 25 then true
+                   else permissions._fga_deep() end;
         return;
     end if;
     -- candidates from the positive graph, each one checked
-    for c in select distinct f.object_id from permissions._fga_forward(p_m, p_ut, p_uid, p_urel, p_ctx, p_type, p_rel) f loop
-        x := permissions._fga_rec(p_m, p_type, c, p_rel, p_ut, p_uid, p_urel, p_ctx, 0, '{}', false);
+    for c in select f from permissions._fga_forward_ids(p_m, p_ut, p_uid, p_urel, p_ctx, p_type, p_rel) f loop
+        x := permissions._fga_rec(p_m, p_type, c, p_rel, p_ut, p_uid, p_urel, p_ctx, 0, '{}');
         if x = 3 then
             perform permissions._fga_too_complex();
         end if;
@@ -1836,6 +2206,9 @@ declare
     o record;
     f text;
     mono boolean;
+    sub_rel text;
+    sub_ts text;
+    recheck boolean;
     c record;
     x smallint;
 begin
@@ -1860,10 +2233,51 @@ begin
     if not exists (select 1 from permissions.fga_types t where t.model_id = m and t.type = o.object_type) then
         perform permissions._fga_error(2021, format('type ''%s'' not found', o.object_type));
     end if;
-    select r.monotone into mono
+    select r.monotone, r.diff_relation, r.diff_tupleset, r.diff_recheck into mono, sub_rel, sub_ts, recheck
     from permissions.fga_relations r where r.model_id = m and r.type = o.object_type and r.relation = fga_list_users.relation;
     if mono is null then
         perform permissions._fga_error(2022, format('relation ''%s#%s'' not found', o.object_type, fga_list_users.relation));
+    end if;
+    if sub_rel is not null then
+        -- set-based difference (see _fga_list_object_ids): the users the base
+        -- reaches minus those the subtract reaches. A plain user is also
+        -- removed by its type's wildcard; the object's own userset stays; with
+        -- diff_recheck the removed ones are checked with _fga_rec.
+        return query
+        with s(t, i, r) as materialized (
+            select b.t, b.i, b.r
+            from permissions._fga_backward(m, o.object_type, o.object_id, sub_rel, ctx, 25) b
+            where sub_ts is null
+          union
+            select b.t, b.i, b.r
+            from (select tu.user_type, tu.user_id
+                  from permissions.fga_tuples tu
+                  where tu.object_type = o.object_type and tu.object_id = o.object_id and tu.relation = sub_ts
+                    and tu.user_relation = ''
+                union
+                  select x.user_type, x.user_id
+                  from unnest(ctx) x
+                  where x.object_type = o.object_type and x.object_id = o.object_id and x.relation = sub_ts
+                    and x.user_relation = '') p
+            join permissions.fga_type_restrictions tr
+              on tr.model_id = m and tr.type = o.object_type and tr.relation = sub_ts
+             and tr.user_type = p.user_type and tr.user_relation = '' and not tr.wildcard
+            join permissions.fga_relations pr on pr.model_id = m and pr.type = p.user_type and pr.relation = sub_rel
+            cross join lateral permissions._fga_backward(m, p.user_type, p.user_id, sub_rel, ctx, 25) b
+            where sub_ts is not null and p.user_id <> '*'
+        )
+        select permissions._fga_user_string(k.t, k.i, k.r)
+        from (select distinct b.t, b.i, b.r
+              from permissions._fga_backward(m, o.object_type, o.object_id, fga_list_users.relation, ctx, 25) b
+              join unnest(user_filters) uf on b.t = split_part(uf, '#', 1) and b.r = split_part(uf, '#', 2)) k
+        where case when (k.t, k.i, k.r) = (o.object_type, o.object_id, fga_list_users.relation)
+                     or not exists (select 1 from s
+                                    where s.t = k.t and s.r = k.r and (s.i = k.i or (k.r = '' and s.i = '*')))
+                   then true
+                   when recheck
+                   then permissions._fga_rec_ok(m, o.object_type, o.object_id, fga_list_users.relation, k.t, k.i, k.r, ctx)
+                   else false end;
+        return;
     end if;
     for c in
         select distinct b.t, b.i, b.r
@@ -1872,7 +2286,7 @@ begin
     loop
         if not mono then
             x := permissions._fga_rec(m, o.object_type, o.object_id, fga_list_users.relation,
-                                      c.t, c.i, c.r, ctx, 0, '{}', false);
+                                      c.t, c.i, c.r, ctx, 0, '{}');
             if x = 3 then
                 perform permissions._fga_too_complex();
             end if;
