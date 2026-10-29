@@ -38,6 +38,34 @@ exception when others then
 end;
 $$;
 
+-- One model-validation case (test/fga_lang/generate.py): p_code null means the
+-- model must be accepted; otherwise fga_write_authorization_model must raise
+-- openfga:<p_code> with a non-empty HINT.
+create function fga_test.model_write(p_model jsonb, p_code int)
+returns text
+language plpgsql
+as $$
+declare
+    e record;
+begin
+    select * into e from fga_test.error_of(format('select permissions.fga_write_authorization_model(%L::jsonb)', p_model));
+    if p_code is null then
+        return case when e.st is null then 'ok'
+                    else format('expected the model to be accepted, got %s %s: %s', e.st, e.detail, e.msg) end;
+    end if;
+    if e.st is null then
+        return format('expected openfga:%s, the model was accepted', p_code);
+    end if;
+    if coalesce(e.detail, '') not like 'openfga:' || p_code || ' %' then
+        return format('expected openfga:%s, got %s %s: %s', p_code, e.st, e.detail, e.msg);
+    end if;
+    if coalesce(e.hint, '') = '' then
+        return format('openfga:%s without a hint: %s', p_code, e.msg);
+    end if;
+    return 'ok';
+end;
+$$;
+
 create function fga_test._want_code(p_got text, p_code int)
 returns text
 language sql

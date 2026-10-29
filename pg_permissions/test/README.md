@@ -37,6 +37,8 @@ test/
   fixtures/rbac_roles.sql  the viewer/editor/admin roles from PLAN.md §6
   spec/              engine-independent files, one per goal
   spec/a/ b/ c/ d/   per-design files: same scenarios, each design's native API (d/ is the extension)
+  fga/               OpenFGA's consolidated suite: vendor.sh, generate.py -> spec/d/6[01]_fga_oracle_*
+  fga_lang/          openfga/language's model validation cases: vendor.sh, generate.py -> spec/d/62_fga_lang_oracle
 ```
 
 | Prefix | Area | Where |

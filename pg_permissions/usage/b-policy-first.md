@@ -1,5 +1,7 @@
 # Engine B: policy-first
 
+> **History.** This is the usage guide of prototype B, one of the three engines compared before the extension became design D. It describes [`prototypes/`](../prototypes/) and not the extension, and is kept as it was. For the extension, see [Using pg_permissions](README.md), [The OpenFGA model](fga.md) and [RLS with both models](rls.md).
+
 How to use `pg_permissions` when you have picked engine B. B keeps two kinds of data: **facts** (who is in which group, who holds which role on what) and **policies** (Cedar-style `permit` and `forbid` rules that say what those facts allow). RLS policies on your tables are generated from the policy table, or written by hand against a few list functions.
 
 This page covers engine B only. Install, identity (JWT `sub`, `permissions.subject_id`), the client and admin privilege split, the `rbac` preset and the general RLS rules are the same on every engine and live in the [shared guide](./README.md). Read its "Identity" and "Roles and privileges" sections first; this page assumes them. The design and its trade-offs are in [`designs/b-policy-first.md`](../designs/b-policy-first.md), and the code is [`prototypes/b-policy-first.sql`](../prototypes/b-policy-first.sql).

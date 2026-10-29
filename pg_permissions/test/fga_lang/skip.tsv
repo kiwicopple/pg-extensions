@@ -1,0 +1,43 @@
+# openfga/language DSL semantic validation cases not run, with the reason. Tab-separated:
+# case	reason	note
+# Never edit an expectation to make a case pass; list it here with the reason.
+#
+# server-accepts: the language validator rejects the DSL, but OpenFGA v1.22.1's
+#   server accepts the JSON the transformer makes of it (cases.json, field
+#   server: http 201). fga_write_authorization_model follows the server, so a
+#   model OpenFGA accepts is accepted here too. The server's validateTypeRestrictions
+#   and isUsersetRewriteValid (pkg/typesystem/typesystem.go) have no duplicate check.
+# conditions: the model uses OpenFGA conditions, which raise 0A000
+#   (pg_permissions:conditions_not_supported) until phase 4.
+# schema-1.2: a modular model (schema 1.2). OpenFGA accepts 1.2; this extension
+#   accepts only 1.1 and raises 2057 before any other check (designs/d-per-model.md
+#   section 8, item 11). The server rejects these with 2056 for a missing relation.
+# upstream-skip: openfga/language's own harness skips the case (skip: true), and
+#   OpenFGA v1.22.1's server disagrees with its expectation.
+duplicate type in relations	server-accepts	[user, user]; server 201
+duplicate type relation in relations	server-accepts	[group#member, group#member]; server 201
+duplicate type wildcard in relations	server-accepts	[user:*, user:*]; server 201
+duplicate relation union in relations	server-accepts	a or a; server 201
+duplicate relation intersection in relations	server-accepts	a and a; server 201
+duplicate relation difference in relations	server-accepts	a but not a; server 201
+duplicate type in relationship definition	server-accepts	server 201
+duplicate wildcard type in relationship definition	server-accepts	server 201
+duplicate relationship symbol in union relationship definition	server-accepts	server 201
+duplicate relationship symbol in intersection relationship definition	server-accepts	server 201
+duplicate relationship symbol in difference relationship definition	server-accepts	server 201
+duplicate union relationship import in parent relationship definition	server-accepts	server 201
+duplicate intersection relationship import in parent relationship definition	server-accepts	server 201
+duplicate difference relationship import in parent relationship definition	server-accepts	server 201
+condition not defined - single character	conditions	server: 2056 condition c is undefined
+condition not defined	conditions	server: 2056 condition allowed_ip is undefined
+condition not defined x2	conditions	server: 2056 condition allowed_ip is undefined
+extraneous condition	conditions	an unused condition; the server accepts it too (201)
+handle single name duplicated type and unused condition	conditions	server: 2056 duplicate types; D checks conditions first
+unused condition whose name is a prefix of an earlier condition points at the correct line	conditions	an unused condition; the server accepts it too (201)
+inline expression mixed with plain and named condition is valid	conditions	server: 2000, $expression needs the inline_expressions feature flag
+inline expression on userset is valid	conditions	server: 2000, $expression needs the inline_expressions feature flag
+union does not require all child to have entry	upstream-skip	expects acceptance; server: 2056 cycle (action1 -> action2 -> action1 through computed usersets)
+union does not require all child to have entry even for intersection child	upstream-skip	expects acceptance; server: 2056 cycle (union1 -> union2 -> union1)
+union does not require all child to have entry even for exclusion child	upstream-skip	expects acceptance; server: 2056 cycle (union1 -> union2 -> union1)
+missing relation reference with a trailing comment on the type line	schema-1.2	server: 2056 'page#member' relation is undefined
+multiple missing relation references with module comments on every type line	schema-1.2	server: 2056 'page#member' relation is undefined

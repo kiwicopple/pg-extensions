@@ -1,0 +1,14 @@
+Repository: https://github.com/openfga/language
+Commit:     f558baace40cebd4548ab50b6d50ce65a940babb (tag pkg/go/v0.3.2: the language version openfga v1.22.1
+            and openfga/cli v0.8.2 both require)
+File:       tests/data/dsl-semantic-validation-cases.yaml
+License:    Apache-2.0 (upstream/LICENSE). Copyright OpenFGA authors.
+Models:     converted from DSL to JSON with openfga/cli:v0.8.2@sha256:31a565d14d1c5ca8170d3a2225eb66517d9f490539967bcb3421613c5e2538a4
+            (fga model transform --input-format fga --output-format json)
+Server:     each JSON model written to openfga/openfga:v1.22.1@sha256:b852071314f1fda1194d341a6ebac0a4f619b3cd87a6626d2ccc7048af4ec671
+            (POST /stores/{id}/authorization-models, memory datastore)
+Vendored:   2026-10-29 by test/fga_lang/vendor.sh
+
+cases.json is derived from dsl-semantic-validation-cases.yaml: one case per
+line, the same fields, plus model_json, transform (when the transformer
+refused) and server (the server's answer). Expectations are not modified.

@@ -19,13 +19,13 @@ select permissions.fga_write_authorization_model($m${
        "viewer": {"directly_related_user_types": [{"type": "user"}, {"type": "user", "wildcard": {}}, {"type": "team", "relation": "member"}]}}}}
   ]}$m$::jsonb) as v1 \gset
 
-select tap.plan(42);
+select tap.plan(43);
 
 -- models
 select tap.ok(:'v1' ~ '^[0-9A-HJKMNP-TV-Z]{26}$', 'write_authorization_model returns a ULID');
 select tap.is(permissions.fga_read_authorization_model() ->> 'id', :'v1', 'the new model is the latest');
 select tap.is(fga_test.code_of($$ select permissions.fga_write_authorization_model('{"schema_version": "1.0", "type_definitions": [{"type": "user"}]}') $$),
-              'openfga:2057 unsupported schema version 1.0: only 1.1 is supported', 'schema 1.0 is refused (2057)');
+              'openfga:2056 unsupported schema version 1.0: only 1.1 is supported', 'schema 1.0 is refused (2056, as OpenFGA v1.22.1; d/36 has the other versions)');
 select tap.ok(fga_test.code_of($$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [{"type": "doc", "relations": {"viewer": {"computedUserset": {"relation": "nope"}}}}]}') $$)
               like 'openfga:2056 %', 'a computed relation that does not exist is refused (2056)');
 select tap.ok(fga_test.code_of($$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [{"type": "doc", "relations": {"viewer": {"this": {}}}, "metadata": {"relations": {"viewer": {"directly_related_user_types": [{"type": "nobody"}]}}}}]}') $$)
@@ -33,7 +33,7 @@ select tap.ok(fga_test.code_of($$ select permissions.fga_write_authorization_mod
 select tap.ok(fga_test.code_of($$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [{"type": "user"}, {"type": "doc", "relations": {"viewer": {"this": {}}}}]}') $$)
               like 'openfga:2056 %', 'a direct relation without type restrictions is refused (2056)');
 select tap.ok(fga_test.code_of($$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [{"type": "user"}, {"type": "user"}]}') $$)
-              like 'openfga:2005 %', 'a type defined twice is refused (2005)');
+              like 'openfga:2056 %', 'a type defined twice is refused (2056, as OpenFGA v1.22.1)');
 select tap.is(fga_test.code_of($$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [{"type": "user"}], "conditions": {"c": {"name": "c", "expression": "true"}}}') $$),
               'sqlstate:0A000 conditions are not supported: the model defines condition ''c''', 'conditions are not supported yet (0A000)');
 select tap.is(permissions.fga_read_authorization_model() ->> 'id', :'v1', 'refused models do not become the latest');
@@ -51,6 +51,8 @@ select tap.is(fga_test.code_of($$ select permissions.fga_write('{"tuple_keys": [
               'ok', 'unless on_duplicate is ignore');
 select tap.ok(fga_test.code_of($$ select permissions.fga_write(deletes => '[{"user": "user:zed", "relation": "editor", "object": "document:1"}]') $$)
               like 'openfga:2017 %', 'deleting a tuple that does not exist fails (2017)');
+select tap.ok(fga_test.code_of($$ select permissions.fga_write(deletes => '[{"user": "team:eng", "relation": "viewer", "object": "document:1"}]') $$)
+              like 'openfga:2017 %', 'deleting team:eng where team:eng#member is stored fails (2017), not silently');
 select tap.ok(fga_test.code_of($$ select permissions.fga_write() $$) like 'openfga:2003 %', 'a write with no writes and no deletes fails (2003)');
 select tap.ok(fga_test.code_of($$ select permissions.fga_write('[{"user": "user:x", "relation": "editor", "object": "document:9"}, {"user": "user:x", "relation": "editor", "object": "document:9"}]') $$)
               like 'openfga:2004 %', 'the same tuple twice in one request fails (2004)');

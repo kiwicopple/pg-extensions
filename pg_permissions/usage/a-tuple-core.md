@@ -1,5 +1,7 @@
 # Engine A: tuple core
 
+> **History.** This is the usage guide of prototype A, one of the three engines compared before the extension became design D. It describes [`prototypes/`](../prototypes/) and not the extension, and is kept as it was. For the extension, see [Using pg_permissions](README.md), [The OpenFGA model](fga.md) and [RLS with both models](rls.md).
+
 You picked the engine that stores every permission as a relationship tuple, in the style of Zanzibar, OpenFGA and SpiceDB, and works out answers when you ask. This page is for the app developer using it: the mental model, a runnable quick start, a how-to for each feature, the full API, what it costs, and what to watch out for.
 
 Everything that is the same on every engine lives in the [shared guide](./README.md): [installing](./README.md#install), [how the current user is identified](./README.md#identity) (JWT `sub`, `permissions.subject_id`), [which functions clients may call and which are admin-only](./README.md#roles-and-privileges), the [`rbac` preset reference](./README.md#the-rbac-preset) (`create_role`, `assign_role`, `has_permission`, ...) and the [general RLS rules](./README.md#writing-rls-policies). This page does not repeat them. The engine's design and measurements are in [designs/a-tuple-core.md](../designs/a-tuple-core.md) and [DECISION.md](../DECISION.md).

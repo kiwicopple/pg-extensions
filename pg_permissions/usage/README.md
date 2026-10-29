@@ -1,8 +1,21 @@
 # Using pg_permissions
 
-How to use `pg_permissions` in an application: install it, tell it who the current user is, define roles, and write RLS policies that use it. This page covers identity, the `rbac` preset and the RLS rules, which are the same on the extension (design D) and on the prototypes A, B and C. Every SQL example here runs as written in [`test/spec/90_usage_rbac.sql`](../test/spec/90_usage_rbac.sql), against the extension and against A, B and C.
+How to use `pg_permissions` in an application: install it, tell it who the current user is, define roles, share single objects, and write RLS policies that use both.
 
-The extension, [`pg_permissions--0.0.1.sql`](../pg_permissions--0.0.1.sql), is design D: `rbac_*` tables plus an OpenFGA-compatible `fga_*` model ([`designs/d-per-model.md`](../designs/d-per-model.md)). A, B and C stay in [`prototypes/`](../prototypes/) as measured history ([`DECISION.md`](../DECISION.md) records why D was chosen). The `fga_*` API has no usage page yet (PLAN.md, phase 3); the engine pages below describe A, B and C, and this page documents the part that all four share: identity, the `rbac` preset and the RLS rules.
+The extension, [`pg_permissions--0.0.1.sql`](../pg_permissions--0.0.1.sql), has two permission models side by side in the schema `permissions` ([`designs/d-per-model.md`](../designs/d-per-model.md)):
+
+- **The `rbac` preset** (`rbac_*` tables): roles that grant permissions, app-wide or per tenant. Most apps start here. This page.
+- **The OpenFGA model** (`fga_*` tables): [OpenFGA](https://openfga.dev)'s modeling language, tuples, Check, ListObjects, ListUsers and Read, for per-object sharing, nested teams and folders. [The OpenFGA model](fga.md).
+
+The two meet in RLS policies, where permissive policies OR together and restrictive ones AND: [RLS with both models](rls.md). Adding sharing to an app that started on roles is one more policy, with nothing to migrate.
+
+| Page | Covers | Tested by |
+| --- | --- | --- |
+| This page | install, identity, privileges, the `rbac` preset, RLS rules | [`test/spec/90_usage_rbac.sql`](../test/spec/90_usage_rbac.sql) |
+| [The OpenFGA model](fga.md) | writing a model, tuples, Check, ListObjects, ListUsers, Read, contextual tuples, errors and limits, privileges | [`test/spec/d/90_usage_fga.sql`](../test/spec/d/90_usage_fga.sql) |
+| [RLS with both models](rls.md) | the current-subject functions, combining both models in policies, denies, plan-time evaluation, row attributes, cleanup | [`test/spec/d/90_usage_rls.sql`](../test/spec/d/90_usage_rls.sql) |
+
+Every SQL example on these pages runs as written in the spec next to it. This page's examples also run against the prototypes A, B and C, which share the `rbac` preset ([Prototypes](#prototypes-a-b-and-c-history)).
 
 Examples use psql variables for IDs. `:'alice'` is Alice's user ID, and so on:
 
@@ -17,23 +30,9 @@ Examples use psql variables for IDs. `:'alice'` is Alice's user ID, and so on:
 \set globex 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
 ```
 
-In your application these are parameters. They are UUIDs because engine C requires UUIDs; A and B accept any text.
+In your application these are parameters. The extension takes any text as an ID; they are UUIDs here because the tables in the examples use `uuid` keys (and prototype C required them).
 
 Statements that change roles run as the role that installed the extension (the "admin" below). Examples that start with `set local role authenticated` show what a client sees.
-
-## Which engine? (history)
-
-The extension is D, so there is nothing to choose for a new install. This table is the choice as it stood before D, and the three pages are the usage guides of the prototypes.
-
-| Engine | Pick it if | Usage page |
-| --- | --- | --- |
-| **A: tuple core** | Your sharing graphs are shallow, or you mostly use RBAC. You want the smallest thing to maintain (871 lines, nothing derived, no locks) and team edits are frequent. You know OpenFGA or SpiceDB. | [Engine A: tuple core](a-tuple-core.md) |
-| **B: policy-first** | You need forbid on groups or conditions evaluated by the engine, your roadmap is Cedar-like policies, or your keys are text or bigint. You want generated RLS. | [Engine B: policy-first](b-policy-first.md) |
-| **C: compiled model** | Reads dominate and groups are wide or deep. Your IDs are UUIDs and you want typed validation (unknown names raise on write). Nesting teams is rare. | [Engine C: compiled model](c-compiled-model.md) |
-
-The `rbac` preset has the same functions, the same answers and the same error codes on all three (and on D), and its latency is within about 0.1 ms across engines ([DECISION.md](../DECISION.md)). If you only use roles and permissions, the choice doesn't affect your code. It starts to matter when you add per-object sharing: each engine page covers that.
-
-The rest of this page is engine-independent.
 
 ## Install
 
@@ -42,7 +41,7 @@ The extension needs no other extensions and no C. It was tested on Postgres 16, 
 ### Plain psql
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f pg_permissions--0.0.1.sql   # prototypes: prototypes/a-tuple-core.sql etc.
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f pg_permissions--0.0.1.sql
 ```
 
 This creates the schema `permissions`, its tables and its functions, all owned by the role you connected as. Run it once per database: the files aren't re-runnable (a second run fails with `relation ... already exists`), and there is no upgrade path yet.
@@ -88,7 +87,7 @@ The containers use `trust` authentication on 127.0.0.1. They are for local testi
 
 ### The extension file
 
-`pg_permissions--0.0.1.sql` and `pg_permissions.control` are the extension: install them as above. `dbdev install kiwicopple-pg_permissions` is not available yet (not published). To try a prototype instead, install one of the files in `prototypes/` the same way.
+`pg_permissions--0.0.1.sql` and `pg_permissions.control` are the extension: install them as above. `dbdev install kiwicopple-pg_permissions` is not available yet (not published).
 
 ## Identity
 
@@ -169,11 +168,11 @@ select permissions.current_subject_type();   -- 'service'
 commit;
 ```
 
-Leave it alone for the `rbac` preset. Roles are held by `user` subjects, so a request with another subject type holds none. The setting matters when you use per-object sharing with other kinds of principals ([graduating](#graduating-from-rbac-to-per-object-sharing)).
+Leave it alone for the `rbac` preset. Roles are held by `user` subjects, so a request with another subject type holds none. The setting matters for the OpenFGA model, where the current subject is `<current_subject_type()>:<current_subject_id()>`, so a service can act as `service:<id>` ([RLS with both models](rls.md#the-current-subject-functions)).
 
 ### The type of `current_subject_id()`
 
-It returns `text` on A and B and `uuid` on C. On C anything that isn't a UUID is no subject at all, so a `sub` such as `user_2abc` (a Clerk-style ID) identifies a user on A and B and nobody on C. Compare with a cast (`current_subject_id()::text = owner_id::text`) if the code has to run on every engine.
+It returns `text`, so any `sub` works, including non-UUID IDs such as `user_2abc` (a Clerk-style ID). Cast when comparing with a `uuid` column: `current_subject_id() = owner_id::text`.
 
 ## Roles and privileges
 
@@ -181,8 +180,8 @@ The extension has two kinds of functions.
 
 | Kind | Functions | Who can call them |
 | --- | --- | --- |
-| Client-facing: answer for the current subject only | `current_subject_id`, `current_subject_type`, `has_permission`, `has_role`, `scopes_with_permission`, plus each engine's own current-subject checks | Everyone (granted to `PUBLIC`), so `anon` and `authenticated` too |
-| Admin-only: change data, or take a subject as an argument | `create_role`, `drop_role`, `assign_role`, `unassign_role`, `user_permissions`, `users_with_role`, plus each engine's functions that write or take a subject | The installing role. Anyone else needs an explicit `grant execute` |
+| Client-facing: answer for the current subject only | `current_subject_id`, `current_subject_type`, `has_permission`, `has_role`, `scopes_with_permission`, `fga_check_current`, `fga_list_objects_current`, `fga_list_object_ids_current` | Everyone (granted to `PUBLIC`), so `anon` and `authenticated` too |
+| Admin-only: change data, or take a subject as an argument | `create_role`, `drop_role`, `assign_role`, `unassign_role`, `user_permissions`, `users_with_role`, `delete_subject`, and every other `fga_*` function (`fga_write`, `fga_check`, `fga_list_objects`, ...) | The installing role. Anyone else needs an explicit `grant execute` |
 
 The tables are closed to clients: no role but the owner has any privilege on them ([`02_security.sql`](../test/spec/02_security.sql) checks every table in the schema). Functions that read them are `security definer`, with a pinned `search_path`.
 
@@ -196,7 +195,7 @@ select permissions.user_permissions(:'alice');         -- ERROR:  permission den
 reset role;
 ```
 
-A trusted backend role such as `service_role` gets the admin functions with an explicit grant. These signatures are the same on every engine:
+A trusted backend role such as `service_role` gets the admin functions with an explicit grant. For the `rbac` preset (the `fga_*` grants are in [The OpenFGA model](fga.md#privileges)):
 
 ```sql
 grant execute on function
@@ -245,7 +244,7 @@ Permission names are free-form strings (`documents.read`). A role is defined onc
 | `user_permissions(user_id text, scope text default null)` | `text[]` | admin | Everything a given user can do |
 | `users_with_role(role text, scope text default null)` | `setof text` | admin | Everyone who holds a role |
 
-Behaviour that is the same on every engine, including the error codes (checked in the spec):
+Behaviour, including the error codes (checked in the spec, on the extension and on the prototypes):
 
 - **Scopes are separate.** `has_permission(p)` looks only at app-wide roles and `has_permission(p, scope)` only at that scope. There is no hidden inheritance between them. An app that wants "app-wide admins can do anything in any tenant" writes both checks ([below](#app-wide-or-scoped-two-checks)).
 - **Unknown names return false.** An unknown permission or role in `has_permission` or `has_role` is false, never an error, so a policy that names a dropped permission denies instead of breaking every query. The flip side: a typo in a policy denies silently.
@@ -353,7 +352,7 @@ select permissions.drop_role('auditor');
 select permissions.user_permissions(:'dave');    -- {}: the assignment went with the role
 ```
 
-The name of a dropped role can be reused straight away. Treat role definitions as admin-time work, like a migration: on some engines each `create_role` and `drop_role` does real work, and B raises `0A000` for them under `repeatable read` (use read committed or serializable).
+The name of a dropped role can be reused straight away. Treat role definitions as admin-time work, like a migration. There is no call that changes an existing role's permissions or inherited roles: drop it and create it again, and assign it again, since `drop_role` removes its assignments.
 
 ### Scenario 1: app-wide roles
 
@@ -530,7 +529,7 @@ with check (permissions.has_permission('documents.edit', org_id::text))  -- inse
 
 A write touches a few rows, so a call per row is cheap and the policy reads like the rule. The fast path would build the user's whole list of scopes for every statement. For UPDATE, `with check` defaults to the `using` expression.
 
-Pass the scope as text with `org_id::text`. That works on every engine. Engine C also has a `uuid` overload, so `has_permission('documents.edit', org_id)` works there and nowhere else.
+Pass the scope as text with `org_id::text`: scopes are text.
 
 ### App-wide or scoped: two checks
 
@@ -576,7 +575,7 @@ select permissions.assign_role(:'erin', 'viewer', :'globex');
 | Dave | editor of `acme`, viewer of `globex` | reads both, updates `apollo` only |
 | Alice | app-wide admin | updates both |
 
-The cost: with `or`, Postgres can't use the `org_id` index for the scoped arm. On 500,000 rows in 200 orgs, a user who sees 7,500 of them counted them in 2.2 to 3.2 ms with the single-check policy and 19 to 20 ms with the two-check policy, on all three engines. A page of 50 rows was unaffected (about 1 to 2 ms either way). These numbers were measured ad hoc while writing this page (local Postgres 16.4); they aren't in the benchmark suite. If a table doesn't need app-wide roles, use the single check.
+The cost: with `or`, Postgres can't use the `org_id` index for the scoped arm. On 500,000 rows in 200 orgs, a user who sees 7,500 of them counted them in 2.2 to 3.2 ms with the single-check policy and 19 to 20 ms with the two-check policy, on all three prototypes (not re-measured on the extension). A page of 50 rows was unaffected (about 1 to 2 ms either way). These numbers were measured ad hoc while writing this page (local Postgres 16.4); they aren't in the benchmark suite. If a table doesn't need app-wide roles, use the single check.
 
 ### Other rules
 
@@ -586,45 +585,56 @@ The cost: with `or`, Postgres can't use the `org_id` index for the scoped arm. O
 
 ## Cleaning up when a user is deleted
 
-The extension doesn't know about your users table, so deleting a user doesn't remove their role assignments. Orphans are harmless while IDs are never reused, but they pile up. Each engine has its own cleanup function, because each stores assignments differently:
-
-| Engine | Function | Trigger helper |
-| --- | --- | --- |
-| A | `permissions.delete_subject('user', id)` | none: write a `security definer` trigger function that calls it |
-| B | `permissions.delete_entity('user', id)` | `permissions.on_entity_deleted('user', 'id')` |
-| C | `permissions.forget_subject(id)` | `permissions.on_subject_deleted('id')` |
-
-All three remove the user's role assignments, scoped ones included (for Frank, who holds `viewer`, `user_permissions` goes from `{documents.read}` to `{}` after the call; the spec checks that on each engine). They also remove the user's per-object grants. The engine pages show the trigger on your users table: [A](a-tuple-core.md), [B](b-policy-first.md), [C](c-compiled-model.md).
+The extension doesn't know about your users table, so deleting a user doesn't remove their role assignments. Orphans are harmless while IDs are never reused, but they pile up. `permissions.delete_subject('user', id)` removes a user's role assignments, scoped ones included, and every OpenFGA tuple that names them, in one call (for Frank, who holds `viewer`, `user_permissions` goes from `{documents.read}` to `{}`; the spec checks that). Call it from a trigger on your users table: [RLS with both models](rls.md#cleaning-up-when-a-user-is-deleted) has the trigger.
 
 ## Graduating from RBAC to per-object sharing
 
-An app that starts on roles often needs "Dave can edit this one document". That is per-object sharing, and the engines express it differently (relationships on A and C, policies on B). Both the `rbac` preset and the sharing functions write to the same core data, so graduating doesn't migrate anything: the role assignments stay as they are, you add grants on single objects, and the RLS policy of the shared table gains one more `or` branch, a list of the objects shared with the current user:
+An app that starts on roles often needs "Dave can edit this one document". That is per-object sharing, and it is the OpenFGA model's job. Graduating doesn't migrate anything: the role assignments stay as they are, you write an OpenFGA model and tuples next to them ([The OpenFGA model](fga.md)), and the RLS of the shared table gains one more permissive policy, the list of the documents the current user can view:
 
 ```sql
-using (
-    org_id = any (array(select unnest(permissions.scopes_with_permission('documents.read'))::uuid))
-    or id = any (<list of document ids shared with the current user>)
-)
+create policy documents_select_fga on public.documents for select to authenticated
+    using (id = any (array(select permissions.fga_list_object_ids_current('document', 'viewer')::uuid)));
 ```
 
-The second line is engine-specific, so it isn't runnable here. Each engine page has a sharing section with the real calls and the policy:
-[Engine A](a-tuple-core.md), [Engine B](b-policy-first.md), [Engine C](c-compiled-model.md). Write the shared arm as a second branch of the policy, not a replacement: the single-branch form is much slower on large tables ([DECISION.md](../DECISION.md), "Hybrids worth considering").
+[RLS with both models](rls.md) builds this table and its policies step by step, with a deny that overrides a role. Keep the shared arm as a separate policy (or a second `or` branch), not a replacement for the role arm: the single-branch form is much slower on large tables ([DECISION.md](../DECISION.md), "Hybrids worth considering").
 
 ## Gotchas
 
-- **Don't pass the second argument of `scopes_with_permission`.** The signature is `(text, boolean)` on A and C and `(text, jsonb)` on B. The extra parameter exists so the planner can't evaluate the call at plan time; passing a constant folds the call again, and every query runs the list twice. Call it with the permission name only. It also means `grant` and `drop function` statements need the full signature.
-- **A typo in a permission name denies, silently.** Unknown names are false, by design. Keep permission names in one place in your code.
+- **Don't pass the second argument of `scopes_with_permission`.** The signature is `(text, boolean)`. The extra parameter exists so the planner can't evaluate the call at plan time; passing a constant folds the call again, and every query runs the list twice. Call it with the permission name only. It also means `grant` and `drop function` statements need the full signature.
+- **A typo in a permission name denies, silently.** Unknown names are false in the `rbac` preset, by design. Keep permission names in one place in your code. The OpenFGA functions are the other way round: an unknown type or relation raises ([RLS with both models](rls.md#typos-raise)).
 - **Superusers and owners skip RLS.** Test policies as the role your clients use (`set role authenticated`), not as `postgres`.
 - **Set the subject per transaction.** `set_config(..., true)`, never a session-level setting behind a pooler.
-- **Client-side IDs.** On C, user IDs and scope IDs must be UUIDs: a non-UUID raises `22P02` in `assign_role` and is false in `has_permission`. A and B take any text, and `org_id::text` as the scope works on all three.
-- **`current_subject_id()` is `uuid` on C, `text` on A and B.** Cast before comparing across engines.
-- **Engine A names its generic check `check`.** That is a reserved word, so always write `permissions.check(...)` with the schema ([Engine A](a-tuple-core.md)).
-- **Role definitions are not for the request path.** Create roles in a migration or an admin task. B refuses `create_role` and `drop_role` under `repeatable read` (`0A000`).
-- **No upgrade path yet.** The prototype files can't be re-run on an existing install.
+- **The check functions don't see row attributes.** A rule on a column (`status = 'published'`) lives in RLS, and `fga_check_current` doesn't know about it: treat checks as advisory and RLS as final ([RLS with both models](rls.md#row-attributes-that-only-rls-sees)).
+- **`fga_list_objects` and `fga_list_users` stop at 1,000 results**, as OpenFGA does. The RLS functions (`fga_list_object_ids_current`) have no cap ([The OpenFGA model](fga.md#errors-and-limits)).
+- **No upgrade path yet.** The extension file can't be re-run on an existing install.
+
 
 ## Where to go next
 
-- An engine page, for sharing, groups, the cleanup trigger and engine-only functions: [A](a-tuple-core.md), [B](b-policy-first.md), [C](c-compiled-model.md).
+- [The OpenFGA model](fga.md) and [RLS with both models](rls.md).
+- [`designs/d-per-model.md`](../designs/d-per-model.md): how the extension works, its error codes, its limits, and where it differs from OpenFGA.
 - [`PLAN.md`](../PLAN.md): the goals, the `rbac` preset API and the RLS requirements these examples come from.
-- [`DECISION.md`](../DECISION.md): choosing between the engines.
 - [`test/spec/90_usage_rbac.sql`](../test/spec/90_usage_rbac.sql): the tested version of every example here. Run it with `./test/run.sh 90_usage_rbac` (the extension), or add `--impl prototypes/<engine>.sql` for a prototype.
+
+## Prototypes A, B and C (history)
+
+Before the extension was design D, three engines were built as prototypes and compared ([`DECISION.md`](../DECISION.md)). They stay in [`prototypes/`](../prototypes/) as measured history, and their usage guides are kept as they were: they describe those prototypes, not the extension.
+
+All three have this page's `rbac` preset, and `test/spec/90_usage_rbac.sql` still runs against each. Where they differ from the extension:
+
+- `current_subject_id()` is `uuid` on C, and a non-UUID `sub` means no subject there. C raises `22P02` in `assign_role` for a non-UUID user or scope, and has `uuid` overloads of `has_permission` and `has_role`.
+- `scopes_with_permission` is `(text, jsonb)` on B.
+- The cleanup call is `delete_subject` on A (as on the extension, without OpenFGA tuples), `delete_entity` on B (trigger helper `on_entity_deleted`) and `forget_subject` on C (trigger helper `on_subject_deleted`).
+- B refuses `create_role` and `drop_role` under `repeatable read` (`0A000`).
+- A names its generic check `check`, a reserved word: write `permissions.check(...)` with the schema.
+- Sharing is relationships on A and C and policies on B, each with its own API (the engine pages).
+
+The choice as it stood before D, kept for the record:
+
+| Engine | Pick it if | Usage page (history) |
+| --- | --- | --- |
+| **A: tuple core** | Your sharing graphs are shallow, or you mostly use RBAC. You want the smallest thing to maintain (871 lines, nothing derived, no locks) and team edits are frequent. You know OpenFGA or SpiceDB. | [Engine A: tuple core](a-tuple-core.md) |
+| **B: policy-first** | You need forbid on groups or conditions evaluated by the engine, your roadmap is Cedar-like policies, or your keys are text or bigint. You want generated RLS. | [Engine B: policy-first](b-policy-first.md) |
+| **C: compiled model** | Reads dominate and groups are wide or deep. Your IDs are UUIDs and you want typed validation (unknown names raise on write). Nesting teams is rare. | [Engine C: compiled model](c-compiled-model.md) |
+
+The `rbac` preset had the same functions, answers and error codes on all three, with latency within about 0.1 ms across engines ([DECISION.md](../DECISION.md)).

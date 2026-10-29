@@ -1,5 +1,7 @@
 # Engine C: compiled model
 
+> **History.** This is the usage guide of prototype C, one of the three engines compared before the extension became design D. It describes [`prototypes/`](../prototypes/) and not the extension, and is kept as it was. For the extension, see [Using pg_permissions](README.md), [The OpenFGA model](fga.md) and [RLS with both models](rls.md).
+
 This page is for an app developer who has picked engine C. It shows how to use it and lists every public function. Install, identity (JWT `sub`, `permissions.subject_id`), the client and admin privilege split, the `rbac` preset reference and the general RLS rules are in the shared guide, [README.md](./README.md). They are not repeated here.
 
 Every example with an observable result is also a test: [`test/spec/c/90_usage_examples.sql`](../test/spec/c/90_usage_examples.sql) mirrors this page section by section (the comments carry the section numbers) and runs against the prototype with `./test/run.sh 90 --impl prototypes/c-compiled-model.sql`. Design background is in [`designs/c-compiled-model.md`](../designs/c-compiled-model.md); the comparison with the other engines is in [`DECISION.md`](../DECISION.md).

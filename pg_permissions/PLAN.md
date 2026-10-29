@@ -1,6 +1,6 @@
 # pg_permissions: Plan
 
-> Status: requirements and summary, with the session 4 direction (per-model tables, RBAC and OpenFGA first) in "Current plan" below. D is the chosen engine (end of session 4) and, since phase 1 of session 5, is the extension file `pg_permissions--0.0.1.sql`; the ordered work plan is "Next work (session 5 onward)" right after it, and the decisions are in [`DECISION.md`](./DECISION.md), "Decisions at the end of session 4". Sections that assumed one generic API are marked superseded and kept as history. The requirements and the A/B/C comparison below were written before that decision.
+> Status: requirements and summary, with the session 4 direction (per-model tables, RBAC and OpenFGA first) in "Current plan" below. D is the chosen engine (end of session 4) and, since phase 1 of session 5, is the extension file `pg_permissions--0.0.1.sql` (phases 1 to 3 are done; each has a status line); the ordered work plan is "Next work (session 5 onward)" right after it, and the decisions are in [`DECISION.md`](./DECISION.md), "Decisions at the end of session 4". Sections that assumed one generic API are marked superseded and kept as history. The requirements and the A/B/C comparison below were written before that decision.
 >
 > Earlier status (history, before the session 4 decision): requirements and summary. The extension itself wasn't implemented yet (`pg_permissions--0.0.1.sql` was empty). All three designs were built as prototypes in [`prototypes/`](./prototypes/), passed the test suite and had been benchmarked; the choice between them was open. See [`DECISION.md`](./DECISION.md).
 >
@@ -40,6 +40,8 @@ Starting point (end of session 4): 37 spec files and 2,164 assertions pass on PG
 
 ### Phase 1: promote D to the extension
 
+> Status: done (commit `246fe1f`). The extension file is D, `prototypes/d-per-model.sql` is removed, and the scripts and docs default to it; 37 files and 2,164 assertions locally and on PG 16, 17 and 18.
+
 Goal: `pg_permissions--0.0.1.sql` is D, and every script and doc treats the extension as the default.
 
 Steps:
@@ -55,6 +57,8 @@ Done when: `test/run.sh` with no `--impl` passes the full suite on the extension
 
 ### Phase 2: API decisions (caps, pagination, descriptive errors)
 
+> Status: done (commit `8e0f614`). Caps (1,000 and 100), Read pagination, and a HINT on every raise site with `d/35_error_hints` and its guard; 39 files and 2,276 assertions locally and on PG 16, 17 and 18, OpenFGA suite 933/746.
+
 Goal: the decisions in DECISION.md, points 4 and 5, are implemented and spec-tested.
 
 Steps:
@@ -69,6 +73,8 @@ Files: `pg_permissions--0.0.1.sql`, `test/spec/d/30_fga_api.sql` and a new spec 
 Done when: the new specs fail before and pass after; the full suite is green locally and on the docker matrix (PG 16, 17, 18); the OpenFGA consolidated suite is still 933/746; the every-raise-site spec passes and the guard fails if a HINT is removed (check by deleting one).
 
 ### Phase 3: hardening and usage docs
+
+> Status: done (commit `pg_permissions: model validation oracle, D usage docs, findings closed (phase 3)`). Entrypoint and cycle checks and OpenFGA's model error codes; openfga/language's 93 validation cases vendored in `test/fga_lang/`, 66 run and pass, 27 skipped with reasons; usage pages `fga.md` and `rls.md` with the README rewritten for D, every example a spec; every finding in DECISION.md closed or carried; 43 files and 2,463 assertions locally and on PG 16, 17 and 18, OpenFGA suite 933/746.
 
 Goal: model validation is complete, the usage docs describe D, and the old findings list is closed or carried.
 

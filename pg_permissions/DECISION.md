@@ -156,34 +156,39 @@ Cross-engine observations from OPT worth keeping: Docker and local numbers diffe
 
 Writing a usage guide for each engine, with every example run as a spec (`test/spec/90_usage_rbac.sql`, `a/90`, `b/90`, `c/90`), turned up these. None of them is fixed in the prototypes; each one is documented on the relevant usage page.
 
+Rechecked against D in phase 3 of session 5, bullet by bullet, while writing D's usage pages (`usage/README.md`, `usage/fga.md`, `usage/rls.md`, each example a spec). Each bullet ends with its status: closed as not applicable to D, closed as fixed in D (with the spec that shows it), or carried (D has it, and what to do). Tally: 13 not applicable, 6 fixed, 3 carried (one of them, the last bullet, added by the recheck).
+
 **The `rbac` preset isn't fully identical across engines** (PLAN §6 says it should be):
-- `current_subject_id()` returns `text` on A and B but `uuid` on C. On C, a non-UUID JWT `sub` (e.g. `user_2abc`) means no subject.
-- C raises `22P02` in `assign_role` for a non-UUID user or scope; A and B accept any text.
-- `scopes_with_permission` takes `(text, boolean)` on A and C but `(text, jsonb)` on B, because of the dummy argument. C also has `uuid` overloads of `has_permission` and `has_role`.
-- There's no common cleanup call: `delete_subject` (A), `delete_entity` (B), `forget_subject` (C).
-- Under `repeatable read`, B refuses `create_role` and `drop_role`; A and C allow them.
+- `current_subject_id()` returns `text` on A and B but `uuid` on C. On C, a non-UUID JWT `sub` (e.g. `user_2abc`) means no subject. **Closed: not applicable to D**: one engine, and `current_subject_id()` returns `text`, so any `sub` is a subject.
+- C raises `22P02` in `assign_role` for a non-UUID user or scope; A and B accept any text. **Closed: not applicable to D**: D's user ids and scopes are `text` and never cast.
+- `scopes_with_permission` takes `(text, boolean)` on A and C but `(text, jsonb)` on B, because of the dummy argument. C also has `uuid` overloads of `has_permission` and `has_role`. **Closed: not applicable to D**: one signature, `(text, boolean)`, and no `uuid` overloads (usage/README.md, Gotchas).
+- There's no common cleanup call: `delete_subject` (A), `delete_entity` (B), `forget_subject` (C). **Closed: fixed in D**: `delete_subject(type, id)` removes a subject's role assignments and every FGA tuple naming it, in one call (design doc section 11, item 5): `d/30_fga_api`, and `d/90_usage_rls`, where a trigger on a users table removes Dave's role and his three tuples.
+- Under `repeatable read`, B refuses `create_role` and `drop_role`; A and C allow them. **Closed: not applicable to D**: D takes no advisory locks and refuses no isolation level.
 
 **Security-relevant RLS footguns:**
-- **A:** the recommended two-arm projection policy ignores a forbid on an individual document, because the folder arm never visits the document. A document-level forbid needs the single-branch shape or a folder-level forbid. Whether C's two-arm policy behaves the same hasn't been checked.
-- **B:** a conditioned forbid isn't enforced by RLS until `apply_rls` is re-run, and `lint()` doesn't flag a new `via` type or column.
-- **B:** a row with a null parent column is hidden when the user has any denied parent (`not (null = any(...))` is null). Here `can()` says yes while RLS says no.
-- **B:** conditions are only partly validated on write. An unknown operator raises at evaluation time, and `rls_expression` then emits broken SQL.
-- **B:** the depth cap drops a path after a delete (open question 8), reproduced in `b/90`, which asserts the current behaviour.
+- **A:** the recommended two-arm projection policy ignores a forbid on an individual document, because the folder arm never visits the document. A document-level forbid needs the single-branch shape or a folder-level forbid. Whether C's two-arm policy behaves the same hasn't been checked. **Closed: fixed in D** for the recommended policy: parents are part of the OpenFGA model, so a single FGA arm on a relation with `but not` (`can_view: viewer but not blocked`, `viewer` inherited `from parent`) honours a deny on one document: `d/90_usage_fga` (Carl, blocked on a document he reaches through two folders and a nested team, isn't in `can_view`) and `d/32_fga_set_based` (the lists the RLS helper returns, against Check). A projection arm the app writes itself (`folder_id = any (...)`), or an RBAC arm, still bypasses a model deny; `usage/rls.md` ("Policies") says to list the relation that contains the deny or use a restrictive policy, as `d/90_usage_rls` does for Dave.
+- **B:** a conditioned forbid isn't enforced by RLS until `apply_rls` is re-run, and `lint()` doesn't flag a new `via` type or column. **Closed: not applicable to D**: D generates no RLS (policies are the app's and read the tables at query time) and has no conditions yet.
+- **B:** a row with a null parent column is hidden when the user has any denied parent (`not (null = any(...))` is null). Here `can()` says yes while RLS says no. **Carried: D has it** in its recommended restrictive policy on a nullable column: `org_id <> all (array(...))` is null for a null `org_id`, so the row is hidden whenever the list is non-empty. What to do: write `org_id is null or org_id <> all (...)`. `usage/rls.md` ("Policies") says so, and `d/90_usage_rls` checks the null result and that Dave keeps his personal (org-less) document while banned from an org.
+- **B:** conditions are only partly validated on write. An unknown operator raises at evaluation time, and `rls_expression` then emits broken SQL. **Closed: not applicable to D**: D rejects every condition with `0A000` at model write and tuple write; phase 4 parses them at model write (PLAN.md, phase 4, step 3).
+- **B:** the depth cap drops a path after a delete (open question 8), reproduced in `b/90`, which asserts the current behaviour. **Closed: not applicable to D**: D stores no closure; walks run at read time with OpenFGA's depth limit (`d/33_fga_walk_pruning`).
 
 **API gaps and quirks:**
 - **A:**
-  - `grant` is an upsert, so leaving out `p_expires_at` clears the expiry.
-  - `grant` doesn't validate the subject type.
-  - `revoke` without the subject relation silently returns false.
-  - A typo in `from_parent` gives silent no-access.
+  - `grant` is an upsert, so leaving out `p_expires_at` clears the expiry. **Closed: not applicable to D**: no upsert and no expiry; writing a tuple that exists is 2017 unless `on_duplicate` is `ignore` (`d/30_fga_api`).
+  - `grant` doesn't validate the subject type. **Closed: fixed in D**: every written or contextual tuple is checked against the relation's type restrictions (2027, with the allowed types in the HINT): `d/30_fga_api`, `d/35_error_hints`, `d/90_usage_fga`.
+  - `revoke` without the subject relation silently returns false. **Closed: fixed in D**: a delete in `fga_write` of a tuple that doesn't exist (for example `team:eng` where `team:eng#member` was meant) is 2017 unless `on_missing` is `ignore` (`d/30_fga_api`). `fga_delete_tuple` stays idempotent by design and says nothing, as documented in `usage/fga.md`.
+  - A typo in `from_parent` gives silent no-access. **Closed: fixed in D**: a misspelled relation is 2056 at model write, and in a call 2000 (Check and the current-subject functions, RLS included) or 2022 (ListObjects, ListUsers), with the nearest name in the HINT: `d/35_error_hints`, `d/36_fga_model_validation`, `d/90_usage_fga`, `d/90_usage_rls`.
 - **B:**
-  - No API to undefine a role, remove an implication or disable a policy.
-  - `apply_rls` can't handle non-uuid keys.
-  - `explain` can return duplicate rows.
+  - No API to undefine a role, remove an implication or disable a policy. **Carried: D has it** for roles: `drop_role` exists, but nothing changes a role's permissions or inherited roles, and `drop_role` removes its assignments, so a change is drop, create and assign again (`usage/README.md`, `drop_role`). What to do: an `alter_role`-style call (follow-up). Policies: not applicable (OpenFGA models are versioned; write a new one).
+  - `apply_rls` can't handle non-uuid keys. **Closed: not applicable to D**: D generates no RLS.
+  - `explain` can return duplicate rows. **Closed: not applicable to D**: D has no `explain`.
 - **C:**
-  - `apply_model` loses some rows from its returned plan.
-  - Dry runs consume version numbers.
-  - `apply_model` skips the `repeatable read` check.
-  - No API to list raw grants or purge expired ones.
+  - `apply_model` loses some rows from its returned plan. **Closed: not applicable to D**: `fga_write_authorization_model` returns only the model id.
+  - Dry runs consume version numbers. **Closed: not applicable to D**: no dry run; a refused model rolls back and doesn't become the latest (`d/36_fga_model_validation`).
+  - `apply_model` skips the `repeatable read` check. **Closed: not applicable to D**: no locks; a model is a set of new immutable rows.
+  - No API to list raw grants or purge expired ones. **Closed: fixed in D** for listing: `fga_read` returns the stored tuples, filtered and paginated (`d/34_fga_limits`, `d/90_usage_fga`). Nothing expires before conditions (phase 4), so there is nothing to purge.
+
+**Checked against D, not in the lists above:**
+- **Row attributes that exist only in RLS** are invisible to the check functions (session 4 direction, point 6; A §12.4). **Carried: D has it**: `fga_check_current` says true for a draft that RLS hides. What to do: treat the check functions as advisory and RLS as final, or pass the attribute in from a backend as a contextual tuple; `usage/rls.md` ("Row attributes that only RLS sees") documents both and `d/90_usage_rls` checks both.
 
 These are prototype-level issues. Whichever engine is chosen, its list becomes the first hardening work.

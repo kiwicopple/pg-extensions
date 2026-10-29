@@ -604,6 +604,8 @@ begin
             when 2021 then 'type_not_found'
             when 2022 then 'relation_not_found'
             when 2027 then 'invalid_tuple'
+            when 2047 then 'type_invalid_pattern'
+            when 2050 then 'relations_invalid_pattern'
             when 2053 then 'exceeded_entity_limit'
             when 2056 then 'invalid_authorization_model'
             when 2057 then 'unsupported_schema_version'
@@ -938,15 +940,21 @@ declare
     bad text;
     bad_type text;
     h text;
+    entry jsonb;
+    added jsonb;
 begin
     if jsonb_typeof(model) <> 'object' then
         perform permissions._fga_error(2056, format('the authorization model must be a JSON object, got a JSON %s', jsonb_typeof(model)),
             hint => 'Pass the WriteAuthorizationModel body, {"schema_version": "1.1", "type_definitions": [...]}, as ''fga model transform --output-format json'' prints it.');
     end if;
+    -- OpenFGA v1.22.1: a version outside 1.0, 1.1 and 1.2 fails the request's
+    -- validation (2000); 1.0 is invalid_authorization_model (2056). 1.2 (modular
+    -- models) is valid there but not supported here (2057).
     if coalesce(model ->> 'schema_version', '') <> '1.1' then
-        perform permissions._fga_error(2057, format('unsupported schema version %s: only 1.1 is supported',
-                                                    coalesce(model ->> 'schema_version', '(none)')),
-            hint => 'Set "schema_version": "1.1" (in the DSL, ''schema 1.1'').');
+        perform permissions._fga_error(
+            case model ->> 'schema_version' when '1.0' then 2056 when '1.2' then 2057 else 2000 end,
+            format('unsupported schema version %s: only 1.1 is supported', coalesce(model ->> 'schema_version', '(none)')),
+            hint => 'Set "schema_version": "1.1" (in the DSL, ''schema 1.1''). Modular models (schema 1.2) are not supported.');
     end if;
     if jsonb_typeof(model -> 'conditions') = 'object' and model -> 'conditions' <> '{}' then
         perform permissions._fga_unsupported(
@@ -960,25 +968,39 @@ begin
             hint => 'List at least one type, e.g. "type_definitions": [{"type": "user"}].');
     end if;
 
-    -- types
+    -- names: the request's patterns (2047, 2050), then NewAndValidate's
+    -- duplicate types and reserved names (2056)
     select coalesce(td ->> 'type', '(missing)') into bad from jsonb_array_elements(tds) td
     where jsonb_typeof(td) <> 'object' or coalesce(td ->> 'type', '') !~ '^[^:#@[:space:]]{1,254}$' limit 1;
     if bad is not null then
-        perform permissions._fga_error(2056, format('invalid type name ''%s''', bad),
+        perform permissions._fga_error(2047, format('invalid type name ''%s''', bad),
             hint => 'Each type definition is an object {"type": "document", ...}. A type name is 1 to 254 characters with no '':'', ''#'', ''@'' or whitespace.');
-    end if;
-    select td ->> 'type' into bad from jsonb_array_elements(tds) td group by 1 having count(*) > 1 limit 1;
-    if bad is not null then
-        perform permissions._fga_error(2005, format('the type ''%s'' is defined more than once', bad),
-            hint => format('Define each type once: merge the relations of every %L definition into one.', bad));
     end if;
     select format('%s#%s', td ->> 'type', r.key) into bad
     from jsonb_array_elements(tds) td
     cross join jsonb_each(case when jsonb_typeof(td -> 'relations') = 'object' then td -> 'relations' else '{}' end) r
-    where r.key !~ '^[^:#@[:space:]]{1,50}$' or r.key in ('self', 'this') limit 1;
+    where r.key !~ '^[^:#@[:space:]]{1,50}$' limit 1;
     if bad is not null then
-        perform permissions._fga_error(2056, format('invalid relation name ''%s''', bad),
-            hint => 'A relation name is 1 to 50 characters with no '':'', ''#'', ''@'' or whitespace, and not ''self'' or ''this''.');
+        perform permissions._fga_error(2050, format('invalid relation name ''%s''', bad),
+            hint => 'A relation name is 1 to 50 characters with no '':'', ''#'', ''@'' or whitespace.');
+    end if;
+    select td ->> 'type' into bad from jsonb_array_elements(tds) td group by 1 having count(*) > 1 limit 1;
+    if bad is not null then
+        perform permissions._fga_error(2056, format('the type ''%s'' is defined more than once', bad),
+            hint => format('Define each type once: merge the relations of every %L definition into one.', bad));
+    end if;
+    select td ->> 'type' into bad from jsonb_array_elements(tds) td where td ->> 'type' in ('self', 'this') limit 1;
+    if bad is not null then
+        perform permissions._fga_error(2056, format('the definition of type ''%s'' is invalid: self and this are reserved keywords', bad),
+            hint => 'Rename the type: ''self'' and ''this'' are reserved keywords.');
+    end if;
+    select format('%s#%s', td ->> 'type', r.key) into bad
+    from jsonb_array_elements(tds) td
+    cross join jsonb_each(case when jsonb_typeof(td -> 'relations') = 'object' then td -> 'relations' else '{}' end) r
+    where r.key in ('self', 'this') limit 1;
+    if bad is not null then
+        perform permissions._fga_error(2056, format('invalid relation name ''%s'': self and this are reserved keywords', bad),
+            hint => 'Rename the relation: ''self'' and ''this'' are reserved keywords.');
     end if;
 
     m := permissions._fga_ulid();
@@ -1169,6 +1191,88 @@ begin
         perform permissions._fga_error(2056, format(
             'relation ''%s'': a direct relation ([...]) needs type restrictions, and only a direct relation can have them', bad),
             hint => 'Give a relation with {"this": {}} its "directly_related_user_types" under metadata.relations, and remove them from a relation without it.');
+    end if;
+
+    -- Entrypoints (OpenFGA's hasEntrypoints, pkg/typesystem/typesystem.go): every
+    -- relation needs a way to a concrete user type, else no tuple can ever
+    -- satisfy it. The least fixpoint over the rewrite nodes, one round per
+    -- level: a node has an entrypoint when
+    --   this          a type restriction is a plain type or a wildcard, or a
+    --                 userset type#relation whose relation has one
+    --   computed      the computed relation has one
+    --   ttu           the computed relation has one on a type the tupleset allows
+    --   union         one child has one
+    --   intersection, difference: every child has one (subtract included)
+    -- Keys are 'type#relation#node' (names have no '#').
+    entry := '{}';
+    loop
+        select jsonb_object_agg(n.type || '#' || n.relation || '#' || n.node, true) into added
+        from permissions.fga_rewrite_nodes n
+        where n.model_id = m
+          and not entry ? (n.type || '#' || n.relation || '#' || n.node)
+          and case n.op
+              when 'this' then exists (
+                  select 1 from permissions.fga_type_restrictions tr
+                  where tr.model_id = m and tr.type = n.type and tr.relation = n.relation
+                    and (tr.user_relation = '' or tr.wildcard
+                         or entry ? (tr.user_type || '#' || tr.user_relation || '#1')))
+              when 'computed' then entry ? (n.type || '#' || n.computed || '#1')
+              when 'ttu' then exists (
+                  select 1 from permissions.fga_type_restrictions tr
+                  where tr.model_id = m and tr.type = n.type and tr.relation = n.tupleset
+                    and entry ? (tr.user_type || '#' || n.computed || '#1'))
+              when 'union' then exists (
+                  select 1 from permissions.fga_rewrite_nodes c
+                  where c.model_id = m and c.type = n.type and c.relation = n.relation and c.parent = n.node
+                    and entry ? (c.type || '#' || c.relation || '#' || c.node))
+              else not exists (
+                  select 1 from permissions.fga_rewrite_nodes c
+                  where c.model_id = m and c.type = n.type and c.relation = n.relation and c.parent = n.node
+                    and not entry ? (c.type || '#' || c.relation || '#' || c.node))
+              end;
+        exit when added is null;
+        entry := entry || added;
+    end loop;
+    select r.type, r.relation into bad_type, bad
+    from permissions.fga_relations r
+    where r.model_id = m and not entry ? (r.type || '#' || r.relation || '#1')
+    order by r.type, r.relation limit 1;
+    if bad is not null then
+        perform permissions._fga_error(2056, format(
+            'the definition of relation ''%s'' in object type ''%s'' is invalid: no entrypoints defined (no path from %s#%s to a concrete user type)',
+            bad, bad_type, bad_type, bad),
+            hint => format('Give %s#%s a way in: a direct type restriction such as [user] or [user:*] on it, or on a relation it is computed from. Relations that only refer to each other (define a: b, define b: a) are never satisfied, and every operand of ''and'' and ''but not'' needs a way in too.',
+                           bad_type, bad));
+    end if;
+
+    -- Cycles (OpenFGA's HasCycle): computed relations on one type must not
+    -- refer to each other in a cycle, through any operator, subtracts included,
+    -- even when each has an entrypoint. Recursion through usersets and
+    -- tuple-to-userset is allowed.
+    with recursive e(type, src, dst) as (
+        select distinct n.type, n.relation, n.computed
+        from permissions.fga_rewrite_nodes n
+        where n.model_id = m and n.op = 'computed'
+    ),
+    cl(type, src, dst) as (
+        select e.type, e.src, e.dst from e
+      union
+        select cl.type, cl.src, e.dst from cl join e on e.type = cl.type and e.src = cl.dst
+    )
+    select c.type, c.src,
+           (select string_agg(c.type || '#' || x.dst, ', ' order by x.dst)
+            from cl x where x.type = c.type and x.src = c.src
+              and exists (select 1 from cl y where y.type = c.type and y.src = x.dst and y.dst = c.src))
+    into bad_type, bad, h
+    from cl c
+    where c.src = c.dst
+    order by c.type, c.src limit 1;
+    if bad is not null then
+        perform permissions._fga_error(2056, format(
+            'the definition of relation ''%s'' in object type ''%s'' is invalid: an authorization model cannot contain a cycle (computed relations on the cycle: %s)',
+            bad, bad_type, h),
+            hint => format('Computed relations on one type must not refer to each other in a cycle (%s), even when each also has a direct type restriction. Remove one of the references. Recursion is allowed through a userset ([%s#%s]) or a tuple-to-userset (%s from parent).',
+                           h, bad_type, bad, bad));
     end if;
 
     -- compile
