@@ -593,3 +593,151 @@ Copple asked for usage docs: how they'd actually use the extension under each en
   There were also security-relevant RLS footguns: A's recommended two-arm policy ignores document-level forbids; B's null parent column hides rows; B's conditioned forbids aren't enforced until RLS is regenerated. All of these are now in DECISION.md as "first hardening work".
 - One broken anchor (`#rls-tooling` vs Starlight's `#rls-tooling-admin` slug) was caught by the link validator. The site now has 22 pages and 1,911 internal links, all resolving.
 - **Blog angle: "Write the docs to find the bugs."** Explaining the API to a newcomer, with every example executed, surfaced inconsistencies that 500+ assertions per engine hadn't.
+
+---
+
+## Session 4: 2026-10-29, dropping the generic API: per-model tables, OpenFGA as the oracle
+
+The session started with a direction change rather than a task. Copple questioned the thing the first three sessions had taken as given: that there should be one generic API over several models. The A/B/C engines had been compared as candidates for that single API. This session replaced the question.
+
+### 1. The proposal, and where Claude agreed and pushed back
+
+- Copple's proposal: put a separate set of tables per model inside the `permissions` schema, each following an existing spec, usable at the same time, each optimized on its own, and easier to keep in step with upstream spec changes than a generic layer would be.
+- Claude agreed, with caveats:
+  - **CEL is an expression language, not a model.** In OpenFGA it shows up as conditions on tuples, so it doesn't get its own table set.
+  - **Full Cedar is expensive in Postgres.** `when`/`unless` over arbitrary attributes doesn't compile to index lookups (already noted in C's design doc), so Cedar would be a documented subset, later.
+  - **A small shared toolkit remains:** subject identity, the plan-time-evaluation guard, `collate "C"` on ids, and the install and pg_tle plumbing.
+  - **The surface grows.** More tables and more functions to document and test.
+- **Postgres RLS is the composition layer.** Permissive policies OR together and restrictive policies AND. That also gives the graduation path: an app starts on RBAC and adds an FGA policy next to it instead of migrating off.
+- The reasons recorded in DECISION.md were evidence from earlier sessions: the usage-doc findings (session 3) came from forcing different semantics through one API (the `rbac` preset wasn't quite identical across engines, and forbid meant something different in each); the `rbac` preset was flat across engines (under 1 ms, within about 0.1 ms); and the engines only differed on sharing shapes, where the optimizations were model-specific anyway.
+
+### 2. Choosing OpenFGA, and the ABAC question
+
+- **OpenFGA, not SpiceDB or a generic "Zanzibar-style" model.** The two have different schema languages, so "follow a spec" means choosing one. OpenFGA was chosen specifically so that its public test suite could be the oracle, and because it has CEL conditions on tuples. Cedar was deferred, with design B as its starting point.
+- Copple asked whether ABAC needs its own model. It doesn't: **ABAC is a category, not a spec** (XACML is the only formal standard, and nobody builds new systems on it). Row attributes are covered by RLS predicates, attributes on a relationship (expiry, IP range, amount) by OpenFGA conditions, and policy-language ABAC by Cedar later.
+- **A gap was written down rather than hidden:** row attributes that exist only in RLS are invisible to the check functions (design A's doc had already seen `check_for` return true for a draft that RLS hides). The usage docs will have to say either "check functions are advisory and RLS is final" or "pass row attributes into the check".
+- Recorded in commit `86ea456` (DECISION.md "Session 4 direction", PLAN.md "Current plan (session 4)"). The empty `pg_permissions--0.0.1.sql` stays empty until the spike is validated, and the A/B/C prototypes stay in the repo as measured history.
+
+### 3. Research before building: what OpenFGA's test suite looks like
+
+- `assets/tests/consolidated_1_1_tests.yaml` upstream: **138 cases**, each with a model in OpenFGA's DSL, tuples, and assertions for Check, ListObjects and ListUsers. The harness runs each case twice, the second time with every tuple sent as a contextual tuple.
+- A rough first count was 78 core cases and 59 needing `and` or `but not`, so the plan was two stages. Conditions (CEL) live in a separate file of 33 cases, left for later.
+- **Postgres never parses the DSL.** Each model is converted to JSON once, with `openfga/cli` v0.8.2 pinned by image digest, and the JSON is vendored with the YAML, the licence (Apache-2.0) and a SOURCE file. `vendor.sh` clones into an empty temp directory and executes nothing from the clone; `generate.py` (run with `python3 -I`) turns the cases into ordinary TAP spec files, so the existing runner and Docker matrix pick them up unchanged (commit `5e25454`).
+
+### 4. Prototype D
+
+Built in four commits (`5e25454`, `e75598f`, `a620868`, `10d0849`).
+
+- **`rbac_*`:** first-class tables (roles, permissions, an `inherits` closure, scoped assignments) behind the same `rbac` API the earlier designs had, so the shared specs run unchanged.
+- **`fga_*`:** OpenFGA's API (Check, ListObjects, ListUsers, Read, Write, WriteAuthorizationModel), schema 1.1 JSON models validated and compiled on write, and **OpenFGA's numeric error codes** in the `DETAIL` of the Postgres exception, so the machine-checkable part matches upstream. Monotone relations are answered by set-based walks (design A's bidirectional search generalized); relations with `and` or `but not` go through a recursive evaluator written after OpenFGA's `LocalChecker`.
+- **Stage 1 first:** `e75598f` passed every stage-1 case (stored 79 cases / 498 assertions, contextual 67 / 369) and skipped 59 stage-2 cases.
+- **Stage 2 needed no new engine code.** The recursive evaluator already followed `LocalChecker` for intersection and difference, so `10d0849` only deleted the skip list. Final result:
+
+  | Run | Cases | Assertions | Passed |
+  | --- | --- | --- | --- |
+  | stored | 138 | 933 | 933 |
+  | contextual | 116 | 746 | 746 |
+
+  The other 22 cases are multi-stage, which upstream doesn't run with contextual tuples either. The plan said 23 multi-stage, because one case name appears twice upstream (`immediate_cycle_through_computed_userset`; the second is reported as `~2`).
+- **Mutants, to prove the oracle can fail** (the habit from session 1): ignoring wildcards fails 13 assertions, no depth limit fails 2, ignoring the subtract of a difference fails 159, ignoring the cycle flag under a subtract fails 4, treating a cycle as true in an intersection fails 8. All caught.
+- **One mutant survived the upstream suite** and was caught by D's own `d/31_fga_cycles`: using the fast set-based search for a monotone relation inside a subtract also loses the cycle flag, and upstream has no case with a cycle inside a monotone subtract. That is the first hint of what section 6 turned into.
+- **Composition spec:** `d/40_rbac_fga_rls` puts RBAC and FGA policies on one table (permissive OR, a restrictive FGA ban AND, per-row checks for updates) and asserts the exact rows five users see.
+- **A plan-time finding that came for free:** the FGA list functions return `setof text`. A set-returning function is never evaluated at plan time (its row estimate comes from `rows`), so the session 3 trap needs no dummy argument there. `d/41_no_plan_time_eval` pins it with the call-count probe from session 3. `scopes_with_permission` keeps its `text[]` form and dummy argument because the shared specs pin both.
+- **Test status:** all 35 spec files (1,931 assertions each) pass locally and on PG 16, 17 and 18 with pg_tle 1.5.3 in the Docker matrix.
+
+### 5. Benchmarking D (PG18 Docker, same workloads, tagged `opt`)
+
+D got the same seeds, shapes and workloads as A, B and C, with one deliberate difference: **org roles stay in `rbac_*` and compose with the FGA policies through RLS**, instead of living inside the FGA graph. The sharing model is written once in OpenFGA terms (`team#member`, `folder#viewer`, `document#parent`, `document#viewer: [user, team#member] or editor or viewer from parent`). D is unoptimized; nothing was changed after measuring.
+
+- **Checksums matched in every configuration, A = B = C = D**, per read policy (large default, medium deep, medium wide, plus small shapes on local PG16 before any timing).
+- **p50 for the headline workloads (ms, large default unless noted):**
+
+  | Workload | A | B | C | D |
+  | --- | --- | --- | --- | --- |
+  | `rbac_check` | 0.30 | 0.27 | 0.24 | 0.22 |
+  | `rbac_update_one` | 0.47 | 0.47 | 0.36 | 0.28 |
+  | `share_list_objects` | 0.29 | 0.29 | 0.25 | 0.54 |
+  | `share_select_page` | 1.03 | 1.00 | 0.93 | 1.29 |
+  | `write_nest_team` | 0.15 | 0.62 | 57.66 | 0.24 |
+  | `nest_check` | 0.31 | 0.32 | 0.30 | 0.41 |
+  | wide `share_list_objects` | 4.44 | 8.41 | 3.41 | 17.77 |
+  | wide `share_select_page` | 14.44 | 17.82 | 8.20 | 26.20 |
+  | wide `parents_proj_select_page` | 14.98 | 15.05 | 8.73 | 38.63 |
+
+- **RBAC on its own tables is the fastest of the four:** `rbac_check` 0.21-0.22 ms against 0.24-0.30, `rbac_update_one` 0.27-0.28 ms, 20-30% under C.
+- **Nesting a team is just a tuple write:** 0.23 ms, no locks, no derived rows (C: 58-75 ms).
+- **Storage at large is 285 MB:** between C (182) and B/A (378/404). Seeds through the native Write API are in A's range (large parents 33.8 s; A 31.0, B 44.8, C 17.6).
+- **FGA sharing reads are 1.3-2x A at large and 2-4x at wide.** Four budget misses at wide, one at medium deep (`share_list_objects`, p95 1.02 ms against 1 ms), and the large `parents_proj_select_count` miss that all four engines share (the heap-fetch floor from session 3).
+- **The single-branch parents rows are not comparable.** D's 1.4 ms against A's 45.6 ms is because D never walks the org-role documents that A, B and C walk. With org roles mirrored into FGA (A's scenario literally), D's ListObjects takes 52 ms per call against A's 45.6 ms page. The honest statement is that D keeps org roles out of the graph by design, and the benefit is real for this app but isn't an engine-to-engine win.
+- **Three hotspots, each with a throwaway variant measured on the benchmark's own database:**
+  - **The walk ignores the target type.** A folder ListObjects for a wide user who views no folder took 13.7 ms and returned nothing, because the forward walk expands every team and document. Pruning the frontier to nodes that can reach the target: **13.7 -> 0.25 ms**. The two-arm parents policy pays this on every query.
+  - **ListObjects is a PL/pgSQL loop over growing arrays.** Per reached node it costs 4x A's recursive CTE (17 ms against A's 3.9 ms on the same data and server). One recursive CTE over a pre-joined edge list: **17 -> 8.5 ms**.
+  - **ListObjects on a `but not` relation checks every candidate top-down.** 2.08 s per call for a user with 6,700 candidates (20,106 calls to the recursive evaluator, about 310 microseconds per candidate), against 17 ms for the monotone relation, 120x. A set-based difference (list the base, subtract what the user reaches through the blocked relation) is expected to give about 35 ms. This isn't in the benchmark model, so it was measured separately.
+- **Not a hotspot, despite being flagged in the design doc:** the empty contextual-tuple branches in the four-way `union all`. They run in microseconds, and a variant without them was within noise. They only add about 1 ms of planning to the first call of a session. **A risk written down before measuring turned out not to matter; another (ListObjects loop cost) turned out to be the main wide cost.**
+- **Check has a fixed overhead:** about 200 microseconds per call, of which model resolution and validation is about 10% and the rest is statement count.
+- The docs site gained engine D (its own colour, its design doc and D.md synced).
+
+### 6. Running the reference implementation, and the answer it gave
+
+This is the part of the session worth the most space. D passed all 138 of OpenFGA's cases, so the oracle had said everything it was going to say. The mutant checks showed which behaviours the suite pins and which it doesn't. One gap was a cycle inside a subtract, so we asked what OpenFGA itself does there.
+
+- **The first attempt to run the `openfga/openfga` Docker image was blocked by the permission classifier.** Copple then authorized it explicitly, and it ran.
+- **Model:** `blocked: [user, document#blocked]` and `viewer: [user] but not blocked`, with a blocked cycle between `document:1` and `document:2`. Intuition from OpenFGA's own cycle cases (`true_butnot_cycle_return_false`) says the difference should be false.
+- **OpenFGA v1.22.1** (exactly the commit the suite is vendored from, memory datastore) says **Check `viewer` on `document:1` is true**, and ListObjects includes `document:1`, while **its own ListUsers returns no viewers.** OpenFGA disagrees with itself between Check and ListUsers.
+- **The cause is the planner.** OpenFGA has a Thompson-sampling planner that chooses between resolvers. For a recursive userset like this it picks the recursive resolver, which never reports a cycle. Its cold-start priors (150 ms for recursive, 500 ms for the default resolver) make it pick recursive essentially every time until recursive runs slower than the default's prior. No flag selects the resolver. The results were deterministic across about 800 runs (the committed docs and spec comment say "600+"), over fresh containers, with default settings and with `enable-check-optimizations`.
+- **A control confirmed the explanation.** In a model where the recursive resolver doesn't apply (`blocked` also accepts `team#member`, so a second path for `user` exists), OpenFGA answers false, which is what D computes.
+- **D's engine is unchanged.** It follows the default resolver (false). The difference is documented in the design doc (deviation 12 and the "Cycles" section) and `d/31_fga_cycles` still pins D's answer, not OpenFGA's. Commit `f2a05ef` changed only those two files: it replaced "upstream leaves this to its planner" with the measured behaviour.
+- **Matching OpenFGA would be possible but ugly:** detect the same condition as its `UsersetUseRecursiveResolver` and evaluate that subproblem by set-based least fixpoint, with ListObjects following and ListUsers changed to return the viewer. **Whether D should match the planner's answer, or the answer the spec's own cycle cases imply, is an open decision for Copple.**
+
+### 7. Small mishaps (useful colour for the post)
+
+- **The benchmark runs shared the machine with an unrelated Supabase Docker stack.** It was running throughout. D.md records that it was, and also that **whether it was running during A, B and C's runs isn't recorded.** The wide p95 values are the noisy ones: a 5 s rerun of one workload gave the same p50 (16.55 against 17.77 ms) but a different p95 (22.28 against 37.11 ms). Treat D's wide p95 misses as a maybe.
+- **A count in the plan was off by one:** 23 multi-stage cases, actually 22, because upstream has a duplicate case name. Worth knowing before anyone quotes "138 cases" and does arithmetic on it.
+- **The classifier block** on running a third-party image (section 6) is the permission system working as designed; running a third-party image needed an explicit yes.
+- **A mutant survived and wasn't a spec failure:** the one that lost the cycle flag in the set-based path passed all 933 upstream assertions. The in-house spec for it exists because we noticed.
+
+### Decisions this session
+
+| Decision | Why |
+| --- | --- |
+| Drop the single generic API; one table set per model | Different semantics forced through one API produced the session 3 usage-doc inconsistencies; each model can be optimized for itself |
+| OpenFGA first, not SpiceDB or generic Zanzibar | A spec means one schema language; OpenFGA has a public test suite and CEL conditions |
+| RLS as the composition layer | Permissive OR and restrictive AND already do what is needed; also the graduation path |
+| No ABAC model | A category, not a spec; covered by RLS, OpenFGA conditions and Cedar later |
+| Cedar deferred, B as its starting point | Full `when`/`unless` over arbitrary attributes doesn't compile to index lookups |
+| Convert DSL to JSON once, pinned CLI image | Postgres never parses the DSL; the vendored tests run offline |
+| FGA list functions return `setof text` | Never evaluated at plan time, so no dummy argument |
+| D keeps the default resolver on cycle-in-subtract | Matches OpenFGA's own cycle cases and ListUsers; documented difference |
+
+### Still open (end of session 4)
+
+- **Match OpenFGA's planner on the recursive-userset cycle case, or keep D's answer?** (Section 6.)
+- **Which of the six proposed fixes to apply.** By expected gain: set-based `but not`/`and` for ListObjects (2.1 s -> about 35 ms), recursive-CTE walk (wide 17 -> 8.5 ms), target-relevance pruning (13.7 -> 0.25 ms), a covering `fga_tuples` index (-33% on large fan-outs, +120 MB), a cheaper Check (0.41 -> about 0.32 ms), and a typed write path (0.23 -> about 0.15 ms).
+- **Stage 2 of the plan: OpenFGA conditions (CEL).** The largest single cost, because pg_tle means a parser and compiler in SQL or PL/pgSQL. The 33-case conditions file is the oracle.
+- **A benchmark workload with a block list**, so the `but not` hotspot is visible in the numbers and not only in a side measurement.
+- **The RLS-only attribute gap** and what the check functions promise (advisory, or take attributes).
+- **Re-run the wide benchmarks with nothing else on the machine,** and record what was running during A, B and C.
+- Open design choices in the design doc (section 11): `setof text` returns, the error encoding, model versioning, deny-on-missing-subject, whether `delete_subject` should span both models, and keeping two evaluators in agreement.
+
+### Possible angles for the blog post (session 4 additions)
+
+- **"The spec's own test suite caught nothing, because we passed all of it. The real divergence came from running the reference implementation."** 138 of 138 cases, 933 of 933 assertions, and OpenFGA still answers a cycle-in-subtract question differently from D. A passing oracle only tells you about the cases the oracle has.
+- **"An adaptive planner makes the reference implementation's answer to an edge case depend on its cost priors."** A Thompson-sampling resolver choice means the answer to Check is decided by a prior of 150 ms against 500 ms, and OpenFGA's Check and ListUsers disagree with each other. "Follow the reference implementation" has no single answer here.
+- **"Drop the generic API."** Three sessions of building one API over several engines, then evidence from the third session's docs work turned the direction around. The comparison of A, B and C didn't pick a winner; it picked a different question.
+- **Following a spec so you can borrow its tests.** The reason for choosing OpenFGA over SpiceDB wasn't features; it was that its tests are public and run offline.
+- **"The test suite is a measuring tool for what you haven't tested."** Mutants showed exactly which behaviours the 138 cases pin (and the one they don't).
+- **A risk list written before benchmarking, and how it scored.** One flagged risk was noise, one was the main cost, and one important hotspot (`but not` in ListObjects, 120x) wasn't in the benchmark model at all.
+- **Fast on its own tables.** RBAC as first-class tables was the fastest of four engines on `rbac_check` and updates, with no shared core to pay for.
+- **"Honest comparisons need the same work."** D's 1.4 ms single-branch parents result looked like a win until it turned out D was doing less work by design; the mirrored version was 52 ms.
+- **Not every blocker is a bug.** A permission classifier stopped a third-party image from running until a human said yes.
+
+### Numbers worth quoting (session 4)
+
+- 138 upstream cases (22 multi-stage); 933 of 933 stored assertions, 746 of 746 contextual (116 cases); 35 spec files and 1,931 assertions on each of PG 16, 17 and 18 with pg_tle 1.5.3.
+- 5 mutants against the upstream suite, 13, 2, 159, 4 and 8 failing assertions respectively; one more survived until the in-house cycle spec.
+- Checksums identical across A, B, C and D in all three Docker configurations.
+- `rbac_check` 0.22 ms (A 0.30, B 0.27, C 0.24); `rbac_update_one` 0.28 ms; nesting a team 0.24 ms against C's 57.66 ms; large storage 285 MB.
+- FGA wide sharing: 17.77 ms `share_list_objects` against A's 4.44 and C's 3.41.
+- Hotspots: 13.7 -> 0.25 ms (target pruning), 17 -> 8.5 ms (one recursive CTE), 2.08 s -> about 35 ms expected (set-based `but not`; 20,106 recursive-evaluator calls per ListObjects).
+- Single-branch parents: 1.4 ms (D, not comparable) against 52 ms with org roles mirrored into FGA and A's 45.6 ms.
+- OpenFGA v1.22.1: Check true, ListObjects includes the object, ListUsers empty, about 800 runs (600+ in the committed docs); planner priors 150 ms recursive against 500 ms default.
