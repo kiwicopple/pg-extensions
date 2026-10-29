@@ -862,3 +862,24 @@ Orchestrator choices: fixed constant caps (OpenFGA makes them configurable; here
 - **Old findings closed:** 22 bullets, 13 not applicable to D, 6 fixed (each cites a spec), 3 carried: the nullable-column restrictive policy, changing a role's permissions without `drop_role`, and RLS-only row attributes.
 - **Wrong turn:** the first manual server probe used a one-character store name (it needs 3 to 64), and the resulting validation error hid every model answer.
 - **Numbers:** 43 spec files, 2,463 assertions on PG 16, 17 and 18.
+
+### 5. Phase 4a: the ABAC oracle and the conditions design (commit 02571e8)
+
+- **The oracle:** 33 cases and 331 assertions from `abac_tests.yaml` at the same pin (which is exactly tag v1.22.1). 9 use inline `$expression` conditions, which sit behind an experimental server flag, and are skipped. The generated specs stay out of the default run until the evaluator exists; with `--suite` they are all red (0A000).
+- **The cases reach a small part of CEL:** six parameter types, `<`, `>`, `==`, `||`, `timestamp("…")` and `ip.in_cidr`. The rest of the standard library appears only in the docs. OpenFGA's docs list `bytes` as a parameter type, and the server rejects it.
+- **32 probes against a live v1.22.1 server pinned what the cases don't:**
+  - Tuple context beats request context on a shared key.
+  - `||` absorbs an error from either side.
+  - Check raises 2000 for an erroring edge that is not even on the user's path.
+  - ListObjects and ListUsers raise on any edge they walk.
+  - A stale stored context is ignored by Check but makes ListObjects fail; the APIs disagree.
+- **Measured before choosing (micro-benchmark, tag `cond-eval-micro`):**
+  - A jsonb AST walked by a PL/pgSQL interpreter costs 2–3 µs per evaluation.
+  - An AST in rows or arrays is slower (3.5–4.5 µs), because PL/pgSQL copies arrays on every recursive call.
+  - Compiling to a SQL expression and running it with `EXECUTE` costs 3.4 µs, so no gain.
+  - A generated function per condition is 10–25x faster (0.1–0.6 µs), but rejected: runtime DDL turns a quoting bug into SQL injection as the extension owner, breaks `pg_dump` and `DROP EXTENSION`, and fires every event trigger (PostgREST schema reloads on Supabase) on each model write. It is kept as a possible phase-5 fallback.
+- **Mishaps:**
+  - macOS bash 3.2 dropped the braces inside `"$(f "{...}")"`, so the first probe run silently sent broken JSON.
+  - Condition names need at least 2 characters on a tuple but only 1 in a model, so a probe condition named `c` failed every write.
+  - Ruby read the value 1.8e309 as Infinity, which JSON can't carry, so a Psych-AST converter keeps numbers as written.
+- **Open questions went to the user before any parser code was written.**
