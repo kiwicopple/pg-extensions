@@ -819,3 +819,35 @@ The user made these calls after the opt2 benchmarks and the upstream report. The
 - **The pg_tle managed-host test is dropped** ("don't worry about the PG TLE"). The Docker install spec stays green; nothing more.
 - **The user reached out to the OpenFGA team with the report** (`upstream/openfga-cycle-but-not-inconsistency.md`). No answer yet; if upstream decides the other way, D changes again.
 - **Next:** the plan has six phases in order: promote D to the extension, the API decisions, hardening and usage docs (with openfga/language's semantic validation cases as a second oracle), conditions with a CEL parser and evaluator in PL/pgSQL (OpenFGA's 33 ABAC cases as the oracle), a second performance pass, and the loose ends (small and medium benchmarks, the large `parents_proj_select_count` budget).
+
+## Session 5: 2026-10-29, D becomes the extension; caps, pagination and errors
+
+Run as an orchestrator: the main conversation planned and reviewed, and subagents did the work (a cheaper model for phase 1 and the research, a stronger one for phase 2).
+
+### 1. Phase 1: promote D (commit 246fe1f)
+
+`prototypes/d-per-model.sql` moved (with `git mv`) to `pg_permissions--0.0.1.sql`, and the test, bench and Docker scripts now default to it, with A, B and C still selectable. The counts were the same before and after: 37 spec files and 2,164 assertions, locally and on PG 16, 17 and 18, with `03_tle_install` 9/9 (the pg_tle branch really ran, not skipped). A bench smoke on the small scale gave the same checksums as A, B and C. One small trap: the docs site charts every JSON in `bench/baselines/data/`, so the smoke result had to be deleted, or it would have appeared as a baseline.
+
+### 2. Research before code: what OpenFGA does at its limits
+
+A research agent read OpenFGA v1.22.1's source, not just the docs, before any spec was written. Findings that shaped the specs:
+- ListObjects and ListUsers truncate at 1,000 **silently**, keeping whichever results were found first (nondeterministic, from concurrent resolution). The 3 s deadline also returns partial results with no signal; there is a `TODO set header to indicate "deadline exceeded"` in the source. So the specs assert the count and that every result is in the true set, never which members survive.
+- Write: 100 tuples, counted over de-duplicated writes plus deletes; duplicates are checked first (2004), then the limit (2053 `exceeded_entity_limit`).
+- Read: page size 50 by default, 1..100 when given (2000 otherwise); the token is base64url of `"<ulid>|"`. A token that fails the shape check is 2000, one that passes it but won't decode is 2007, and an unknown ulid is no error at all (it seeks past it).
+
+### 3. Phase 2: caps, Read pagination, errors with HINTs (commit 8e0f614)
+
+Orchestrator choices: fixed constant caps (OpenFGA makes them configurable; here they are not, per the "blessed path" direction), no list deadline (callers use `statement_timeout`, which errors rather than returning partial results: a documented deviation), and an opaque token in OpenFGA's shape.
+
+- **Red, then green:** d/30 36/42 → 42/42, new d/34 (limits) 8/49 → 49/49, new d/35 (every raise site) 2/63 → 63/63. Suite: 39 files, 2,276 assertions on PG 16, 17 and 18; OpenFGA consolidated suite still 933/933 and 746/746.
+- **Every raise site has a spec row:** 59 sites (7 in `rbac_*`, 49 `_fga_error`, 3 `_fga_unsupported`), plus a guard that scans `pg_proc.prosrc` for a raise without a hint. Mutants (each hint removed on a copy of the file) failed 2 assertions each.
+- **The spec found a real bug on its first run:** a malformed user or object in a delete key gave 2017 instead of 2000, because `_fga_split_object()` returns one row of nulls rather than no rows, so a "no rows" check never fired.
+- **The cap bit our own benchmark:** the bench seeds wrote 50,000 tuples per `fga_write`, which now raises 2053. They write in batches of 100, so seed times from before phase 2 are not comparable.
+- **Paging needed a new column:** D had no ulid or id to page on, so `fga_tuples` gained a `seq` identity column (8 bytes plus an index entry per tuple; the storage and write baselines will move a little, not yet re-measured).
+- **`fga_read` broke its API on purpose:** it now returns one row shaped like OpenFGA's ReadResponse (`tuples jsonb, continuation_token text`).
+- **Hint text has constraints:** no `auth.` (the identity spec greps function bodies for it) and no `;` (the guard splits statements on it).
+- **Caps are output-only:** the walk still computes the full set before the cap applies, which phase 5 could revisit.
+
+### Numbers worth quoting (session 5)
+- Phase 1: 37/2,164 before and after the move, on three PG versions.
+- Phase 2: 59 raise sites, 63 error assertions, 49 limit assertions; suite 39 files, 2,276 assertions; OpenFGA 933/746 unchanged.
