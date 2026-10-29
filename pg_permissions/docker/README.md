@@ -42,7 +42,7 @@ docker/run-matrix.sh bench --versions 17 --designs a,b -- --scale medium --shape
 docker/run-matrix.sh bench --designs c -- --scale small --duration 2 --tag smoke
 ```
 
-`--versions` and `--designs` (`a`, `b`, `c`, or `ext` for the extension file) filter and order the loop; everything after `--` goes to `test/run.sh` or `bench/run.sh`. Output is also saved to `bench/results/matrix-<test|bench>-<timestamp>.log`, and a summary (exit status, time, result line or saved files) is printed at the end.
+`--versions` and `--designs` (`a`, `b`, `c`, `d`, or `ext` for the extension file; `d` isn't in the default list) filter and order the loop; everything after `--` goes to `test/run.sh` or `bench/run.sh`. Output is also saved to `bench/results/matrix-<test|bench>-<timestamp>.log`, and a summary (exit status, time, result line or saved files) is printed at the end.
 
 Each run happens in a throwaway client container (`docker compose run`) from the same image as the server, so `psql` and `pgbench` match the server version. It connects over the server's Unix socket, like the local throwaway cluster, and has its own 4-CPU limit, so pgbench doesn't take CPU from the server. By hand, the same thing is:
 

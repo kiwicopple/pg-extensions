@@ -16,7 +16,7 @@
 #   --clients N                  pgbench clients (default 4)
 #   --only NAME[,NAME...]        run only workloads whose name contains one of these;
 #                                phases after the last selected workload aren't seeded
-#   --design a|b|c|none          default: the letter before the first dash of the
+#   --design a|b|c|d|none        default: the letter before the first dash of the
 #                                --impl file name (a-tuple-core.sql -> a), else none
 #   --external                   use the server from PGHOST/PGPORT/PGUSER
 #   --tag NAME                   appended to the JSON run_id (e.g. smoke)
@@ -106,13 +106,13 @@ IMPL_NAME=$(basename "$IMPL" .sql)
 
 if [ -z "$DESIGN" ]; then
     case "$IMPL_NAME" in
-        [abc]-*) DESIGN=${IMPL_NAME%%-*} ;;
+        [abcd]-*) DESIGN=${IMPL_NAME%%-*} ;;
         *) DESIGN=none ;;
     esac
 fi
 case "$DESIGN" in
-    a|b|c|none) ;;
-    *) echo "unknown design: $DESIGN (expected a, b, c or none)" >&2; exit 2 ;;
+    a|b|c|d|none) ;;
+    *) echo "unknown design: $DESIGN (expected a, b, c, d or none)" >&2; exit 2 ;;
 esac
 DESIGN_DIR="$HERE/designs/$DESIGN"
 
@@ -437,7 +437,7 @@ EQUIV_FILE="$HERE/results/equivalence-$SCALE-$SHAPE-$DESIGN.tsv"
 [ -n "$ONLY" ] || cp "$WORK/equiv.tsv" "$EQUIV_FILE"
 [ -z "$ONLY" ] || EQUIV_FILE="$WORK/equiv.tsv"
 EQUIV_SUMMARY=""
-for other in a b c none; do
+for other in a b c d none; do
     [ "$other" = "$DESIGN" ] && continue
     f="$HERE/results/equivalence-$SCALE-$SHAPE-$other.tsv"
     [ -s "$f" ] || continue

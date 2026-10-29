@@ -11,9 +11,9 @@
 # Options:
 #   --versions 16,17,18   which servers, in this order (default all three)
 #   --designs a,b,c       which prototypes, in this order (default a, b and c);
-#                         `d` is prototypes/d-per-model.sql (tests only so far:
-#                         it has no benchmark seeds yet), `ext` the extension
-#                         file pg_permissions--0.0.1.sql
+#                         `d` is prototypes/d-per-model.sql (not in the
+#                         default list), `ext` the extension file
+#                         pg_permissions--0.0.1.sql
 #   --keep-running        leave the last server running (default: compose down)
 #   -- ARGS               passed to test/run.sh or bench/run.sh
 #                         (--external and --impl are added here)
