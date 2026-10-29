@@ -1,0 +1,35 @@
+{
+  "run_id": "pg18-docker-d-medium-wide-opt2",
+  "tag": "opt2",
+  "date": "2026-10-29T10:44:01Z",
+  "environment": "docker",
+  "host": "Apple M4, 10 CPU, 24 GB; container cpus=4 mem=6g",
+  "pg_version": "18.6",
+  "design": "d",
+  "scale": "medium", "shape": "wide", "clients": 4, "duration_s": 10,
+  "workloads": [
+    {"name": "rbac_check", "p50_ms": 0.23, "p95_ms": 0.33, "tps": 17309, "budget_ms": 1},
+    {"name": "rbac_select_page", "p50_ms": 0.4, "p95_ms": 0.56, "tps": 10146, "budget_ms": 2},
+    {"name": "rbac_select_count", "p50_ms": 0.32, "p95_ms": 0.45, "tps": 12657, "budget_ms": 2},
+    {"name": "rbac_update_one", "p50_ms": 0.28, "p95_ms": 0.38, "tps": 14875, "budget_ms": 3},
+    {"name": "write_assign_role", "p50_ms": 0.15, "p95_ms": 0.22, "tps": 26856, "budget_ms": 1},
+    {"name": "share_list_objects", "p50_ms": 5.12, "p95_ms": 7.32, "tps": 738, "budget_ms": 13},
+    {"name": "share_select_page", "p50_ms": 11.54, "p95_ms": 18.57, "tps": 323, "budget_ms": 42},
+    {"name": "write_share", "p50_ms": 0.23, "p95_ms": 0.35, "tps": 17087, "budget_ms": 1},
+    {"name": "parents_proj_select_page", "p50_ms": 10.87, "p95_ms": 16.71, "tps": 348, "budget_ms": 51},
+    {"name": "parents_proj_select_count", "p50_ms": 9.04, "p95_ms": 11.99, "tps": 422, "budget_ms": 31},
+    {"name": "parents_select_page", "p50_ms": 10.95, "p95_ms": 16.04, "tps": 346, "budget_ms": 46},
+    {"name": "parents_select_count", "p50_ms": 8.85, "p95_ms": 11.34, "tps": 435, "budget_ms": 40},
+    {"name": "write_nest_team", "p50_ms": 0.23, "p95_ms": 0.36, "tps": 16685, "budget_ms": 1},
+    {"name": "nest_check", "p50_ms": 0.44, "p95_ms": 0.69, "tps": 8905, "budget_ms": 2}
+  ],
+  "seeds": [
+    {"phase": "rbac", "seconds": 0.46, "size_mb": 3},
+    {"phase": "sharing", "seconds": 11.26, "size_mb": 81.6},
+    {"phase": "parents_proj", "seconds": 0.04, "size_mb": 81.9},
+    {"phase": "parents", "seconds": 2.84, "size_mb": 108.8},
+    {"phase": "nesting", "seconds": 0.02, "size_mb": 108.8}
+  ],
+  "checksums": {"rbac": "d394663f", "sharing": "6f7c008d", "parents_proj": "f2867b7f", "parents": "f2867b7f"},
+  "report": "bench/baselines/pg18-docker-d-medium-wide-opt2.md"
+}

@@ -1,6 +1,6 @@
 # Design D benchmarked
 
-Design D ([`../../designs/d-per-model.md`](../../designs/d-per-model.md), [`../../prototypes/d-per-model.sql`](../../prototypes/d-per-model.sql)) measured on 2026-10-29 with exactly the workloads, scales and shapes of A, B and C, and compared with their session 3 optimized runs in [`OPTIMIZATIONS.md`](./OPTIMIZATIONS.md). Same setup: Docker, Postgres 18.6 with pg_tle 1.5.3, `cpus: 4`, `mem_limit: 6g`, 4 pgbench clients, 10 s per workload, one run per configuration, strictly serial (`docker/run-matrix.sh bench --versions 18 --designs d -- --scale <s> --shape <sh> --tag opt --check`). The D files use the same `opt` tag so they sit next to A, B and C's in the docs site's primary series: `pg18-docker-d-{large-default,medium-deep,medium-wide}-opt.{md,json}`. D itself is unoptimized: this is a measurement, nothing in the prototype was changed.
+Design D ([`../../designs/d-per-model.md`](../../designs/d-per-model.md), [`../../prototypes/d-per-model.sql`](../../prototypes/d-per-model.sql)) measured on 2026-10-29 with exactly the workloads, scales and shapes of A, B and C, and compared with their session 3 optimized runs in [`OPTIMIZATIONS.md`](./OPTIMIZATIONS.md). Same setup: Docker, Postgres 18.6 with pg_tle 1.5.3, `cpus: 4`, `mem_limit: 6g`, 4 pgbench clients, 10 s per workload, one run per configuration, strictly serial (`docker/run-matrix.sh bench --versions 18 --designs d -- --scale <s> --shape <sh> --tag opt --check`). The D files use the same `opt` tag so they sit next to A, B and C's in the docs site's primary series: `pg18-docker-d-{large-default,medium-deep,medium-wide}-opt.{md,json}`. D itself is unoptimized: this is a measurement, nothing in the prototype was changed. The second pass, which acts on the diagnosis below, is in section "opt2".
 
 ## Summary
 
@@ -11,6 +11,121 @@ Design D ([`../../designs/d-per-model.md`](../../designs/d-per-model.md), [`../.
 - **The single-branch parents rows are not comparable** (D 1.4 ms against A's 45.6 ms at large): D keeps org roles in `rbac_*` and composes, so its FGA walk never visits the org-role documents that A, B and C walk to. With org roles mirrored into FGA (A's scenario literally), D's ListObjects for the same users takes 52 ms per call against A's 45.6 ms page (section "FGA-only parents").
 - **Worst hotspot: ListObjects on a relation with `but not`.** Not in the benchmark model; measured separately on the wide data: 2.1 s per call (6,700 candidates, each a full top-down Check), against 17 ms for the monotone relation.
 - **Storage:** 285 MB at large after the parents seed, between C (182 MB) and B/A (378/404 MB). Seeds through the native Write API are in A's range (large parents: 33.8 s; A 31.0, B 44.8, C 17.6).
+- **opt2 (second pass, section below):** the fixes proposed under "Diagnosis" (pruned CTE walk, set-based `but not`), measured the same way. Wide FGA reads 2.2-4x faster, now 1.2-1.5x the best of A/B/C and faster than A on every wide page; deep ListObjects 0.78 → 0.33 ms; no budget miss except the large one all engines share; `but not` ListObjects 2.1 s → 4.2 ms. Check and writes unchanged.
+
+## opt2: the second pass (2026-10-29)
+
+The fixes this report's diagnosis proposed, applied to the prototype and measured exactly as before (Docker, Postgres 18.6, `cpus: 4`, 4 clients, 10 s per workload, strictly serial: `docker/run-matrix.sh bench --versions 18 --designs d -- --scale <s> --shape <sh> --tag opt2 --check`). The files are tagged `opt2` (`pg18-docker-d-{large-default,medium-deep,medium-wide}-opt2.{md,json}`), so the `opt` files above, and the docs site's primary series, are unchanged. The design is in [`../../designs/d-per-model.md`](../../designs/d-per-model.md) §5.
+
+**What changed** (`prototypes/d-per-model.sql`):
+
+1. **Target-pruned walk steps, compiled at model write.** `fga_reach` holds reachability between (type, relation) pairs in the positive graph; `fga_walk_steps` holds, per target relation, every `d`/`t` edge joined with the computed closure of its destination, kept only if the node it yields can reach the target, with `expand` when that node has steps of its own toward it. 13 rows for the benchmark model.
+2. **ListObjects is one recursive CTE** (`_fga_forward`), A's `_reach` shape, over those steps: one `fga_tuples` probe per node and step. The recursion produces only expandable nodes; leaves come from one final join of the reached nodes (each at its lowest level) to the steps that yield the target. Levels are kept per row (a node is re-expanded once per distinct level, a cycle until level 25), which keeps the depth-25 rule exact; if an expandable node is first reached at 25, a level-free walk (`_fga_forward_ids`) finishes behind it. The list functions stream the result instead of `array_agg` then `unnest`.
+3. **Set-based `but not` for ListObjects and ListUsers** when the base is a positive expression over monotone relations and the subtract is `r` or `r from ts` with `r` monotone: base walk minus subtract walk. A recursive or long subtract rechecks only what it removes with `_fga_rec`. Intersections, union or nested subtracts and non-monotone bases keep the per-candidate path.
+4. **Semantics, decided during this pass:** a monotone relation under a subtract is evaluated by its least fixpoint (a userset cycle contributes nobody), in Check too; recursion through negation keeps OpenFGA's cycle rule. `d/31_fga_cycles` now expects true for its cycle case (design doc §5). The OpenFGA suite is unaffected (933/933 stored, 746/746 contextual on 16, 17, 18).
+5. Check trims: no statement for a plain user's start frontier or initial meet test, inline object parsing, one lookup for the monotone flag and PathExists.
+
+**Correctness:** every checksum equals A's, B's and C's in all three configurations (the same values as the table under "Checksums"). Seeds and storage are unchanged within noise (large: 285.0 MB against 284.9; parents seed 30.4 s against 33.8).
+
+### Results, opt against opt2
+
+p50 / p95 in ms. A, B and C are their `opt` runs, as above. "vs best" is opt2's p50 over the best p50 of A, B and C.
+
+#### Large, default shape
+
+| workload | D opt p50 / p95 | D opt2 p50 / p95 | opt2 vs opt (p50) | A p50 / p95 | B p50 / p95 | C p50 / p95 | opt2 vs best of A/B/C (p50) | budget p95 | opt2 status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| rbac_check | 0.22 / 0.36 | 0.21 / 0.31 | 0.95x | 0.3 / 0.56 | 0.27 / 0.41 | 0.24 / 0.33 | 0.9x | 1 | ok |
+| rbac_select_page | 0.72 / 1.81 | 0.65 / 0.84 | 0.90x | 0.76 / 1.44 | 0.73 / 1.1 | 0.67 / 0.91 | 1.0x | 3 | ok |
+| rbac_select_count | 0.77 / 1.55 | 0.71 / 0.95 | 0.92x | 0.78 / 1.07 | 0.78 / 0.99 | 0.73 / 0.93 | 1.0x | 3 | ok |
+| rbac_update_one | 0.28 / 0.44 | 0.28 / 0.5 | 1.00x | 0.47 / 0.65 | 0.47 / 0.68 | 0.36 / 0.5 | 0.8x | 3 | ok |
+| write_assign_role | 0.14 / 0.22 | 0.14 / 0.22 | 1.00x | 0.15 / 0.23 | 0.14 / 0.22 | 0.17 / 0.24 | 1.0x | 1 | ok |
+| share_list_objects | 0.54 / 0.71 | 0.36 / 0.74 | 0.67x | 0.29 / 0.38 | 0.29 / 0.43 | 0.25 / 0.36 | 1.4x | 2 | ok |
+| share_select_page | 1.29 / 3.34 | 1.29 / 3.07 | 1.00x | 1.03 / 1.35 | 1 / 1.29 | 0.93 / 1.27 | 1.4x | 6 | ok |
+| write_share | 0.23 / 0.35 | 0.23 / 0.36 | 1.00x | 0.15 / 0.23 | 0.14 / 0.21 | 0.17 / 0.25 | 1.6x | 1 | ok |
+| parents_proj_select_page | 1.66 / 2.61 | 1.11 / 1.61 | 0.67x | 1.33 / 2.62 | 1.15 / 1.55 | 1.05 / 1.57 | 1.1x | 4 | ok |
+| parents_proj_select_count | 8.92 / 11.03 | 8.41 / 11.55 | 0.94x | 8.42 / 14.66 | 8.2 / 12.36 | 7.88 / 9.97 | 1.1x | 9 | OVER |
+| parents_select_page | 1.4 / 9.45 | 1.16 / 7.58 | 0.83x | 45.65 / 66.27 | 13.65 / 16.82 | 4.94 / 6.55 | 0.2x | 32 | ok |
+| parents_select_count | 8.44 / 15.96 | 8.38 / 14.74 | 0.99x | 75.08 / 92.44 | 21.57 / 27.61 | 11.88 / 15.53 | 0.7x | 70 | ok |
+| write_nest_team | 0.24 / 0.5 | 0.24 / 0.32 | 1.00x | 0.15 / 0.27 | 0.62 / 0.78 | 57.66 / 77.18 | 1.6x | 1 | ok |
+| nest_check | 0.41 / 0.64 | 0.4 / 0.54 | 0.98x | 0.31 / 0.48 | 0.32 / 0.42 | 0.3 / 0.45 | 1.3x | 2 | ok |
+
+#### Medium, deep shape
+
+| workload | D opt p50 / p95 | D opt2 p50 / p95 | opt2 vs opt (p50) | A p50 / p95 | B p50 / p95 | C p50 / p95 | opt2 vs best of A/B/C (p50) | budget p95 | opt2 status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| rbac_check | 0.22 / 0.36 | 0.23 / 0.33 | 1.05x | 0.29 / 0.4 | 0.27 / 0.36 | 0.24 / 0.32 | 1.0x | 1 | ok |
+| rbac_select_page | 0.41 / 0.7 | 0.39 / 0.51 | 0.95x | 0.44 / 0.56 | 0.46 / 0.57 | 0.42 / 0.57 | 0.9x | 2 | ok |
+| rbac_select_count | 0.32 / 0.53 | 0.32 / 0.42 | 1.00x | 0.35 / 0.48 | 0.37 / 0.48 | 0.32 / 0.41 | 1.0x | 2 | ok |
+| rbac_update_one | 0.28 / 0.45 | 0.28 / 0.37 | 1.00x | 0.48 / 0.66 | 0.46 / 0.58 | 0.35 / 0.46 | 0.8x | 3 | ok |
+| write_assign_role | 0.14 / 0.21 | 0.15 / 0.21 | 1.07x | 0.15 / 0.23 | 0.14 / 0.21 | 0.18 / 0.24 | 1.1x | 1 | ok |
+| share_list_objects | 0.78 / 1.02 | 0.33 / 0.48 | 0.42x | 0.31 / 0.41 | 0.32 / 0.4 | 0.28 / 0.37 | 1.2x | 1 | ok |
+| share_select_page | 1.18 / 1.5 | 0.68 / 1.05 | 0.58x | 0.76 / 1 | 0.72 / 0.89 | 0.66 / 0.9 | 1.0x | 3 | ok |
+| write_share | 0.23 / 0.31 | 0.24 / 0.36 | 1.04x | 0.15 / 0.22 | 0.14 / 0.2 | 0.17 / 0.23 | 1.7x | 1 | ok |
+| parents_proj_select_page | 1.79 / 2.74 | 0.75 / 1.08 | 0.42x | 1 / 1.26 | 0.83 / 1.14 | 0.73 / 1 | 1.0x | 4 | ok |
+| parents_proj_select_count | 2.09 / 2.84 | 1.06 / 1.57 | 0.51x | 1.25 / 1.47 | 1.14 / 1.4 | 0.99 / 1.18 | 1.1x | 4 | ok |
+| parents_select_page | 1.23 / 2.4 | 0.78 / 1.9 | 0.63x | 7.41 / 9.76 | 4.52 / 5.54 | 2.83 / 3.8 | 0.3x | 25 | ok |
+| parents_select_count | 1.54 / 2.52 | 1.08 / 1.89 | 0.70x | 6.4 / 8.06 | 3.74 / 6.01 | 2.1 / 2.69 | 0.5x | 23 | ok |
+| write_nest_team | 0.23 / 0.31 | 0.24 / 0.47 | 1.04x | 0.15 / 0.23 | 0.63 / 0.73 | 75.12 / 115.12 | 1.6x | 1 | ok |
+| nest_check | 0.43 / 0.54 | 0.43 / 0.79 | 1.00x | 0.34 / 0.47 | 0.34 / 0.44 | 0.3 / 0.41 | 1.4x | 2 | ok |
+
+#### Medium, wide shape
+
+| workload | D opt p50 / p95 | D opt2 p50 / p95 | opt2 vs opt (p50) | A p50 / p95 | B p50 / p95 | C p50 / p95 | opt2 vs best of A/B/C (p50) | budget p95 | opt2 status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| rbac_check | 0.21 / 0.31 | 0.23 / 0.33 | 1.10x | 0.29 / 0.4 | 0.28 / 0.37 | 0.24 / 0.35 | 1.0x | 1 | ok |
+| rbac_select_page | 0.4 / 0.61 | 0.4 / 0.56 | 1.00x | 0.44 / 0.56 | 0.46 / 0.59 | 0.44 / 0.61 | 0.9x | 2 | ok |
+| rbac_select_count | 0.31 / 0.46 | 0.32 / 0.45 | 1.03x | 0.36 / 0.48 | 0.36 / 0.45 | 0.33 / 0.43 | 1.0x | 2 | ok |
+| rbac_update_one | 0.27 / 0.48 | 0.28 / 0.38 | 1.04x | 0.49 / 0.63 | 0.48 / 0.95 | 0.38 / 0.49 | 0.7x | 3 | ok |
+| write_assign_role | 0.14 / 0.25 | 0.15 / 0.22 | 1.07x | 0.15 / 0.23 | 0.14 / 0.24 | 0.18 / 0.26 | 1.1x | 1 | ok |
+| share_list_objects | 17.77 / 37.11 | 5.12 / 7.32 | 0.29x | 4.44 / 5.57 | 8.41 / 15.8 | 3.41 / 3.87 | 1.5x | 13 | ok |
+| share_select_page | 26.2 / 49.49 | 11.54 / 18.57 | 0.44x | 14.44 / 16.96 | 17.82 / 24.18 | 8.2 / 16.47 | 1.4x | 42 | ok |
+| write_share | 0.23 / 0.32 | 0.23 / 0.35 | 1.00x | 0.15 / 0.22 | 0.16 / 0.4 | 0.17 / 0.24 | 1.5x | 1 | ok |
+| parents_proj_select_page | 38.63 / 51.14 | 10.87 / 16.71 | 0.28x | 14.98 / 18.27 | 15.05 / 21.68 | 8.73 / 18.83 | 1.2x | 51 | ok |
+| parents_proj_select_count | 36.07 / 42.51 | 9.04 / 11.99 | 0.25x | 13.24 / 16.48 | 13.44 / 18.05 | 6.33 / 7.17 | 1.4x | 31 | ok |
+| parents_select_page | 23.56 / 34.94 | 10.95 / 16.04 | 0.46x | 14.74 / 19.23 | 13.68 / 19.98 | 8.06 / 10.65 | 1.4x | 46 | ok |
+| parents_select_count | 21.58 / 27.57 | 8.85 / 11.34 | 0.41x | 13.31 / 16.64 | 12.22 / 17.51 | 6.61 / 7.48 | 1.3x | 40 | ok |
+| write_nest_team | 0.23 / 0.3 | 0.23 / 0.36 | 1.00x | 0.15 / 0.21 | 1.47 / 1.81 | 61.23 / 73.27 | 1.5x | 1 | ok |
+| nest_check | 0.45 / 0.96 | 0.44 / 0.69 | 0.98x | 0.37 / 0.48 | 0.34 / 0.61 | 0.31 / 0.44 | 1.4x | 2 | ok |
+
+### Budget misses (`--check`), opt2
+
+| configuration | opt | opt2 |
+| --- | --- | --- |
+| large default | `parents_proj_select_count` 11.03 > 9 | `parents_proj_select_count` 11.55 > 9 (shared by all four engines: the heap-fetch floor) |
+| medium deep | `share_list_objects` 1.02 > 1 | none |
+| medium wide | `share_list_objects`, `share_select_page`, `parents_proj_select_page`, `parents_proj_select_count` | none |
+
+### In-server measurements (Docker PG 18, the wide database the run left behind)
+
+Measured as in "Diagnosis" (PL/pgSQL loops over users 1-30, three rounds, warm cache), on the medium wide data after the full opt2 run:
+
+| call | opt | opt2 | A |
+| --- | --- | --- | --- |
+| ListObjects `document#viewer` (monotone, about 6,600 ids) | 17 ms | **3.74 ms** | 3.9 ms (`_reach`) |
+| ListObjects `folder#viewer` (empty for most users) | 13.7 ms | **0.04 ms** | |
+| ListObjects on `viewer: (...) but not blocked`, user 7 (6,701 ids) | 2,079 ms | **4.16 ms** (set-based) | |
+| the same, users 1-30 | | 4.32 ms | |
+| the same, per-candidate path on the same build (user 7) | | 2,234 ms | |
+| Check on that relation (top-down `_fga_rec`) | 270 µs | 391 µs | |
+
+The `but not` rows come from [`../designs/d/but_not_list_objects.sql`](../designs/d/but_not_list_objects.sql): it writes the benchmark model plus `blocked: [user]` and `viewer: ([user, team#member] or editor or viewer from parent) but not blocked` (the latest model from then on), blocks one of user 7's documents, and times `fga_list_object_ids_current('document', 'viewer')`, then the per-candidate path by clearing the compiled `diff_relation` inside a rolled-back transaction. Set-based and per-candidate return the same 6,701 ids (also compared id by id on local Postgres 16). 540x faster than per-candidate, and about the cost of the monotone list: the subtract walk is one probe. The Check row is not comparable with the opt figure (different data: the parents phase had run here).
+
+### What the pass did and didn't buy
+
+- **Wide FGA reads 2.2-4x faster**, now 1.2-1.5x the best of A/B/C and faster than A on every page and count. The two-arm parents projection gained most (38.6 → 10.9 ms): the folder arm costs nothing now that it is pruned.
+- **Deep: ListObjects 0.78 → 0.33 ms**, within 1.2x of C; the pages match A/B/C.
+- **Large default barely moved** except `share_list_objects` (0.54 → 0.36) and the two-arm page (1.66 → 1.11): those walks are a few nodes, so per-call overhead dominates.
+- **Check didn't move** (`nest_check` 0.41 → 0.40 large, 0.43 deep, 0.44 wide). The trims saved about 13% of a local in-server Check (0.234 → 0.204 ms) but nothing visible through pgbench. The remaining gap to A (1.3-1.4x) is `_fga_bidi`'s statement count (two `_fga_bstep` calls plus a probe and a meet test per round); folding the user probe into the step was considered and not done (it changes the level accounting for userset users).
+- **Not done:** the covering `fga_tuples` user index (diagnosis 4: +120 MB at large; not re-measured), the typed write path (writes still 0.23 ms, 1.5-1.7x A), memoization in `_fga_rec` (needs state across a recursive PL/pgSQL evaluation; no cheap way found).
+
+### Remaining gaps and hotspots
+
+1. **Wide ListObjects is 1.15x A and 1.5x C** (5.12 against 4.44 and 3.41 ms). Of the 3.7 ms in-server: the final leaf join (one index probe plus a heap fetch per tuple, since the user index has no `object_id`: the covering index would make it index-only), the sort-based `group by` that keeps each target's lowest level (generic plan, small row estimate), and three PL/pgSQL result tuplestores (`_fga_forward`, `_fga_list_object_ids`, the current-subject wrapper).
+2. **Check** 1.3-1.4x A (above). Matters for per-row RLS (`fga_check_current` in an update policy), not for list policies.
+3. **Writes** 1.5-1.7x A: `fga_write_tuple` builds JSON that `fga_write` re-parses and validates with six lookups.
+4. **Non-monotone relations outside the set-based form** (intersections, `but not (a or b)`, a base that depends on a non-monotone relation) still check every candidate top-down without memoization: about 2 s per wide ListObjects, as before. Check on any `but not` relation is top-down too (0.39 ms here).
+5. **Cyclic data in the leveled walk:** a node is expanded once per level it is reached at, so a userset cycle is walked around until level 25 (about 25/cycle-length times, expandable nodes only). Not in the benchmark data; `_fga_forward_ids` (one row per node) is the alternative if it shows up.
 
 ## How D runs the scenario
 
@@ -199,6 +314,8 @@ To compare the engines on A's single-branch walk, after the large run the databa
 
 ## Proposed fixes, by expected gain
 
+(1-3 done in opt2, with the measured gains in that section; 5 partly; 4 and 6 not done.)
+
 1. Set-based `but not` / `and` when the subtract or other operand is monotone: non-monotone ListObjects 2.1 s → about 35 ms (wide). Not visible in the current bench (monotone model); a bench workload with a block list would show it.
 2. Recursive-CTE ListObjects over a pre-joined edge list (with the depth rule restored): wide lists 17 → about 8.5 ms, deep 0.78 → about 0.35 ms; all FGA list policies.
 3. Target-relevance pruning of the walk frontier: empty-arm lists 13.7 → 0.25 ms; wide two-arm parents page 38.6 → about 25 ms (more with 2).
@@ -208,5 +325,6 @@ To compare the engines on A's single-branch walk, after the large run the databa
 
 ## Files
 
-- Reports: `pg18-docker-d-large-default-opt.md`, `pg18-docker-d-medium-deep-opt.md`, `pg18-docker-d-medium-wide-opt.md` (plans, per-table storage, per-user checksums); JSON in `data/`.
+- Reports: `pg18-docker-d-large-default-opt.md`, `pg18-docker-d-medium-deep-opt.md`, `pg18-docker-d-medium-wide-opt.md` (plans, per-table storage, per-user checksums); JSON in `data/`. The second pass: the same names with `-opt2`.
+- The `but not` measurement: [`../designs/d/but_not_list_objects.sql`](../designs/d/but_not_list_objects.sql).
 - Seeds and workloads: [`../designs/d/`](../designs/d/). `bench/run.sh` accepts `--design d` (inferred from `d-per-model.sql`).
