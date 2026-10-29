@@ -129,12 +129,12 @@ permissions.set_parent(object_type, object_id, parent_type, parent_id)  -- repla
 permissions.sync_parent()  -- trigger function: keeps parent tuples in sync with an app column
 ```
 
-Checks (SECURITY DEFINER, `set search_path = ''`; STABLE except the `list_objects*` functions and `scopes_with_permission`, which are VOLATILE since session 3, §13):
+Checks (SECURITY DEFINER, `set search_path = ''`; all STABLE. `list_objects`, `list_objects_for` and `scopes_with_permission` take a trailing `p_unfold boolean default permissions._unfolded_null()` that callers never pass, so the planner can't pre-evaluate them, §13):
 
 ```sql
 -- Client-facing: always the current subject
 permissions.check(object_type, object_id, relation) returns boolean
-permissions.list_objects(object_type, relation) returns text[]      -- RLS fast path
+permissions.list_objects(object_type, relation [, p_unfold]) returns text[]      -- RLS fast path
 
 -- Admin only (execute revoked from public): explicit subject, or who has access
 permissions.check_for(subject_type, subject_id, object_type, object_id, relation) returns boolean
@@ -604,9 +604,32 @@ Each change is separable. The columns add one change at a time, left to right (p
 
 There were no regressions elsewhere (before → after, same method): medium `rbac_check` 0.24 → 0.23, `rbac_select_page` 0.55 → 0.43, `rbac_select_count` 0.45 → 0.37, `rbac_update_one` 0.71 → 0.54. `write_assign_role`, `write_share` and `write_nest_team` stayed at 0.10.
 
-**1. `list_objects`, `list_objects_for` and `scopes_with_permission` are VOLATILE.** EXPLAIN showed planning time equal to execution time (100 ms each for wide `share_select_page`), with the same buffer count. The policies call these functions with constant arguments inside `array(select unnest(...))`. To estimate the unnest's row count, `array_unnest_support` calls `estimate_expression_value`, and in estimate mode the planner pre-evaluates STABLE functions. So the whole walk ran once at plan time and again at execution. VOLATILE functions aren't pre-evaluated. The cost is that the planner now assumes 10 elements instead of knowing the real count. That changed no plan in these workloads, because the `= any($0)` index scan is chosen either way. `check` and `has_permission` stay STABLE: a boolean qual isn't pre-evaluated. **This affects B and C too.** Their `scopes_with_permission` and C's `accessible()` are STABLE, so every policy query there also evaluates the engine call twice.
+**1. `list_objects`, `list_objects_for` and `scopes_with_permission` are no longer evaluated at plan time.** EXPLAIN showed planning time equal to execution time (100 ms each for wide `share_select_page`), with the same buffer count. The policies call these functions with constant arguments inside `array(select unnest(...))`. To estimate the unnest's row count, `array_unnest_support` calls `estimate_expression_value`, and in estimate mode the planner pre-evaluates STABLE functions whose arguments are all constants. So the whole walk ran once at plan time and again at execution. `check` and `has_permission` are unaffected: a boolean qual isn't pre-evaluated.
+
+*What was tried first: VOLATILE.* Marking the three functions VOLATILE stops the pre-evaluation, and it's what the "+ VOLATILE lists" column above measures (207 to 110 ms). The cost is the planner assuming 10 elements instead of the real count (no plan changed in these workloads). But a VOLATILE function has a worse problem, which design B found: under read committed, a volatile function takes a fresh snapshot for each query it runs. The grants it reads can be from a later instant than the rows the statement filters, so the statement no longer sees one consistent snapshot. STABLE functions read the calling statement's snapshot.
+
+*What it is now: STABLE, plus a volatile default.* The three functions are STABLE again and take one more trailing argument, `p_unfold boolean default permissions._unfolded_null()`. `_unfolded_null()` is a VOLATILE plpgsql function that returns null. A volatile argument isn't a constant, so the planner can't fold the call, while the function itself still reads the statement's snapshot. `p_unfold` is ignored, and callers keep using the old argument lists (`list_objects('document', 'viewer')`). `_unfolded_null()` is granted to public with the other client-facing functions, because a default expression runs as the caller. A call that passes all arguments as constants, `list_objects('d', 'v', true)`, is folded again, so nobody should pass the third argument. `test/spec/a/57_volatility.sql` asserts via `pg_proc.provolatile` that every RLS-facing function is STABLE.
+
+Check, `EXPLAIN (ANALYZE, BUFFERS)` as user 1, medium wide, the sharing policy `org_id = any (array(select unnest(scopes_with_permission(...))::uuid)) or id = any (array(select unnest(list_objects(...))::uuid))`:
+
+| version | Planning Time | Planning buffers |
+| --- | --- | --- |
+| STABLE, no dummy argument (folded) | 11.7-12.8 ms | 3,564 |
+| VOLATILE | 0.23 ms | 109 |
+| STABLE + `_unfolded_null()` default | 0.22 ms | 112 |
+
+The 109-112 buffers are catalog lookups, not the walk. An EXPLAIN on B showed that B's `scopes_with_permission(text)` has no dummy argument, so B's wide sharing policy still folds it (3.7-4.1 ms of planning, 1,000 buffers, medium default); B's `ids()` does not.
 
 **2. `list_objects_for` drops `array_agg(distinct ...)`.** `_reach` returns each node once, so the ids are already distinct. The distinct sorted them with the database collation (en_SG.UTF-8 here), which took 25 ms for 6,652 ids. The array is now unordered. The specs compare with `set_eq`, and the policies only use `= any`.
+
+**2b. `collate "C"` on the type, relation and id columns** (`object_types.name`, `relations`, `tuples`, `entities`). Added in a later pass, after B found that the en_SG.UTF-8 default collation made text-id comparisons expensive. B-tree probes and joins on a uuid-as-text go through `strcoll`; equality, `union` hashing and `= any` don't change under a deterministic collation, only the order of the arrays does (the specs compare sets). The hot paths have no sort on collatable text once `distinct` is gone: `_reach` dedupes with a hash (`union`), `check_for` works on arrays, and the only sort is the tiny `kinds` loose scan. The gain is therefore in the index probes. The recursive CTEs (`reach`, `list_subjects`' `back`) had to mark their non-recursive terms `collate "C"`, because Postgres refuses a recursive column whose collation differs from the non-recursive term. Interleaved 3 rounds, 1 client, 10 s, p50 ms, STABLE-with-dummy before | `collate "C"` after:
+
+| workload | before (per round) | after (per round) |
+| --- | --- | --- |
+| medium wide `share_select_page` | 18.09, 17.73, 18.75 | 16.21, 16.24, 16.24 |
+| medium default `parents_select_page` | 7.78, 7.84, 7.65 | 7.59, 7.60, 7.59 |
+
+About 9% on the wide sharing page (3 of 3 rounds, p95 also lower) and 2-3% on the parents page, which is inside noise but never worse. Kept. Linux glibc's `strcoll` is slower than macOS's, so Docker should gain more. C uses uuid columns, so it isn't affected (its text columns are model names).
 
 **3. The walk only expands nodes that can have an outgoing edge.** Most of what a walk reaches is leaves: the 50 documents of each team, or the 1,000 documents of each folder. The session-2 walk probed every node three times (tuples where it's the subject, implied relations, children through `parent`), and almost every probe found nothing. Now a node is expanded only if its (type, relation) has an edge of some kind:
 - usersets exist with that subject type and relation;

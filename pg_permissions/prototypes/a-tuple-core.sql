@@ -13,14 +13,20 @@ create schema if not exists permissions;
 -- Core store
 -- ============================================================================
 
+-- Type, relation and id columns are collate "C": they're opaque keys, and under
+-- the cluster's default collation (en_SG here) every B-tree probe and join on a
+-- uuid-as-text went through strcoll. Equality is the same under any
+-- deterministic collation. The recursive CTEs below mark the non-recursive
+-- term `collate "C"` to match (Postgres refuses a mismatch).
+
 create table permissions.object_types (
-    name        text primary key,
+    name        text collate "C" primary key,
     description text
 );
 
 create table permissions.relations (
-    object_type text not null references permissions.object_types(name) on delete cascade,
-    relation    text not null,
+    object_type text collate "C" not null references permissions.object_types(name) on delete cascade,
+    relation    text collate "C" not null,
     implied_by  text[] not null default '{}',
     from_parent text[] not null default '{}',  -- G10: relations inherited from the object's `parent`
     unless      text[] not null default '{}',  -- G12: excluded for subjects holding one of these relations
@@ -30,12 +36,12 @@ create table permissions.relations (
 
 create table permissions.tuples (
     id               bigint generated always as identity primary key,
-    object_type      text not null,
-    object_id        text not null,
-    relation         text not null,
-    subject_type     text not null,
-    subject_id       text not null,
-    subject_relation text not null default '',
+    object_type      text collate "C" not null,
+    object_id        text collate "C" not null,
+    relation         text collate "C" not null,
+    subject_type     text collate "C" not null,
+    subject_id       text collate "C" not null,
+    subject_relation text collate "C" not null default '',
     condition        jsonb,
     expires_at       timestamptz,
     created_at       timestamptz not null default now(),
@@ -52,8 +58,8 @@ create index tuples_edge_kinds_idx on permissions.tuples (subject_type, subject_
     where subject_relation <> '' or relation = 'parent';
 
 create table permissions.entities (
-    entity_type text not null,
-    entity_id   text not null,
+    entity_type text collate "C" not null,
+    entity_id   text collate "C" not null,
     attributes  jsonb not null default '{}',
     primary key (entity_type, entity_id)
 );
@@ -337,10 +343,10 @@ begin
         select k.t, x from kinds k cross join permissions.relations rel cross join unnest(rel.from_parent) x
         where k.r = ''
       union
-        select p_subject_type, ''
+        select p_subject_type collate "C", '' collate "C"
     ),
     reach(object_type, object_id, relation) as (
-        select p_subject_type, s, ''::text
+        select p_subject_type collate "C", s collate "C", ''::text collate "C"
         from unnest(array[p_subject_id, '*']) s
         where p_subject_id is not null
       union
@@ -575,17 +581,29 @@ $$;
 -- `array_agg(distinct)` sorted them with the database collation, 25 ms for
 -- 10k ids under en_US-style collations.
 --
--- VOLATILE, like list_objects and scopes_with_permission: a policy calls them
--- with constant arguments inside `array(select unnest(...))`, and for a STABLE
--- function the planner evaluates the whole call while planning, to estimate
--- the unnest's row count (estimate_expression_value), then the executor runs
--- it again. Every policy query paid for two walks.
+-- STABLE, with a trailing argument whose default is a volatile function (see
+-- _unfolded_null below), like list_objects and scopes_with_permission: a policy
+-- calls them inside `array(select unnest(...))`, and for a STABLE function
+-- with all-constant arguments the planner evaluates the whole call while
+-- planning, to estimate the unnest's row count (estimate_expression_value),
+-- then the executor runs it again. Every policy query paid for two walks.
+-- p_unfold is ignored.
+create function permissions._unfolded_null()
+returns boolean
+language plpgsql volatile
+as $$
+begin
+    return null;
+end;
+$$;
+
 create function permissions.list_objects_for(
     p_subject_type text, p_subject_id text,
-    p_object_type text, p_relation text
+    p_object_type text, p_relation text,
+    p_unfold boolean default permissions._unfolded_null()
 )
 returns text[]
-language sql volatile security definer
+language sql stable security definer
 set search_path = ''
 as $$
     select coalesce(array_agg(r.object_id), '{}')
@@ -599,7 +617,7 @@ language sql stable security definer
 set search_path = ''
 as $$
     with recursive back(t, i, r) as (
-        select p_object_type, p_object_id, p_relation
+        select p_object_type collate "C", p_object_id collate "C", p_relation collate "C"
       union
         select n.t, n.i, n.r
         from back b
@@ -651,9 +669,10 @@ as $$
         p_object_type, p_object_id, p_relation)
 $$;
 
-create function permissions.list_objects(p_object_type text, p_relation text)
+create function permissions.list_objects(p_object_type text, p_relation text,
+                                         p_unfold boolean default permissions._unfolded_null())
 returns text[]
-language sql volatile security definer
+language sql stable security definer
 set search_path = ''
 as $$
     select permissions.list_objects_for(
@@ -796,9 +815,10 @@ as $$
     from permissions._scope_object(p_scope) s
 $$;
 
-create function permissions.scopes_with_permission(p_permission text)
+create function permissions.scopes_with_permission(p_permission text,
+                                                   p_unfold boolean default permissions._unfolded_null())
 returns text[]
-language sql volatile security definer
+language sql stable security definer
 set search_path = ''
 as $$
     select permissions.list_objects('tenant', p_permission)
@@ -840,10 +860,11 @@ grant execute on function
     permissions.current_subject_id(),
     permissions.current_subject_type(),
     permissions.check(text, text, text),
-    permissions.list_objects(text, text),
+    permissions.list_objects(text, text, boolean),
+    permissions._unfolded_null(),
     permissions.has_permission(text, text),
     permissions.has_role(text, text),
-    permissions.scopes_with_permission(text)
+    permissions.scopes_with_permission(text, boolean)
 to public;
 
 -- Everything else (model definition, grants, explicit-subject checks) is for

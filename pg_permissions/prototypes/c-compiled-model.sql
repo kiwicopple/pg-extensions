@@ -1908,16 +1908,29 @@ $$;
 -- RLS fast path for tenant scoping. text[] as in PLAN.md §6; policies use
 -- org_id = any (array(select unnest(permissions.scopes_with_permission(...))::uuid)).
 --
--- VOLATILE on purpose, although it only reads. Inside array(select unnest(...))
--- the planner estimates the unnest's row count by pre-evaluating STABLE
--- functions with constant arguments, so a STABLE version ran the whole call
--- at plan time and again at execution. VOLATILE isn't pre-evaluated.
--- accessible() stays STABLE: the policy form (select accessible(...))::uuid[]
--- isn't pre-evaluated, and VOLATILE would stop a bare `id = any (...)` from
--- being an index qual.
-create function permissions.scopes_with_permission(p_permission text)
+-- STABLE, with a trailing argument whose default is a volatile function that
+-- returns null (_unfolded_null). Inside array(select unnest(...)) the planner
+-- estimates the unnest's row count by pre-evaluating a STABLE function whose
+-- arguments are all constants, so the whole call ran at plan time and again at
+-- execution. A volatile argument isn't a constant, so the call isn't folded.
+-- (Marking the function VOLATILE also stops the folding, but under read
+-- committed a volatile function takes a fresh snapshot per query, so the
+-- grants would be read at a later instant than the rows the statement filters.)
+-- p_unfold is ignored. accessible() stays as it is: the policy form
+-- (select accessible(...))::uuid[] isn't pre-evaluated.
+create function permissions._unfolded_null()
+returns boolean
+language plpgsql volatile
+as $$
+begin
+    return null;
+end;
+$$;
+
+create function permissions.scopes_with_permission(p_permission text,
+                                                   p_unfold boolean default permissions._unfolded_null())
 returns text[]
-language sql volatile security definer
+language sql stable security definer
 set search_path = ''
 as $$
     select array(select x::text from unnest(permissions._accessible(
@@ -1990,7 +2003,8 @@ grant execute on function
     permissions.has_permission(text, uuid),
     permissions.has_role(text, text),
     permissions.has_role(text, uuid),
-    permissions.scopes_with_permission(text)
+    permissions.scopes_with_permission(text, boolean),
+    permissions._unfolded_null()
 to public;
 
 -- Everything else (model, grants, parents, explicit-subject reads, who_can,

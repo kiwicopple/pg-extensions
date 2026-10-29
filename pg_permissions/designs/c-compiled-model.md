@@ -492,7 +492,7 @@ New `test/spec/c/33_incremental_memberships.sql` (13 assertions): a shortcut low
 
 **Expected in the serial confirmation run** (4 clients, as in `COMPARISON.md`): `write_nest_team` large from 333 to about 55-65 ms (11 to about 60 tps), wide from 145 to about 60 ms, small from 62 to about 15-25 ms. `parents_select_page` large from 9.6 to about 5 ms; `parents_select_count` from 22 to about 14-16 ms. Wide sharing seed from 183 s to about 25 s. Wide reads and `nest_check` unchanged within noise. Checksums identical to A and B.
 
-### 15.8 `scopes_with_permission` is VOLATILE (the STABLE double-execution trap)
+### 15.8 `scopes_with_permission` isn't pre-evaluated (the STABLE double-execution trap)
 
 **Finding.** While optimizing A, `list_objects` turned out to run twice per query: once while planning, once while executing (`designs/a-tuple-core.md` §13). The policies call these functions with constant arguments inside `array(select unnest(...))`. To estimate the unnest's row count, the planner pre-evaluates STABLE functions with constant arguments (`estimate_expression_value`). Marking them VOLATILE removed the plan-time run (A's wide `share_select_page` went from 207 to 110 ms on that change alone).
 
@@ -503,7 +503,19 @@ New `test/spec/c/33_incremental_memberships.sql` (13 assertions): a shortcut low
 - The same call outside the blessed form does double-execute: `id = any (array(select unnest(accessible(...))))` and the bare `id = any (accessible(...)::uuid[])` both show the plan-time evaluation (about 1,213 extra planning buffers, 3-4 ms of planning). Those aren't the documented policy form, so `accessible()` stays STABLE: VOLATILE would also stop the bare form from being an index qual. Use `(select accessible(...))::uuid[]`, as in section 7.
 - `has_permission`, `has_role` and `can` (boolean quals, shown as One-Time Filter) and the single-branch / projection policies (`parents_select_*`, `parents_proj_*`, which only call `accessible()` as a subquery) show no plan-time evaluation, so nothing changed for them.
 
-**Change.** `scopes_with_permission` is `language sql volatile` (it still only reads). The planner now assumes 10 elements for the unnest instead of the real count; the plans didn't change in any workload.
+**Change (first version: VOLATILE).** `scopes_with_permission` was made `language sql volatile` (it still only reads). The planner then assumes 10 elements for the unnest instead of the real count; the plans didn't change in any workload. The measurements below are for this version.
+
+**Final version: STABLE with a volatile default argument.** Design B pointed out the cost of VOLATILE: under read committed a volatile function takes a fresh snapshot for each query it runs, so the grants it reads can be from a later instant than the rows the statement filters. That weakens single-snapshot consistency inside one statement. STABLE functions read the statement's snapshot. So `scopes_with_permission(p_permission text, p_unfold boolean default permissions._unfolded_null())` is `stable` again. `_unfolded_null()` is a VOLATILE plpgsql function that returns null; a volatile argument isn't a constant, so the planner can't pre-evaluate the call, and the function body still sees the statement's snapshot. `p_unfold` is ignored and callers use the same one-argument form as before. `_unfolded_null()` is granted to public, because a default expression runs as the caller. (Passing every argument as a constant, `scopes_with_permission('x', true)`, would be folded again.) `test/spec/c/56_volatility.sql` asserts via `pg_proc.provolatile` that `can`, `accessible`, `has_permission`, `has_role` and `scopes_with_permission` are STABLE. This is B's technique (its `ids()`).
+
+Re-check of the final version, `EXPLAIN (ANALYZE, BUFFERS)` as user 1, medium default, the sharing policy (scopes arm plus `(select accessible(...))::uuid[]`):
+
+| version | Planning Time | Planning buffers |
+| --- | --- | --- |
+| STABLE, no dummy argument (folded) | 3.2-3.4 ms | 1,122 |
+| VOLATILE | 0.24-0.26 ms | 109 |
+| STABLE + `_unfolded_null()` default | 0.27 ms | 112 |
+
+The 109-112 buffers are catalog lookups. Checksums are unchanged (sharing `9b43a472...` at medium default, same as A and B).
 
 **Measured.** Interleaved old/new/new/old/old/new, 3 rounds each, `bench/run.sh --only ... --clients 1 --tag opt-c2`, Postgres 16.4 local, 10 s per run. The old file is kept as `bench/results/optc2/c-orig.sql`, git-ignored. Other agents were benchmarking on the same machine; one old run (round 3) and one new run (round 2) were visibly disturbed, so medians matter more than means. p50 ms, per round (old | new):
 
