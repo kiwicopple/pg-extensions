@@ -1,8 +1,25 @@
 # pg_permissions: Plan
 
-> Status: requirements and summary. The extension itself isn't implemented yet (`pg_permissions--0.0.1.sql` is empty). All three designs are built as prototypes in [`prototypes/`](./prototypes/), pass the test suite and have been benchmarked; the choice between them is open. See [`DECISION.md`](./DECISION.md).
+> Status: requirements and summary, with the session 4 direction (per-model tables, RBAC and OpenFGA first) in "Current plan" below. Sections that assumed one generic API are marked superseded and kept as history. The requirements and the A/B/C comparison below were written before that decision.
+>
+> Earlier status: requirements and summary. The extension itself isn't implemented yet (`pg_permissions--0.0.1.sql` is empty). All three designs are built as prototypes in [`prototypes/`](./prototypes/), pass the test suite and have been benchmarked; the choice between them is open. See [`DECISION.md`](./DECISION.md).
 >
 > This document holds the goals and requirements every design must meet. The candidate designs are in [`designs/`](./designs/). The requirements are turned into executable goals in [`GOALS.md`](./GOALS.md) and [`test/`](./test/).
+
+## Current plan (session 4): per-model tables
+
+Decided 2026-10-29. The reasons and the evidence are in [`DECISION.md`](./DECISION.md), "Session 4 direction: per-model tables". This section is the current plan; the sections after it are kept as history, and those that assumed one generic API carry a "Superseded" note.
+
+- The `permissions` schema holds a separate set of tables for each model, each following an existing spec as closely as possible. There is no single generic API over all models.
+  - `rbac_*` tables: the blessed path, first-class tables rather than wrappers over a shared core.
+  - `fga_*` tables: follow OpenFGA, not SpiceDB or a generic "Zanzibar-style" model. The two have different schema languages, so following a spec means choosing one. OpenFGA was chosen so that its public test suite can serve as a test oracle, and because it has CEL conditions on tuples.
+  - `cedar_*` tables: later. B is the starting point. Full Cedar `when`/`unless` over arbitrary attributes doesn't compile to index lookups (DECISION, Scorecard, Evolvability; C §9), so this will likely be a documented subset tested against Cedar's corpus.
+- Models compose in RLS. An app can use several at once for different things: permissive policies OR together and restrictive policies AND. Graduation means adding the FGA model next to RBAC, not migrating off it.
+- No separate ABAC model, because ABAC is a category and not a spec. Row attributes are covered by RLS, attributes on a relationship (expiry, IP range, amount) by OpenFGA conditions, and policy-language ABAC by Cedar later. Row attributes that exist only in RLS are invisible to the check functions (A §12.4), so the usage docs must say either that the check functions are advisory and RLS is final, or that row attributes are passed into the check.
+- Shared code is a small toolkit, not an API: subject identity (§3), the plan-time-evaluation guard and `collate "C"` on text ids (§4), and the install and pg_tle plumbing.
+- First spike: the `rbac_*` tables plus an OpenFGA core subset (direct relations, computed usersets, tuple-to-userset, wildcards `user:*`), run against OpenFGA's own test cases, plus one table whose RLS combines RBAC and FGA, benchmarked against the current numbers (§8).
+- Second stage: OpenFGA conditions (CEL). In pg_tle this means a parser and compiler in SQL or PL/pgSQL, the largest single cost, so it follows the core.
+- Prototypes: A is the starting point for `fga_*` (C's materialized memberships remain a possible optimization if wide reads need it), B for `cedar_*`, and C's generic compiled model is dropped. They stay in the repo as measured history. `pg_permissions--0.0.1.sql` stays empty until the spike is validated.
 
 ## Goal
 
@@ -32,9 +49,13 @@ What they have in common:
 3. **They differ mainly in how a decision is computed:** graph walk (Zanzibar), attribute rules (ABAC), expressions (CEL), or ordered permit/forbid (Cedar).
 4. **They share the same RLS performance problem.** #7 makes the important point: a per-row `check()` in a policy runs once per row. A "list the IDs I can access" function wrapped in `(select ...)` runs once per query. This has to be a first-class part of the API.
 
+Superseded in part (session 4, see "Current plan"): the "one way to model subject is related to object" part. Per-model tables each follow their own spec; identity and the RLS fast path stay shared.
+
 Takeaway: whichever design we choose should have **one identity layer**, **one way to model "subject is related to object"**, and a **first-class RLS fast path**. The designs in `designs/` disagree on how to get there.
 
 ## 2. Proof-of-concept scope
+
+Superseded (session 4): the first spike is `rbac_*` plus an OpenFGA core subset (see "Current plan"); the "one extension, many models in one API" framing below no longer applies. The model descriptions and the v0.0.1 exclusions are still a useful reference.
 
 The first version must support these models in one extension. Implementing two genuinely different models proves the "one extension, many models" goal. The examples below describe behaviour, not storage; each design decides how to store them.
 
@@ -95,6 +116,8 @@ Every design must show this scenario end to end (schema, setup SQL, RLS policies
 - Queries to answer: Can Bob update `readme`? Which documents can Dave select? Who can view `readme`?
 
 ## 6. Blessed path and model presets
+
+Superseded (session 4): presets over one shared engine are dropped. The blessed path is now first-class `rbac_*` tables, and graduation adds `fga_*` next to them (see "Current plan"). The rule that both presets write to the same core data, and the "identical `rbac` preset API in every design" rule, no longer hold; the usage-doc findings in [`DECISION.md`](./DECISION.md) show why. Kept as history.
 
 The extension should offer a **blessed path**: a developer picks a model preset and only learns the concepts that preset needs. Presets are a layer of functions on top of whichever engine we choose. The engine is never visible to a developer who stays on the RBAC preset.
 
@@ -158,6 +181,8 @@ Every design must also show this scenario, written **only** with the preset API 
 
 ## 7. Evaluation criteria
 
+Written for choosing one engine. The "Blessed path" row refers to the superseded presets (§6); the rest still apply to each model's tables.
+
 | Criterion | Question |
 | --- | --- |
 | Model flexibility | How naturally does it express RBAC, ReBAC, attributes, and later CEL/Cedar? |
@@ -170,6 +195,8 @@ Every design must also show this scenario, written **only** with the preset API 
 | Evolvability | Cost of adding parent inheritance, conditions, CEL, Cedar later. |
 
 ## 8. Candidate designs
+
+Superseded as a choice (session 4): the three designs are measured history and starting points (A for `fga_*`, B for `cedar_*`, C's generic model dropped), not candidates for one API. The numbers remain the baseline the spike is benchmarked against. See "Current plan".
 
 | Design | Approach |
 | --- | --- |
