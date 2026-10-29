@@ -374,6 +374,58 @@ Run strictly one at a time on an idle laptop, 10 s per workload: large default, 
 - **Briefs that carried exact assertion checklists** produced comparable tests from agents that never saw each other's work. Findings were relayed mid-flight (A's cycle-test weakness was sent to B and C while they worked).
 - **Agents found real bugs outside their brief:** B's jsonb-key-as-parent bug, B's missing row estimate, C's reliance on a loophole, and the harness's own vacuum and visibility-map problems. They reported them instead of hiding them because the briefs said "report, don't paper over".
 
+### 8. An independent review of the upstream report, and a second model's correction
+
+After the OpenFGA finding in section 6 was written up as an upstream report, another model reviewed it independently. It reproduced the inconsistency with the official release binary and corrected the framing.
+
+- **The API disagreement is confirmed, but "false is right" is not.** Check and ListObjects say true, ListUsers says nobody, and that is a real disagreement. What the review took issue with was the earlier session-4 conclusion that false was the correct answer and OpenFGA was the one in error.
+- **The cycle is positive recursion beneath an exclusion, not recursion through the negation.** `blocked(document:1)` contains `blocked(document:2)` which contains `blocked(document:1)`, and `viewer` only subtracts that set. Under least-fixpoint semantics the smallest set satisfying those equations contains nobody, so jon is not blocked and true is defensible.
+- **The closest upstream test doesn't settle it.** `true_butnot_cycle_return_false` loops back through `viewer` itself (`viewer` subtracts `restricted`, which contains `viewer`), which is recursion through negation. Searching the YAML for a subtracted relation that references itself found no case.
+- **A second inconsistency, from the same review.** Adding an unused `team#member` path to the model (the control from section 6) flips OpenFGA's Check on `viewer` to false while ListObjects still includes the document. So adding a path no tuple uses changes Check but not ListObjects, which is a stronger finding than the original one, because it doesn't depend on which answer is right.
+- **Copple told us to follow the review.** Two changes followed:
+  - The report now asks for agreement across the APIs and across resolver strategies, and leaves the true-or-false answer to the maintainers. (Commits `fca6873`, `526bdf6`.)
+  - D switched to least-fixpoint semantics for a monotone relation beneath an exclusion, in Check, ListObjects and ListUsers, so the three agree in D, including on the control model. Recursion through negation keeps OpenFGA's cycle rule. `d/31_fga_cycles` now expects true. (Commit `c262cc6`.)
+- **The earlier recommendation was too strong.** Section 6 said D "keeps the default resolver (false)" because it matched OpenFGA's own cycle cases, and the "Decisions" table recorded that as settled. It matched cases about a different shape. The decision row is now marked superseded.
+
+### 9. Optimizing D: opt to opt2 (commits `c262cc6`, `98fd181`)
+
+The three hotspots from section 5 were fixed, benchmarked the same way (PG18 Docker, same workloads, tagged `opt2`), and written up in `bench/baselines/D.md` next to the `opt` numbers.
+
+- **What changed:**
+  - **Target-type pruning.** `fga_reach` holds reachability between (type, relation) pairs, and `fga_walk_steps` holds, per target relation, only the edges whose destination can reach the target (13 rows for the benchmark model). Both are compiled at model write.
+  - **One recursive CTE walk** (A's `_reach` shape) in place of the PL/pgSQL loop over growing arrays. Levels are kept per row so the depth-25 rule stays exact; if an expandable node is first reached at level 25, a level-free walk finishes behind it.
+  - **Set-based `but not` lists** for ListObjects and ListUsers when the base is a positive expression over monotone relations and the subtract is `r` or `r from ts`: base walk minus subtract walk. Other shapes keep the per-candidate path.
+  - Small Check trims (no statement for a plain user's start frontier, inline object parsing).
+- **Results (p50):**
+  - `but not` ListObjects on the wide data, user 7 (6,701 ids): **2,079 ms to 4.16 ms**, 540x faster than the per-candidate path on the same build (2,234 ms). That is about the cost of the monotone list, because the subtract walk is one probe.
+  - Wide `share_list_objects` **17.77 to 5.12 ms** (A 4.44, B 8.41, C 3.41).
+  - Wide `parents_proj_select_page` **38.63 to 10.87 ms** (A 14.98, C 8.73). The folder arm costs nothing once it is pruned (in-server, ListObjects on `folder#viewer` 13.7 to 0.04 ms).
+  - Deep `share_list_objects` 0.78 to 0.33 ms. Large default barely moved except `share_list_objects` (0.54 to 0.36) and the two-arm page (1.66 to 1.11). Check and writes didn't move.
+- **Budget misses:** the four wide misses and the deep one are gone. The only one left is large `parents_proj_select_count` (11.55 ms against a 9 ms budget), which all four engines share (the heap-fetch floor from session 3).
+- **Tests:** 37 of 37 spec files, 2,164 assertions, on PG 16, 17 and 18. The OpenFGA suite is still 933 of 933 stored and 746 of 746 contextual.
+- **New specs, new mutants.** `d/32` and `d/33` are in-house specs for the new walk. Mutants of the depth check and of the level-25 finish passed the whole OpenFGA suite and were caught only by them, the same pattern as the cycle-flag mutant in section 7.
+- **Remaining hotspots (from D.md):**
+  - Wide ListObjects is 1.15x A and 1.5x C. The leaf join does a heap fetch per tuple (the user index has no `object_id`), a sort-based `group by` keeps each target's lowest level, and three PL/pgSQL result tuplestores sit on top.
+  - Check is 1.3-1.4x A (`_fga_bidi` statement count). It matters for per-row RLS, not for list policies.
+  - Writes are 1.5-1.7x A (`fga_write_tuple` builds JSON that `fga_write` re-parses and validates).
+  - Non-monotone relations outside the set-based form (intersections, `but not (a or b)`, a base that depends on a non-monotone relation) still check every candidate top-down, about 2 s per wide ListObjects. Check on any `but not` relation is top-down too.
+  - A userset cycle in the leveled walk is expanded once per level until 25, not once. Not in the benchmark data.
+- **Not done:** the covering `fga_tuples` user index (+120 MB at large), the typed write path, memoization in `_fga_rec`.
+
+### 10. Checking the upstream report before sending it
+
+The report had never been run. Before Copple sends it, the repro script and every claim in the report were checked against a fresh `openfga/openfga:v1.22.1` container (pinned by digest, memory datastore).
+
+- **The script ran cleanly the first time** at both `MINIMIZE_LATENCY` (the default) and `HIGHER_CONSISTENCY`, exiting 1 (inconsistency reproduced) both times, with identical output at the two levels:
+  - Original model: Check `blocked` false, Check `viewer` true, ListObjects `["document:1","document:3"]`, ListUsers empty.
+  - Control model: Check `viewer` false, ListObjects still `["document:1","document:3"]`, ListUsers empty.
+  - Cycle broken: Check, ListObjects and ListUsers all agree jon has access.
+  - Jon blocked on `document:2`: all agree jon has no access.
+- **Every number in the report's Results table and cycle-breaking variants matched.** The report now says so ("reproduced by the attached script"). 1,000 consecutive Checks of `viewer` on `document:1` on the original model all returned true, as claimed; that is a separate loop, and the report says so.
+- **The blog citation needed tightening.** The post (`weighted-graph-upcoming-changes`) does distinguish the two, but not quite as the report put it. Its broken pattern is a recursive relation that carries the exclusion itself (`define member: [user, group#member] but not blocked`), "This creates a circular dependency." Its recommended fix keeps the recursion a pure union and puts the exclusion on a separate relation ("Pure union recursion (allowed)", "Exclusion at leaf level only"). The report's model has the second shape, so the post doesn't call it broken, but it doesn't give the answer either, and it describes upcoming changes rather than v1.22.1. The report's sentence now says that.
+- **All 17 GitHub permalinks at tag v1.22.1 return 200,** and the cited line numbers land on the named functions (checked in a read-only local clone at `44054f5`).
+- **A mishap in the check itself:** the first 1,000-check loop printed 1,000 `false`. The store name `x` was too short for OpenFGA's validation, so every call returned an error, and a `// false` default in the jq filter turned the errors into answers. The repeat with a valid name gave 1,000 `true`. The script itself uses `curl -f` and exits 2 on API errors, so it can't be fooled that way.
+
 ### Decisions this session
 
 | Decision | Why |
@@ -694,6 +746,7 @@ This is the part of the session worth the most space. D passed all 138 of OpenFG
 - **The benchmark runs shared the machine with an unrelated Supabase Docker stack.** It was running throughout. D.md records that it was, and also that **whether it was running during A, B and C's runs isn't recorded.** The wide p95 values are the noisy ones: a 5 s rerun of one workload gave the same p50 (16.55 against 17.77 ms) but a different p95 (22.28 against 37.11 ms). Treat D's wide p95 misses as a maybe.
 - **A count in the plan was off by one:** 23 multi-stage cases, actually 22, because upstream has a duplicate case name. Worth knowing before anyone quotes "138 cases" and does arithmetic on it.
 - **The classifier block** on running a third-party image (section 6) is the permission system working as designed; running a third-party image needed an explicit yes.
+- **The benchmark runs shared the machine with more than Supabase.** An unrelated `openfga/openfga:v1.22.1` container (not ours), a Supabase stack and a freereps stack were all running while D (and later opt2) was measured. Timing noise on the wide p95 values is the likely cost; the p50 comparisons are the ones to trust.
 - **A mutant survived and wasn't a spec failure:** the one that lost the cycle flag in the set-based path passed all 933 upstream assertions. The in-house spec for it exists because we noticed.
 
 ### Decisions this session
@@ -707,16 +760,20 @@ This is the part of the session worth the most space. D passed all 138 of OpenFG
 | Cedar deferred, B as its starting point | Full `when`/`unless` over arbitrary attributes doesn't compile to index lookups |
 | Convert DSL to JSON once, pinned CLI image | Postgres never parses the DSL; the vendored tests run offline |
 | FGA list functions return `setof text` | Never evaluated at plan time, so no dummy argument |
-| D keeps the default resolver on cycle-in-subtract | Matches OpenFGA's own cycle cases and ListUsers; documented difference |
+| ~~D keeps the default resolver on cycle-in-subtract~~ (superseded, see section 8) | Matched cases about a different shape (recursion through negation) |
+| D uses least fixpoint for positive recursion beneath an exclusion | Check, ListObjects and ListUsers agree, including on the control model; recursion through negation keeps OpenFGA's cycle rule |
+| Upstream report asks for agreement, not a particular answer | The cycle shape can be argued either way; the disagreement between APIs and resolver strategies is not arguable |
+| Apply target pruning, CTE walk and set-based `but not` (opt2) | The three measured hotspots; wide reads 2.2-4x faster, `but not` ListObjects 540x |
 
 ### Still open (end of session 4)
 
-- **Match OpenFGA's planner on the recursive-userset cycle case, or keep D's answer?** (Section 6.)
-- **Which of the six proposed fixes to apply.** By expected gain: set-based `but not`/`and` for ListObjects (2.1 s -> about 35 ms), recursive-CTE walk (wide 17 -> 8.5 ms), target-relevance pruning (13.7 -> 0.25 ms), a covering `fga_tuples` index (-33% on large fan-outs, +120 MB), a cheaper Check (0.41 -> about 0.32 ms), and a typed write path (0.23 -> about 0.15 ms).
+- **What the maintainers say about the OpenFGA report.** Not yet sent. D no longer matches OpenFGA's default-resolver answer; it matches the recursive resolver's answer (true) on the original model, and agrees with itself on the control model where OpenFGA's Check says false. If upstream decides the other way, D changes again.
+- **Which of the remaining proposed fixes to apply.** Done in opt2: target pruning, the recursive-CTE walk and set-based `but not`. Left: a covering `fga_tuples` index (-33% on large fan-outs, +120 MB), a cheaper Check (0.40 ms, 1.3-1.4x A), and a typed write path (0.23 ms, 1.5-1.7x A). Also the non-monotone shapes that still check every candidate (about 2 s per wide ListObjects) and the level-by-level cycle walk.
 - **Stage 2 of the plan: OpenFGA conditions (CEL).** The largest single cost, because pg_tle means a parser and compiler in SQL or PL/pgSQL. The 33-case conditions file is the oracle.
-- **A benchmark workload with a block list**, so the `but not` hotspot is visible in the numbers and not only in a side measurement.
+- **A benchmark workload with a block list.** The `but not` ListObjects number (4.16 ms) still comes from a side script (`designs/d/but_not_list_objects.sql`), not from the pgbench workloads.
+- **The only budget miss left:** large `parents_proj_select_count`, shared by all four engines.
 - **The RLS-only attribute gap** and what the check functions promise (advisory, or take attributes).
-- **Re-run the wide benchmarks with nothing else on the machine,** and record what was running during A, B and C.
+- **Re-run the wide benchmarks with nothing else on the machine.** An unrelated openfga container, a Supabase stack and freereps stacks were running during D's runs, and whether anything was running during A, B and C's runs still isn't recorded.
 - Open design choices in the design doc (section 11): `setof text` returns, the error encoding, model versioning, deny-on-missing-subject, whether `delete_subject` should span both models, and keeping two evaluators in agreement.
 
 ### Possible angles for the blog post (session 4 additions)
@@ -730,6 +787,10 @@ This is the part of the session worth the most space. D passed all 138 of OpenFG
 - **Fast on its own tables.** RBAC as first-class tables was the fastest of four engines on `rbac_check` and updates, with no shared core to pay for.
 - **"Honest comparisons need the same work."** D's 1.4 ms single-branch parents result looked like a win until it turned out D was doing less work by design; the mirrored version was 52 ms.
 - **Not every blocker is a bug.** A permission classifier stopped a third-party image from running until a human said yes.
+- **"A second model caught the overclaim."** Session 4's own recommendation was to keep false, and it was too strong. An independent review reproduced the finding, pointed out that the cycle is positive recursion beneath an exclusion (least fixpoint says nobody is blocked) and that the nearest upstream test is a different shape, and found a stronger second inconsistency. The fix was to ask upstream for agreement and leave the answer open.
+- **A bug report is a claim too, so run it.** The report's script had never been run; running it matched every number, the blog quote needed a more careful reading, and the first check of "1,000 consecutive true" produced 1,000 false because of a mistake in the checker.
+- **Mutants again: the in-house specs caught what the oracle can't.** The depth check and the level-25 finish passed all 933 upstream assertions and failed `d/32` and `d/33`.
+- **What an optimization pass is worth.** One session's diagnosis, three fixes, and wide reads 2.2-4x faster; the 2-second `but not` call became 4 ms, while Check and writes didn't move at all.
 
 ### Numbers worth quoting (session 4)
 
@@ -741,3 +802,8 @@ This is the part of the session worth the most space. D passed all 138 of OpenFG
 - Hotspots: 13.7 -> 0.25 ms (target pruning), 17 -> 8.5 ms (one recursive CTE), 2.08 s -> about 35 ms expected (set-based `but not`; 20,106 recursive-evaluator calls per ListObjects).
 - Single-branch parents: 1.4 ms (D, not comparable) against 52 ms with org roles mirrored into FGA and A's 45.6 ms.
 - OpenFGA v1.22.1: Check true, ListObjects includes the object, ListUsers empty, about 800 runs (600+ in the committed docs); planner priors 150 ms recursive against 500 ms default.
+- Repro script: 4 scenarios at 2 consistency levels, identical output; 1,000 of 1,000 consecutive Checks true; 17 of 17 permalinks resolve at v1.22.1.
+- Control model (unused `team#member` path): OpenFGA Check false, ListObjects still includes the document, ListUsers empty.
+- opt2 (PG18 Docker): `but not` ListObjects 2,079 -> 4.16 ms (per-candidate path 2,234 ms on the same build); wide `share_list_objects` 17.77 -> 5.12 ms (A 4.44, C 3.41); wide `parents_proj_select_page` 38.63 -> 10.87 ms (A 14.98, C 8.73); deep `share_list_objects` 0.78 -> 0.33 ms; `folder#viewer` ListObjects 13.7 -> 0.04 ms in-server.
+- Budget misses: five (four wide, one deep) plus the shared large one before; only the large `parents_proj_select_count` (11.55 > 9 ms) after.
+- Tests after opt2: 37 of 37 spec files, 2,164 assertions on PG 16, 17 and 18; OpenFGA suite 933 of 933 and 746 of 746.
