@@ -1464,6 +1464,9 @@ $$;
 -- uncorrelated (select ...), so it runs once per query as an InitPlan.
 -- Resource-conditioned groups are read from the policies table when this
 -- runs: add such a policy later and the RLS policy must be regenerated.
+-- A condition is passed to ids()/denied_ids() as coalesce(_unfolded_null(),
+-- '<condition>'): a bare constant there would make every argument constant
+-- and the planner would run the call while planning (see _unfolded_null).
 create function permissions.rls_expression(
     p_action text, p_resource_type text, p_id_column text default 'id',
     p_via_columns jsonb default '{}', p_id_type regtype default 'uuid'
@@ -1513,13 +1516,13 @@ begin
             if p_id_column is not null then
                 v_items := v_items || format('%I = any (array(select unnest(permissions.%s(%s%s))::%s))',
                     p_id_column, v_ids_fn, v_args,
-                    case when v_cond is not null then format(', null, %L::jsonb', v_cond::text) else '' end,
+                    case when v_cond is not null then format(', null, coalesce(permissions._unfolded_null(), %L::jsonb)', v_cond::text) else '' end,
                     p_id_type);
             end if;
             for v_kv in select key, value from jsonb_each_text(coalesce(p_via_columns, '{}')) order by key loop
                 v_items := v_items || format('%I = any (array(select unnest(permissions.%s(%s, %L%s))::%s))',
                     v_kv.value, v_ids_fn, v_args, v_kv.key,
-                    case when v_cond is not null then format(', %L::jsonb', v_cond::text) else '' end,
+                    case when v_cond is not null then format(', coalesce(permissions._unfolded_null(), %L::jsonb)', v_cond::text) else '' end,
                     p_id_type);
             end loop;
             v_branch := coalesce(nullif(array_to_string(v_items, E'\n    or '), ''), 'false');
@@ -1736,7 +1739,8 @@ begin
 end;
 $$;
 
-create function permissions.scopes_with_permission(p_permission text)
+create function permissions.scopes_with_permission(p_permission text,
+                                                   p_unfold jsonb default permissions._unfolded_null())
 returns text[]
 language plpgsql stable security definer
 set search_path = ''
@@ -1798,7 +1802,7 @@ grant execute on function
     permissions.denies_all(text, text, jsonb),
     permissions.has_permission(text, text),
     permissions.has_role(text, text),
-    permissions.scopes_with_permission(text)
+    permissions.scopes_with_permission(text, jsonb)
 to public;
 
 -- Everything else (facts, policies, explicit-subject checks, who_can, explain,

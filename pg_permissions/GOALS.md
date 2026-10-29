@@ -22,11 +22,12 @@ Status as of 2026-10-29, from `test/run.sh --impl <implementation>`:
 | G12 | Forbid beats grants, including parent-derived ones | §10 | `<design>/52_forbid` | ❌ | ✅ 9/9 | ✅ 9/9 | ✅ 9/9 |
 | G13 | Conditions: document status, expired grants | §10 | `<design>/53_conditions` | ❌ | ✅ 6/6 | ✅ 6/6 | ✅ 6/6 |
 | G14 | Installs as a non-superuser; via `pgtle.install_extension` if pg_tle is available | §10 | `03_tle_install` | ❌ | ✅ 9/9 (pg_tle path on PG 16-18 in Docker) | ✅ 9/9 (same) | ✅ 9/9 (same) |
+| | RLS policies don't run `scopes_with_permission` at plan time (call-count probe; each design also has `a/58`, `b/56`, `c/57` for its own list function: 3/3, 8/8, 3/3) | §4 | `22_no_plan_time_eval` | ❌ | ✅ 6/6 | ✅ 6/6 | ✅ 6/6 |
 | | Design-specific: B fails closed on forbids with missing inputs | | `b/54_fail_closed` | | | ✅ 16/16 | |
 | | Design-specific: C materialized memberships stay correct | | `c/32_memberships` | | | | ✅ 31/31 |
 | | Design-specific: C `who_can` reports public grants | | `c/54_who_can_public` | | | | ✅ 8/8 |
 | | Design-specific: C tenant as a parent type | | `c/55_tenant_parent` | | | | ✅ 9/9 |
-| | **Total** | | | ❌ | **14/14 files, 156 assertions** | **15/15 files, 172 assertions** | **17/17 files, 204 assertions** |
+| | **Total** | | | ❌ | **18/18 files, 199 assertions** | **18/18 files, 189 assertions** | **21/21 files, 229 assertions** |
 
 Zanzibar-level spec files (`30`+, in `test/spec/<design>/`) are per-design: each design has its own copy of the same scenario written in its native API, with the same assertions, so results compare one to one. G10–G14 are the v0.0.2 scenarios from PLAN.md §10.
 
