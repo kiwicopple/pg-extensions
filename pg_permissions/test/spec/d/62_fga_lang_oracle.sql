@@ -18,20 +18,16 @@
 \echo '# SKIP 44 duplicate union relationship import in parent relationship definition: server-accepts'
 \echo '# SKIP 45 duplicate intersection relationship import in parent relationship definition: server-accepts'
 \echo '# SKIP 46 duplicate difference relationship import in parent relationship definition: server-accepts'
-\echo '# SKIP 48 condition not defined - single character: conditions'
-\echo '# SKIP 49 condition not defined: conditions'
-\echo '# SKIP 50 condition not defined x2: conditions'
-\echo '# SKIP 51 extraneous condition: conditions'
-\echo '# SKIP 56 handle single name duplicated type and unused condition: conditions'
+\echo '# SKIP 51 extraneous condition: server-accepts'
 \echo '# SKIP 75 union does not require all child to have entry: upstream-skip'
 \echo '# SKIP 76 union does not require all child to have entry even for intersection child: upstream-skip'
 \echo '# SKIP 77 union does not require all child to have entry even for exclusion child: upstream-skip'
 \echo '# SKIP 82 missing relation reference with a trailing comment on the type line: schema-1.2'
 \echo '# SKIP 88 multiple missing relation references with module comments on every type line: schema-1.2'
-\echo '# SKIP 90 unused condition whose name is a prefix of an earlier condition points at the correct line: conditions'
-\echo '# SKIP 91 inline expression mixed with plain and named condition is valid: conditions'
-\echo '# SKIP 92 inline expression on userset is valid: conditions'
-select tap.plan(66);
+\echo '# SKIP 90 unused condition whose name is a prefix of an earlier condition points at the correct line: server-accepts'
+\echo '# SKIP 91 inline expression mixed with plain and named condition is valid: inline-expression'
+\echo '# SKIP 92 inline expression on userset is valid: inline-expression'
+select tap.plan(70);
 -- 0: model 1.1 diff in exclusion not valid and spaces are reflected correctly in error messages
 select tap.is(fga_test.model_write('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"member":{"directly_related_user_types":[{"type":"user"}]},"reader":{}}},"relations":{"member":{"this":{}},"reader":{"difference":{"base":{"computedUserset":{"relation":"member"}},"subtract":{"computedUserset":{"relation":"allowed"}}}}},"type":"group"}]}'::jsonb, 2056), 'ok', 'lang:0:model 1.1 diff in exclusion not valid and spaces are reflected correctly in error messages');
 -- 1: invalid type name for self
@@ -100,6 +96,12 @@ select tap.is(fga_test.model_write('{"schema_version":"1.1","type_definitions":[
 select tap.is(fga_test.model_write('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"type":"user"}]}'::jsonb, 2056), 'ok', 'lang:32:duplicate types');
 -- 47: duplicate in type name
 select tap.is(fga_test.model_write('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"member":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"member":{"this":{}}},"type":"organization"},{"metadata":{"relations":{"member":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"member":{"this":{}}},"type":"group"},{"metadata":{"relations":{"can_view":{},"org":{"directly_related_user_types":[{"type":"organization"}]},"viewer":{}}},"relations":{"can_view":{"tupleToUserset":{"computedUserset":{"relation":"member"},"tupleset":{"relation":"org"}}},"org":{"this":{}},"viewer":{"tupleToUserset":{"computedUserset":{"relation":"member"},"tupleset":{"relation":"org"}}}},"type":"account"},{"metadata":{"relations":{"group":{"directly_related_user_types":[{"type":"group"}]},"viewer":{}}},"relations":{"group":{"this":{}},"viewer":{"tupleToUserset":{"computedUserset":{"relation":"member"},"tupleset":{"relation":"group"}}}},"type":"account"}]}'::jsonb, 2056), 'ok', 'lang:47:duplicate in type name');
+-- 48: condition not defined - single character
+select tap.is(fga_test.model_write('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"viewer":{"directly_related_user_types":[{"condition":"c","type":"user"}]}}},"relations":{"viewer":{"this":{}}},"type":"document"}]}'::jsonb, 2056), 'ok', 'lang:48:condition not defined - single character');
+-- 49: condition not defined
+select tap.is(fga_test.model_write('{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"viewer":{"directly_related_user_types":[{"condition":"allowed_ip","type":"user"}]}}},"relations":{"viewer":{"this":{}}},"type":"document"}]}'::jsonb, 2056), 'ok', 'lang:49:condition not defined');
+-- 50: condition not defined x2
+select tap.is(fga_test.model_write('{"conditions":{"allowed_ipaddress":{"expression":"current_ip.in_cidr(\"192.168.0.0/24\")","name":"allowed_ipaddress","parameters":{"current_ip":{"type_name":"TYPE_NAME_IPADDRESS"}}}},"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"editor":{"directly_related_user_types":[{"condition":"allowed_ip","type":"user"}]},"viewer":{"directly_related_user_types":[{"condition":"allowed_ipaddress","type":"user"}]}}},"relations":{"editor":{"this":{}},"viewer":{"this":{}}},"type":"document"}]}'::jsonb, 2056), 'ok', 'lang:50:condition not defined x2');
 -- 52: unsupported schema version should yield error
 select tap.is(fga_test.model_write('{"schema_version":"0.9","type_definitions":[{"type":"user"},{"metadata":{"relations":{"member":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"member":{"this":{}}},"type":"org"}]}'::jsonb, 2000), 'ok', 'lang:52:unsupported schema version should yield error');
 -- 53: supports parsing a modular model but throws schema required error
@@ -108,6 +110,8 @@ select tap.is(fga_test.model_write('{"schema_version":"","type_definitions":[{"m
 select tap.is(fga_test.model_write('{"schema_version":"","type_definitions":[{"metadata":{"module":"foo"},"type":"bar"}]}'::jsonb, 2000), 'ok', 'lang:54:allows extend in modular model');
 -- 55: handles single character types and relations
 select tap.is(fga_test.model_write('{"schema_version":"1.1","type_definitions":[{"type":"t"},{"metadata":{"relations":{"a":{"directly_related_user_types":[{"type":"u"}]},"b":{"directly_related_user_types":[{"relation":"z","type":"t"}]},"c":{},"d":{"directly_related_user_types":[{"type":"t"}]},"e":{},"f":{}}},"relations":{"a":{"this":{}},"b":{"this":{}},"c":{"tupleToUserset":{"computedUserset":{"relation":"b"},"tupleset":{"relation":"z"}}},"d":{"this":{}},"e":{"tupleToUserset":{"computedUserset":{"relation":"z"},"tupleset":{"relation":"d"}}},"f":{"difference":{"base":{"computedUserset":{"relation":"d"}},"subtract":{"computedUserset":{"relation":"z"}}}}},"type":"x"}]}'::jsonb, 2056), 'ok', 'lang:55:handles single character types and relations');
+-- 56: handle single name duplicated type and unused condition
+select tap.is(fga_test.model_write('{"conditions":{"c":{"expression":"current_ip.in_cidr(\"192.168.0.0/24\")","name":"c","parameters":{"current_ip":{"type_name":"TYPE_NAME_IPADDRESS"}}}},"schema_version":"1.1","type_definitions":[{"metadata":{"relations":{"a":{"directly_related_user_types":[{"type":"t"},{"type":"t"}]}}},"relations":{"a":{"this":{}}},"type":"t"},{"type":"t"}]}'::jsonb, 2056), 'ok', 'lang:56:handle single name duplicated type and unused condition');
 -- 57: single character relations and types, no entry point
 select tap.is(fga_test.model_write('{"schema_version":"1.1","type_definitions":[{"metadata":{"relations":{"p":{"directly_related_user_types":[{"type":"y"}]},"v":{}}},"relations":{"p":{"this":{}},"v":{"tupleToUserset":{"computedUserset":{"relation":"v"},"tupleset":{"relation":"p"}}}},"type":"x"},{"metadata":{"relations":{"p":{"directly_related_user_types":[{"type":"x"}]},"v":{}}},"relations":{"p":{"this":{}},"v":{"tupleToUserset":{"computedUserset":{"relation":"v"},"tupleset":{"relation":"p"}}}},"type":"y"}]}'::jsonb, 2056), 'ok', 'lang:57:single character relations and types, no entry point');
 -- 58: single character type and relation, tupleuserset-not-direct

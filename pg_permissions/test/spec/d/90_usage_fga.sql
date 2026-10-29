@@ -234,9 +234,9 @@ grant execute on function
     permissions.fga_write_tuple(text, text, text),
     permissions.fga_delete_tuple(text, text, text),
     permissions.fga_read(text, text, text, integer, text),
-    permissions.fga_check(text, text, text, jsonb, text),
-    permissions.fga_list_objects(text, text, text, jsonb, text),
-    permissions.fga_list_users(text, text, text[], jsonb, text)
+    permissions.fga_check(text, text, text, jsonb, text, jsonb),
+    permissions.fga_list_objects(text, text, text, jsonb, text, jsonb),
+    permissions.fga_list_users(text, text, text[], jsonb, text, jsonb)
 to service_role;
 begin;
 set local role service_role;

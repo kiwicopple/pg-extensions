@@ -34,8 +34,8 @@ select tap.ok(fga_test.code_of($$ select permissions.fga_write_authorization_mod
               like 'openfga:2056 %', 'a direct relation without type restrictions is refused (2056)');
 select tap.ok(fga_test.code_of($$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [{"type": "user"}, {"type": "user"}]}') $$)
               like 'openfga:2056 %', 'a type defined twice is refused (2056, as OpenFGA v1.22.1)');
-select tap.is(fga_test.code_of($$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [{"type": "user"}], "conditions": {"c": {"name": "c", "expression": "true"}}}') $$),
-              'sqlstate:0A000 conditions are not supported: the model defines condition ''c''', 'conditions are not supported yet (0A000)');
+select tap.is(fga_test.code_of($$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [{"type": "user"}], "conditions": {"c": {"name": "c", "expression": "x <"}}}') $$),
+              'openfga:2056 failed to compile expression on condition ''c'' - Syntax error: unexpected end of expression', 'a condition that does not compile is refused (2056; d/37 has the rest)');
 select tap.is(permissions.fga_read_authorization_model() ->> 'id', :'v1', 'refused models do not become the latest');
 
 -- writes
@@ -62,8 +62,8 @@ select tap.ok(fga_test.code_of($$ select permissions.fga_write('[{"user": "team:
               like 'openfga:2027 %', 'a userset where the relation does not allow one fails (2027)');
 select tap.ok(fga_test.code_of($$ select permissions.fga_write('[{"user": "user:x", "relation": "owner", "object": "document:9"}]') $$)
               like 'openfga:2027 %', 'an unknown relation fails (2027)');
-select tap.is(fga_test.code_of($$ select permissions.fga_write('[{"user": "user:x", "relation": "editor", "object": "document:9", "condition": {"name": "c"}}]') $$),
-              'sqlstate:0A000 relationship condition ''c'' on tuple ''document:9#editor@user:x'' is not supported', 'a tuple with a condition is not supported (0A000)');
+select tap.is(fga_test.code_of($$ select permissions.fga_write('[{"user": "user:x", "relation": "editor", "object": "document:9", "condition": {"name": "cx"}}]') $$),
+              'openfga:2000 Invalid tuple ''document:9#editor@user:x''. Reason: undefined condition ''cx''', 'a tuple naming a condition the model does not define is refused (2000; d/39 has the rest)');
 select permissions.fga_write('[{"user": "user:x", "relation": "editor", "object": "document:9"}]',
                              '[{"user": "user:anne", "relation": "editor", "object": "document:1"}]');
 select tap.ok(not permissions.fga_check('user:anne', 'editor', 'document:1') and permissions.fga_check('user:x', 'editor', 'document:9'),

@@ -13,7 +13,8 @@ The two meet in RLS policies, where permissive policies OR together and restrict
 | --- | --- | --- |
 | This page | install, identity, privileges, the `rbac` preset, RLS rules | [`test/spec/90_usage_rbac.sql`](../test/spec/90_usage_rbac.sql) |
 | [The OpenFGA model](fga.md) | writing a model, tuples, Check, ListObjects, ListUsers, Read, contextual tuples, errors and limits, privileges | [`test/spec/d/90_usage_fga.sql`](../test/spec/d/90_usage_fga.sql) |
-| [RLS with both models](rls.md) | the current-subject functions, combining both models in policies, denies, plan-time evaluation, row attributes, cleanup | [`test/spec/d/90_usage_rls.sql`](../test/spec/d/90_usage_rls.sql) |
+| [OpenFGA conditions](conditions.md) | conditions (CEL) on tuples: a model with conditions, expiring access, IP ranges, request and stored context, errors | [`test/spec/d/90_usage_conditions.sql`](../test/spec/d/90_usage_conditions.sql) |
+| [RLS with both models](rls.md) | the current-subject functions, combining both models in policies, denies, plan-time evaluation, row attributes, conditions in policies, cleanup | [`test/spec/d/90_usage_rls.sql`](../test/spec/d/90_usage_rls.sql) |
 
 Every SQL example on these pages runs as written in the spec next to it. This page's examples also run against the prototypes A, B and C, which share the `rbac` preset ([Prototypes](#prototypes-a-b-and-c-history)).
 

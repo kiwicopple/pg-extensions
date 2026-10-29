@@ -1,6 +1,6 @@
 # Design D: OpenFGA conditions (CEL) in PL/pgSQL
 
-> Status: design for phase 4 of session 5 ([`PLAN.md`](../PLAN.md), "Phase 4"), steps 1 and 2. Nothing here is implemented yet; the extension still raises `0A000 conditions_not_supported`. To be reviewed before steps 3 to 6. Companion to [`d-per-model.md`](./d-per-model.md) (sections 2, 4, 5, 7 and 8 change when this lands).
+> Status: implemented in phase 4 of session 5 ([`PLAN.md`](../PLAN.md), "Phase 4", steps 3 to 6), in [`pg_permissions--0.0.1.sql`](../pg_permissions--0.0.1.sql). Written as the design (steps 1 and 2), then reviewed: the open questions of section 11 were decided ([`DECISION.md`](../DECISION.md), "Decisions for conditions (session 5)") and section 13 says where the implementation differs from the design. The abac oracle passes in both runs (302 of 302 stored, 271 of 271 contextual assertions; 9 cases skipped as `inline-expression`). Companion to [`d-per-model.md`](./d-per-model.md), whose sections 2, 4, 7 and 8 describe the result.
 
 Sources: openfga/openfga at `44054f5` (tag v1.22.1, the commit the vendored suites come from; cel-go v0.31.0, `go.mod:19`), openfga/api at `f153694bfc20` (the commit its `go.mod` pins), the docs page [openfga.dev/docs/modeling/conditions](https://openfga.dev/docs/modeling/conditions) (read 2026-10-29), and answers from the pinned server image (`openfga/openfga:v1.22.1@sha256:b852071...`, memory datastore, default flags) collected by [`test/fga_abac/probe.sh`](../test/fga_abac/probe.sh). Paths like `condition.go:218` are in openfga/openfga unless they say otherwise.
 
@@ -16,7 +16,7 @@ Sources: openfga/openfga at `44054f5` (tag v1.22.1, the commit the vendored suit
 | stored | 33 | 331 | 24 cases, 302 assertions | 9 cases, 29 assertions: `inline-expression` |
 | contextual | 30 | 300 | 21 cases, 271 assertions | the same 9 |
 
-Until the evaluator exists the generated specs go to `test/fga_abac/spec/` (git-ignored, not on `test/run.sh`'s path); `generate.py --suite` writes them as `test/spec/d/63_fga_abac_*` and `64_fga_abac_ctx_*`. They call `fga_check`, `fga_list_objects` and `fga_list_users` with a new `context` argument through helpers in `test/fixtures/fga_abac.sql`. A run on today's extension fails every assertion (model write raises 0A000), as it should.
+`generate.py --suite` writes the specs as `test/spec/d/63_fga_abac_*` and `64_fga_abac_ctx_*` (without `--suite`, to the git-ignored `test/fga_abac/spec/`). They call `fga_check`, `fga_list_objects` and `fga_list_users` with the `context` argument through helpers in `test/fixtures/fga_abac.sql`. Red before phase 4's steps 3 to 6 (0 of 302 and 0 of 271: every model write raised 0A000), green after (302 and 271).
 
 Two vendoring details: the YAML has an out-of-range double (`1.797...e+309`, case `handles_floats`) that Ruby reads as Infinity, so `yaml2json.rb` keeps unquoted floats as their source text (jsonb holds it exactly; `vendor.sh` refuses a jq that rounds it). Upstream's own harness (sigs.k8s.io/yaml) turns that unquoted scalar into a string, and the server rejects the number form at request parsing (probe P12); both are 2000, which is what the case expects. The 8 `conditions` skips in [`test/fga_lang/skip.tsv`](../test/fga_lang/skip.tsv) join this phase's oracle (section 10).
 
@@ -102,6 +102,18 @@ The type list is `primitives.go:11-62` plus `ipaddress.go:41-52`, and the proto 
 | P30 | stored context key `x`, then a model where the condition has only `y`: Check | false (ignored) |
 | P31 | `uint` given `-1`; given `1e19` | 2000; true (clamped to int64 max) |
 | P32 | `double` given the number `0.1`, the string `"1.5"`; the string `"0.1"`, `"1e400"` | true, true; 2000, 2000 (`number cannot be represented as a float64`) |
+| P33 | model: a condition name with `:`; an expression over 512 bytes; 26 parameters | 2000 each (`invalid Condition.Name`, `...Expression ... at most 512 bytes`, `...Parameters ... no more than 25 pair(s)`): the request's validation |
+| P34 | `(x > 1 ? 1 : "a") == 1` | 2056 (`found no matching overload for '_?_:_' applied to '(bool, int, string)'`) |
+| P35 | `a` alone, `a: any` | 2056 (`expected a bool condition expression output, but got 'google.protobuf.Any'`) |
+| P36 | `size([1, "a"]) == x` | accepted: a list literal of mixed types is a list of dyn |
+| P37 | `dyn(x) < 1.5` | accepted (D refuses `dyn()`, decision 10) |
+| P38 | `l.exists(e, e == "zzz")` over 10, 20, 25, 30, 40 strings; a 35-term `\|\|` chain of `x == n`, all false | false, then 2000 from 20 on (`actual cost limit exceeded`); false |
+| P39 | a condition with no parameters (`true`), empty context; context `{z: 1}` | true; 2000 (`no parameters defined for the condition`) |
+| P40 | `t.getHours("Europe/Paris") == 12 && t.getHours("+02:00") == 12 && t.getDayOfWeek() == 0 && t.getMonth() == 6`, `t = 2024-07-07T10:00:00Z` | true (`+02:00` is two hours east) |
+| P41 | `a < 5`, `a: any`, given 3 | true (a double compares with an int at run time) |
+| P42 | Read of a tuple written with a condition and no context | `condition: {name, context: {}}` |
+| P43 | Write: a tuple condition named `c` (one character) | 2000 (`RelationshipCondition.Name` must match `^[^\s]{2,256}$`) |
+| P44 | Write the same key with the same condition, `on_duplicate: ignore` | written (skipped) |
 
 ## 3. Semantics D adopts
 
@@ -115,7 +127,7 @@ The type list is `primitives.go:11-62` plus `ipaddress.go:41-52`, and the proto 
    - **Check**: true if a path of true edges exists. Otherwise 2000 if OpenFGA's top-down search would have evaluated an erroring edge: one in the backward closure from the object (userset and tupleset tuples of the nodes it reaches, and the user's own direct tuples), even off the user's path (P14); else false. An error loses to a branch that decides (`relation_through_ttu...`, `mixed_parents`); in an intersection a false branch decides, in a difference a false base or a true subtract decides. A depth error (2002) outranks a condition error (`pkg/server/commands/errors.go:111-117`).
    - **ListObjects**: 2000 if any edge the forward walk takes errors (P15, P16, cases); otherwise the objects.
    - **ListUsers**: 2000 if any edge the backward walk takes errors, even when every user is also reachable through true edges (`relation_through_ttu...`); plain-user tuples of a type the filters exclude are not evaluated.
-   - **Current-subject functions** (`fga_check_current`, `fga_list_objects_current`, `fga_list_object_ids_current`): no request context (they take none, like contextual tuples, section 4 of d-per-model.md) and an erroring edge counts as absent, so RLS denies instead of failing the query (deviation; open question 2).
+   - **Current-subject functions** (`fga_check_current`, `fga_list_objects_current`, `fga_list_object_ids_current`): no request context (they take none, like contextual tuples, section 4 of d-per-model.md) and they never fail on a condition: an answer that depends on an evaluation error is a deny (deviation; decision 4). In the positive walks an erroring edge is not taken; under a subtract it is taken (so it removes the object), and `_fga_rec` reports it (result 4), which counts as false. A condition true from the tuple's stored context alone counts.
 
 ## 4. Language subset, tokens, AST
 
@@ -301,7 +313,10 @@ openfga/language cases now skipped as `conditions` (8), run again in step 3:
 | handle single name duplicated type and unused condition | 2056 (duplicate type) | 2056: the condition is valid, the duplicate type check raises |
 | inline expression mixed with plain and named condition; inline expression on userset | 2000 (`$expression` needs the flag) | 2000 if `$expression` stays out of scope (open question 1), with a HINT saying so |
 
-## 11. Open questions for the user
+## 11. Open questions for the user (decided)
+
+Decided on 2026-10-29 and 2026-10-30, as recommended below except where noted: [`DECISION.md`](../DECISION.md), "Decisions for conditions (session 5)". 1: out of scope, 2000. 2: deny, no trusted context yet (`usage/rls.md` shows a `security definer` wrapper that passes `now()`). 3: OpenFGA's rule. 4: ignored everywhere. 5: the counter, limit 100. 6: 2017 with a HINT. 7: refused at model write (2056).
+
 
 1. **Inline expressions (`$expression`)**: experimental in OpenFGA, off by default; upstream's ABAC suite turns the flag on (9 cases). Recommendation: out of scope for phase 4; reject `$expression` with 2000 as the default server does (the fga_lang cases agree). Supporting them later reuses the compiler: compile at tuple write, store the AST once per distinct expression.
 2. **Conditions in RLS**: the current-subject functions take no request context, so a condition that needs a request parameter can never be true in a policy; D denies (rule 7). Should they get a trusted server-side context, for example `{"current_time": now()}` or values from `request.jwt.claims`, under fixed names? Recommendation: deny in phase 4, decide the names afterwards; expiry ("tuple context `expires`, request `current_time`") is the common case it would unlock.
@@ -311,9 +326,59 @@ openfga/language cases now skipped as `conditions` (8), run again in step 3:
 6. **Same tuple key, different condition, `on_duplicate: ignore`**: OpenFGA answers HTTP 409 `Aborted` with no numeric code. Recommendation: 2017 with a message saying the condition differs.
 7. **Tier 3** (bytes, `type()`, `dyn()`): reject at model write as proposed, or implement? Recommendation: reject; nothing in the cases or docs uses them.
 
-## 12. Steps 3 to 6, spec-first
+## 12. Steps 3 to 6, spec-first (done)
 
 - Step 3 (model write): specs for P1-P4, the fga_lang 8, the name and size limits (section 1.4), Tier 3 rejection; then tokenizer, parser, checker, `fga_conditions`, restriction and edge rows with conditions; `0A000` removed; `d/35_error_hints` rows for each new raise site.
 - Step 4 (evaluation and tuples): specs for P5-P13, P17-P32 and rules 1-6 against `_fga_cond` directly and through `fga_check`; then values, parameters, interpreter, `fga_write`/`fga_read`/contextual tuples.
 - Step 5 (walks): `generate.py --suite`, the abac suite red then green in both runs; P14-P16 and the rule-7 cases as specs; the consolidated suite still 933/746; mutants from PLAN.md (ignore the condition, missing parameter as false, swap the merge, skip the type check) plus "evaluate errors as false in Check" (should fail `relation_through_ttu...` and P14's spec); before/after timings on the benchmark, tagged.
 - Step 6: d-per-model.md sections 2, 4, 7, 8 (deviation 2 replaced by the deviations above), `usage/` conditions page (expiry, IP range) with specs.
+
+## 13. As implemented (phase 4, steps 3 to 6)
+
+### 13.1 Where it lives
+
+In [`pg_permissions--0.0.1.sql`](../pg_permissions--0.0.1.sql), section "Conditions (CEL): compiler and evaluator": `_fga_cel_tokens`, `_fga_cel_parse` (one recursive function, CEL's precedence levels), `_fga_cel_check` (types, overloads, macros, folding), `_fga_cel_compile`; `_fga_cel_convert` and the parsers of timestamps, durations and ip addresses (OpenFGA's converters); `_fga_cel_eval` (the interpreter); `_fga_cond_eval` (one tuple's condition: merge, presence, conversion, evaluation), `_fga_cond` (a filter, by mode), `_fga_conds_ok` (the true ones among distinct (condition, context) pairs) and `_fga_cond_fail` (the one 2000 raise site for an evaluation error). The model write fills `fga_conditions`, the `condition` columns of restrictions, edges and walk steps, and `fga_relations.conditional`. The walks of [`d-per-model.md`](./d-per-model.md) section 5 take `p_req` (the request's context) and `p_mode`.
+
+### 13.2 Where it differs from the design above
+
+1. **Values are jsonb**, in one canonical form per static type, instead of a composite with a field per kind (section 6): numbers for int, uint and double (a double through float8's shortest text), integer nanoseconds for durations, `YYYY-MM-DDTHH:MI:SS.USZ` in UTC for timestamps (so text order is time order), the text of an ip address, arrays and objects for lists and maps (a map keyed by its key's text). Equality is jsonb equality (CEL's heterogeneous equality included: `1 == 1.0` in a dyn); the evaluator returns `fga_cel_result(v, e, c)`: the value, an error message, the cost so far. Types only matter at run time for dyn, and dyn values are JSON from `any` parameters, whose numbers are doubles as in OpenFGA's JSON context.
+2. **Mixed literals.** OpenFGA accepts `[1, "a"]` as a list of dyn (P36); so does D, but an int or uint in it, or in a map literal of mixed types, behaves as a double afterwards (`[1, "a"][0] + 1` is "no such overload" here, 2 in cel-go). A conditional with branches of two types is refused, as by the server (P34).
+3. **Modes.** Besides r (fail with 2000), d (an error is false) and t (report it: `_fga_rec`'s result 4), two more: e, in which `_fga_bstep` returns the error as a row (Check's error walk, `_fga_bidi_errors`, which returns the message rather than raising), and n, in which an error counts as true: the RLS helpers' subtract walks (set-based `but not` lists), so that an error removes an object instead of granting it. For the RLS helpers `_fga_rec` runs in mode t and 4 is false. Decision 4 says "deny"; mode d alone would have let a user through a `but not` whose subtract errors, which `d/39` pins.
+4. **One evaluation per distinct context** (decision 2) in `_fga_fstep`, `_fga_bstep`, Check's error walk, and the leaves of `_fga_forward` and `_fga_forward_ids` (the last join, where a wide walk's thousands of objects are): `_fga_conds_ok` over `jsonb_agg(distinct [name, context])`. `d/39` checks that a ListObjects over 50 tuples sharing one condition and context evaluates it once. Inside the recursive term of the forward walk (the expandable nodes: teams, folders) a conditioned tuple is evaluated per row, because a recursive term can't aggregate: a walk through many conditioned memberships with distinct contexts pays one evaluation per membership per level reached. Phase 5 can move that walk to a loop if it matters.
+5. **Cost**: 1 per identifier, call, operator, field selection, index and list or map literal evaluated, nothing for literals and for `||`, `&&` and `? :` (as cel-go), 3 per comprehension iteration; past 100, the evaluation fails ("operation cancelled: actual cost limit exceeded"). `l.exists(e, e == "zzz")` passes over 19 elements and fails over 20, the server somewhere between 11 and 20 (P38: 10 passes, 20 fails); the 35-term chain of P38 costs 70; the abac cases cost at most a handful.
+6. **Check's error walk** follows the object's backward closure up to depth 25 (deeper, OpenFGA would hit its depth limit first).
+7. **Write**: a conditioned tuple written without a context is stored and read back with `{}` (P42); a one-character condition name in a tuple is 2000 (P43), as in OpenFGA, so a condition named with one character can be declared but not used in a tuple.
+8. **Compile errors** name the column of the operator or token, as cel-go does (`... applied to '(int, string)' (column 3)`).
+9. **The request's validation** of conditions (2000) covers the condition name, expression size, parameter count and parameter names (P33) and inline `$expression` (decision 8).
+
+### 13.3 Deviations, the full list
+
+From OpenFGA v1.22.1, all documented in [`d-per-model.md`](./d-per-model.md) section 8 (deviation 2):
+
+- inline `$expression` conditions are refused (2000, as the default server; OpenFGA's flag turns them on);
+- `bytes`, `type()`, `dyn()`, type names as values, message construction and optional syntax are refused at model write (2056);
+- the cost limit is approximate (section 13.2, item 5);
+- a stored context the current model no longer accepts makes the tuple ignored in ListObjects and ListUsers too (OpenFGA's lists fail with 2000, P29);
+- the RLS helpers take no request context and deny whenever an answer depends on an evaluation error;
+- timestamps are microseconds (sub-microsecond digits are dropped) within years 1 to 9999; double overflow and division by zero are errors (CEL gives infinities and NaN); `matches` uses Postgres regular expressions; IPv6 zones are refused;
+- in values of type `any` and in mixed literals, ints are doubles (section 13.2, item 2);
+- dyn ordering compares numbers of different kinds (`a < 5` with `a` any given 3 is true, as the server, P41).
+
+### 13.4 Tests
+
+`test/spec/d/37_fga_conditions_model` (51 assertions), `38_fga_cel` (142), `39_fga_conditions_eval` (64), `90_usage_conditions` (29), four more in `90_usage_rls`, and eight rows in `35_error_hints` for the eight new raise sites (the three 0A000 rows are gone: 63 sites before, 68 now). Red before the implementation: 6 of 51, 0 of 142 and 4 of 64 passed (the ones that pass hold without conditions). The abac oracle: 302 of 302 and 271 of 271. Mutants: [`d-per-model.md`](./d-per-model.md) section 9.
+
+### 13.5 Performance
+
+**The unconditioned fast path.** `bench/run.sh --scale large --only share_list_objects,share_select_page,parents_select_page,nest_check` (local Postgres 16.4, Postgres.app, Apple silicon, 4 clients, 10 s per workload; the large default shape of [`bench/baselines/D.md`](../bench/baselines/D.md), run locally rather than in its Docker setup), twice before (`--tag cond-before`, the extension at commit `5c0951e`) and twice after (`--tag cond-after`), strictly one at a time and never with tests running, on 2026-10-30. Also running: the idle Docker stacks (Supabase, freereps, an unrelated container), a browser; load average 3 to 7 on 10 cores. `--only` runs write no baseline JSON.
+
+| workload | before p50 / p95 (ms), run 1; run 2 | after p50 / p95 (ms), run 1; run 2 |
+| --- | --- | --- |
+| `share_list_objects` (ListObjects for RLS, `fga_list_object_ids_current`) | 0.28 / 0.39; 0.28 / 0.43 | 0.28 / 0.38; 0.28 / 0.38 |
+| `share_select_page` (RLS page) | 0.82 / 1.05; 0.84 / 1.08 | 0.81 / 1.24; 0.81 / 1.01 |
+| `parents_select_page` (RLS page over 1M documents) | 0.93 / 10.51; 0.96 / 11.64 | 0.85 / 8.18; 0.89 / 9.23 |
+| `nest_check` (Check, `fga_check_current`) | 0.38 / 0.58; 0.37 / 0.52 | 0.38 / 0.48; 0.38 / 0.50 |
+
+Within noise: the p50s match to 0.01 ms except `parents_select_page`, whose p95 swings by 10 to 20 % between runs of the same build. The unconditioned path adds one equality to each edge join and reads `conditional` with the flags it already read.
+
+**Conditioned edges** (throwaway measurement, same machine, a scratch database, 1,000 tuples per user on one relation, warm): one evaluation of `x < 100` costs about 9 µs through `_fga_cond_eval` (2 µs of it in the interpreter, the rest the condition lookup, the merge and the conversions); a timestamp comparison about 18 µs and `in_cidr` 16 µs (the RFC 3339 and address parsing). ListObjects over 1,000 unconditioned tuples took 2.0 ms; over 1,000 tuples sharing one condition and context 2.8 ms (one evaluation); over 1,000 tuples with 1,000 distinct stored contexts 21.8 ms (about 20 µs each). Check took 68 µs per call unconditioned, 74 µs through a true conditioned edge, and about 160 to 180 µs when false on a conditional relation, the error walk of rule 7 included. Phase 5 is where to cut these.

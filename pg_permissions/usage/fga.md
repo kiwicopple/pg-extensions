@@ -2,7 +2,7 @@
 
 The `fga_*` functions are [OpenFGA](https://openfga.dev)'s API in SQL: the same modeling language, the same tuples, and Check, ListObjects, ListUsers and Read with OpenFGA's answers and error codes. Use it when roles aren't enough: sharing one document, nested teams, folders whose viewers see what's inside. It sits next to the `rbac` preset ([README](README.md)); [RLS with both models](rls.md) shows how to use the two together in policies.
 
-Every example on this page runs as written in [`test/spec/d/90_usage_fga.sql`](../test/spec/d/90_usage_fga.sql), in the same order: each section uses the model and tuples the previous ones wrote. OpenFGA's own test suite runs against the same functions ([`test/fga/`](../test/fga/), 933 of 933 assertions; [`designs/d-per-model.md`](../designs/d-per-model.md) section 9). Where this extension differs from OpenFGA is in that design doc, section 8. The main differences: there is one store per database, conditions aren't supported yet, and errors are Postgres exceptions.
+Every example on this page runs as written in [`test/spec/d/90_usage_fga.sql`](../test/spec/d/90_usage_fga.sql), in the same order: each section uses the model and tuples the previous ones wrote. OpenFGA's own test suite runs against the same functions ([`test/fga/`](../test/fga/), 933 of 933 assertions; [`designs/d-per-model.md`](../designs/d-per-model.md) section 9). Where this extension differs from OpenFGA is in that design doc, section 8. The main differences: there is one store per database, and errors are Postgres exceptions. Conditions (CEL) have their own page, [OpenFGA conditions](conditions.md).
 
 All the functions on this page are admin-only, because they take the user as an argument ([Privileges](#privileges)). Clients use the current-subject functions in [RLS with both models](rls.md).
 
@@ -308,9 +308,9 @@ grant execute on function
     permissions.fga_write_tuple(text, text, text),
     permissions.fga_delete_tuple(text, text, text),
     permissions.fga_read(text, text, text, integer, text),
-    permissions.fga_check(text, text, text, jsonb, text),
-    permissions.fga_list_objects(text, text, text, jsonb, text),
-    permissions.fga_list_users(text, text, text[], jsonb, text)
+    permissions.fga_check(text, text, text, jsonb, text, jsonb),
+    permissions.fga_list_objects(text, text, text, jsonb, text, jsonb),
+    permissions.fga_list_users(text, text, text[], jsonb, text, jsonb)
 to service_role;
 ```
 

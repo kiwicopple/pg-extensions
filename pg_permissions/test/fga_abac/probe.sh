@@ -335,3 +335,62 @@ for v in '10' '-1' '"10"' '1e19' '18446744073709551615'; do
     call "check: uint param given $v" check \
         '{"tuple_key":{"user":"user:jon","relation":"uns","object":"doc:1"},"context":{"x":'"$v"'}}' .allowed
 done
+
+# Phase 4, steps 3 to 6 (P33 to P44 in designs/d-conditions.md): the request's
+# validation of conditions, what the type checker accepts, the cost limit's
+# threshold, the no-parameter quirk, getters and Read.
+new_store
+model_json 'P33 model: condition name with a colon' \
+  '{"schema_version":"1.1","type_definitions":[{"type":"user"},{"type":"doc","relations":{"viewer":{"this":{}}},"metadata":{"relations":{"viewer":{"directly_related_user_types":[{"type":"user","condition":"a:b"}]}}}}],"conditions":{"a:b":{"name":"a:b","expression":"x < 1","parameters":{"x":{"type_name":"TYPE_NAME_INT"}}}}}'
+model_json 'P33 model: expression over 512 bytes' \
+  "$(jq -nc --arg e "$(printf 'x == 1 || %.0s' $(seq 1 60))x == 2" '{"schema_version":"1.1","type_definitions":[{"type":"user"},{"type":"doc","relations":{"viewer":{"this":{}}},"metadata":{"relations":{"viewer":{"directly_related_user_types":[{"type":"user","condition":"c1"}]}}}}],"conditions":{"c1":{"name":"c1","expression":$e,"parameters":{"x":{"type_name":"TYPE_NAME_INT"}}}}}')"
+model_json 'P33 model: 26 parameters' \
+  "$(jq -nc '{"schema_version":"1.1","type_definitions":[{"type":"user"},{"type":"doc","relations":{"viewer":{"this":{}}},"metadata":{"relations":{"viewer":{"directly_related_user_types":[{"type":"user","condition":"c1"}]}}}}],"conditions":{"c1":{"name":"c1","expression":"p1 < 1","parameters":([range(26)] | map({key: ("p" + tostring), value: {"type_name":"TYPE_NAME_INT"}}) | from_entries)}}}')"
+model_json 'P34 model: conditional with branches of two types' \
+  '{"schema_version":"1.1","type_definitions":[{"type":"user"},{"type":"doc","relations":{"viewer":{"this":{}}},"metadata":{"relations":{"viewer":{"directly_related_user_types":[{"type":"user","condition":"c1"}]}}}}],"conditions":{"c1":{"name":"c1","expression":"(x > 1 ? 1 : \"a\") == 1","parameters":{"x":{"type_name":"TYPE_NAME_INT"}}}}}'
+model_json 'P35 model: an any parameter alone as the expression' \
+  '{"schema_version":"1.1","type_definitions":[{"type":"user"},{"type":"doc","relations":{"viewer":{"this":{}}},"metadata":{"relations":{"viewer":{"directly_related_user_types":[{"type":"user","condition":"c1"}]}}}}],"conditions":{"c1":{"name":"c1","expression":"a","parameters":{"a":{"type_name":"TYPE_NAME_ANY"}}}}}'
+model_json 'P36 model: a list literal of mixed types' \
+  '{"schema_version":"1.1","type_definitions":[{"type":"user"},{"type":"doc","relations":{"viewer":{"this":{}}},"metadata":{"relations":{"viewer":{"directly_related_user_types":[{"type":"user","condition":"c1"}]}}}}],"conditions":{"c1":{"name":"c1","expression":"size([1, \"a\"]) == x","parameters":{"x":{"type_name":"TYPE_NAME_INT"}}}}}'
+model_json 'P37 model: dyn(x) < 1.5' \
+  '{"schema_version":"1.1","type_definitions":[{"type":"user"},{"type":"doc","relations":{"viewer":{"this":{}}},"metadata":{"relations":{"viewer":{"directly_related_user_types":[{"type":"user","condition":"c1"}]}}}}],"conditions":{"c1":{"name":"c1","expression":"dyn(x) < 1.5","parameters":{"x":{"type_name":"TYPE_NAME_INT"}}}}}'
+model 'main model for P38 to P44' '.type_definitions |= map(if .type == "doc" then .relations.anyp = {"this": {}} | .metadata.relations.anyp = {"directly_related_user_types": [{"type": "user", "condition": "cany"}]} | .relations.nop = {"this": {}} | .metadata.relations.nop = {"directly_related_user_types": [{"type": "user", "condition": "cnone"}]} else . end) | .conditions.cany = {"name": "cany", "expression": "a < 5", "parameters": {"a": {"type_name": "TYPE_NAME_ANY"}}} | .conditions.cnone = {"name": "cnone", "expression": "true"}' <<'M'
+model
+  schema 1.1
+type user
+type doc
+  relations
+    define listy: [user with clist]
+    define one: [user with cx]
+    define orx: [user with cor]
+    define acc: [user with cacc]
+condition clist(l: list<string>) {
+  l.exists(e, e == "zzz")
+}
+condition cx(x: int) {
+  x < 100
+}
+condition cor(x: int) {
+  x == 1 || x == 2 || x == 3 || x == 4 || x == 5 || x == 6 || x == 7 || x == 8 || x == 9 || x == 10 || x == 11 || x == 12 || x == 13 || x == 14 || x == 15 || x == 16 || x == 17 || x == 18 || x == 19 || x == 20 || x == 21 || x == 22 || x == 23 || x == 24 || x == 25 || x == 26 || x == 27 || x == 28 || x == 29 || x == 30 || x == 31 || x == 32 || x == 33 || x == 34 || x == 35
+}
+condition cacc(t: timestamp) {
+  t.getHours("Europe/Paris") == 12 && t.getHours("+02:00") == 12 && t.getDayOfWeek() == 0 && t.getMonth() == 6
+}
+M
+call 'write: the probe tuples' write \
+    '{"writes":{"tuple_keys":[{"user":"user:jon","relation":"listy","object":"doc:1","condition":{"name":"clist"}},{"user":"user:jon","relation":"one","object":"doc:1","condition":{"name":"cx"}},{"user":"user:jon","relation":"nop","object":"doc:1","condition":{"name":"cnone"}},{"user":"user:jon","relation":"orx","object":"doc:1","condition":{"name":"cor"}},{"user":"user:jon","relation":"acc","object":"doc:1","condition":{"name":"cacc"}},{"user":"user:jon","relation":"anyp","object":"doc:1","condition":{"name":"cany"}}]}}' '"written"'
+for n in 10 20 25 30 40; do
+    call "P38 check: exists over $n strings (cost limit 100)" check \
+        "$(jq -nc --argjson n $n '{tuple_key:{user:"user:jon",relation:"listy",object:"doc:1"},context:{l:[range($n) | "a"]}}')" .allowed
+done
+call 'P38 check: a 35-term || chain, all false' check '{"tuple_key":{"user":"user:jon","relation":"orx","object":"doc:1"},"context":{"x":99}}' .allowed
+call 'P39 check: no-parameter condition, empty context' check '{"tuple_key":{"user":"user:jon","relation":"nop","object":"doc:1"}}' .allowed
+call 'P39 check: no-parameter condition, context {z:1}' check '{"tuple_key":{"user":"user:jon","relation":"nop","object":"doc:1"},"context":{"z":1}}' .allowed
+call 'P40 check: getters with a zone and an offset' check '{"tuple_key":{"user":"user:jon","relation":"acc","object":"doc:1"},"context":{"t":"2024-07-07T10:00:00Z"}}' .allowed
+call 'P41 check: any a < 5 given 3 (a double against an int)' check '{"tuple_key":{"user":"user:jon","relation":"anyp","object":"doc:1"},"context":{"a":3}}' .allowed
+call 'P42 read: a condition written without context' read '{"tuple_key":{"object":"doc:1","relation":"one","user":"user:jon"}}' '[.tuples[].key]'
+call 'P43 write: a one-character condition name in a tuple' write \
+    '{"writes":{"tuple_keys":[{"user":"user:ann","relation":"one","object":"doc:1","condition":{"name":"c"}}]}}' '"written"'
+call 'P44 write: the same key and condition, on_duplicate ignore' write \
+    '{"writes":{"tuple_keys":[{"user":"user:jon","relation":"listy","object":"doc:1","condition":{"name":"clist"}}],"on_duplicate":"ignore"}}' '"written"'
+call 'check: context is an array' check '{"tuple_key":{"user":"user:jon","relation":"one","object":"doc:1"},"context":[1]}' .allowed

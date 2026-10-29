@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Generate TAP spec files from OpenFGA's ABAC (conditions) test suite, and report results.
 
-    python3 -I test/fga_abac/generate.py            # write test/fga_abac/spec/*.sql (not run by test/run.sh)
-    python3 -I test/fga_abac/generate.py --suite    # write test/spec/d/6[34]_fga_abac_*.sql instead (phase 4, once
-                                                    # the evaluator exists; until then they are red)
+    python3 -I test/fga_abac/generate.py --suite    # write test/spec/d/6[34]_fga_abac_*.sql (run by test/run.sh)
+    python3 -I test/fga_abac/generate.py            # write test/fga_abac/spec/*.sql instead (not run by test/run.sh)
     test/run.sh -v fga_abac > /tmp/abac.out
     python3 -I test/fga_abac/generate.py report /tmp/abac.out   # counts: run, passed, failed, skipped by reason
 

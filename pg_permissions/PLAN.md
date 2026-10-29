@@ -91,6 +91,8 @@ Done when: the validation oracle passes except the listed skips (each with a rea
 
 ### Phase 4: OpenFGA conditions (CEL)
 
+> Status: done (commit `pg_permissions: OpenFGA conditions with a PL/pgSQL CEL evaluator (phase 4)`). Conditions are compiled at model write (tokenizer, parser, type checker in PL/pgSQL, a jsonb AST in `fga_conditions`) and evaluated by a PL/pgSQL interpreter in every walk, with OpenFGA's error rules and a `conditional` flag that keeps unconditioned relations on their statements; decisions in DECISION.md, "Decisions for conditions (session 5)", design and deviations in `designs/d-conditions.md` (section 13). OpenFGA's ABAC suite passes 302/302 stored and 271/271 contextual (9 `$expression` cases skipped), the consolidated suite is still 933/746, the fga_lang oracle 70/70 (4 condition cases newly run); in-house specs `d/37`, `d/38` (142 CEL expressions), `d/39`, usage page `usage/conditions.md` (`d/90_usage_conditions`) and a "Conditions in policies" section in `usage/rls.md`; every mutant caught; the unconditioned fast path within noise on the benchmark; 53 files and 3,337 assertions locally and on PG 16, 17 and 18.
+
 Goal: conditions on tuples, type restrictions and models work as in OpenFGA, with the CEL evaluator written in PL/pgSQL (the user wants it in the database: no external service, no extension beyond pg_tle's limits). The largest single cost in the plan.
 
 Steps:

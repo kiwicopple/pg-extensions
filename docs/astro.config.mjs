@@ -64,6 +64,7 @@ export default defineConfig({
 						{ label: 'B: policy first', slug: 'designs/b-policy-first' },
 						{ label: 'C: compiled model', slug: 'designs/c-compiled-model' },
 						{ label: 'D: per-model tables', slug: 'designs/d-per-model' },
+						{ label: 'D: conditions (CEL)', slug: 'designs/d-conditions' },
 						{ label: 'Prototypes', slug: 'designs/prototypes' },
 					],
 				},

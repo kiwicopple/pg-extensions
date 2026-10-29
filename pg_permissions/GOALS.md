@@ -2,7 +2,7 @@
 
 Each goal is a spec file in [`test/spec/`](./test/spec/). A goal is met when its file passes. Write the test first, then the code. See [`test/README.md`](./test/README.md) for how to run things.
 
-Status as of 2026-10-29, from `test/run.sh` (the extension) and `test/run.sh --impl prototypes/<file>.sql`:
+Status as of 2026-10-30, from `test/run.sh` (the extension) and `test/run.sh --impl prototypes/<file>.sql`:
 
 ## Functional goals
 
@@ -20,18 +20,18 @@ Status as of 2026-10-29, from `test/run.sh` (the extension) and `test/run.sh --i
 | G10 | Parent inheritance: org → folder → document, single fast-path RLS branch, cycles terminate | §10 | `<design>/50_parents` | see `d/` (own scenarios) | ✅ 13/13 | ✅ 13/13 | ✅ 13/13 |
 | G11 | Public access (`user:*`); null subject is denied | §10 | `<design>/51_public` | see `d/` (own scenarios) | ✅ 7/7 | ✅ 7/7 | ✅ 7/7 |
 | G12 | Forbid beats grants, including parent-derived ones | §10 | `<design>/52_forbid` | see `d/` (own scenarios) | ✅ 9/9 | ✅ 9/9 | ✅ 9/9 |
-| G13 | Conditions: document status, expired grants | §10 | `<design>/53_conditions` | see `d/` (own scenarios) | ✅ 6/6 | ✅ 6/6 | ✅ 6/6 |
+| G13 | Conditions: document status, expired grants | §10 | `<design>/53_conditions` | see `d/` (OpenFGA conditions: `d/37`-`d/39`, `d/63`-`d/64`, `d/90_usage_conditions`) | ✅ 6/6 | ✅ 6/6 | ✅ 6/6 |
 | G14 | Installs as a non-superuser; via `pgtle.install_extension` if pg_tle is available | §10 | `03_tle_install` | ✅ 9/9 | ✅ 9/9 (pg_tle path on PG 16-18 in Docker) | ✅ 9/9 (same) | ✅ 9/9 (same) |
 | | RLS policies don't run `scopes_with_permission` at plan time (call-count probe; each design also has `a/58`, `b/56`, `c/57` for its own list function: 3/3, 8/8, 3/3) | §4 | `22_no_plan_time_eval` | ✅ 6/6 | ✅ 6/6 | ✅ 6/6 | ✅ 6/6 |
 | | Design-specific: B fails closed on forbids with missing inputs | | `b/54_fail_closed` | | | ✅ 16/16 | |
 | | Design-specific: C materialized memberships stay correct | | `c/32_memberships` | | | | ✅ 31/31 |
 | | Design-specific: C `who_can` reports public grants | | `c/54_who_can_public` | | | | ✅ 8/8 |
 | | Design-specific: C tenant as a parent type | | `c/55_tenant_parent` | | | | ✅ 9/9 |
-| | **Total** | | | **43/43 files, 2,463 assertions** | **18/18 files, 199 assertions** | **18/18 files, 189 assertions** | **21/21 files, 229 assertions** |
+| | **Total** | | | **53/53 files, 3,337 assertions** | **18/18 files, 199 assertions** | **18/18 files, 189 assertions** | **21/21 files, 229 assertions** |
 
 Zanzibar-level spec files (`30`+, in `test/spec/<design>/`) are per-design: each design has its own copy of the same scenario written in its native API, with the same assertions, so results compare one to one. G10–G14 are the v0.0.2 scenarios from PLAN.md §10.
 
-The extension (`pg_permissions--0.0.1.sql`) is design D. It passes the engine-independent specs (G1-G6, G14 and the plan-time probe) like A, B and C. G7-G13 are per-design specs in the prototypes' native API; D's equivalents are the `d/` specs (the OpenFGA API, cycles, set-based walks, RBAC plus FGA in RLS, the API limits, an error-hint check of every raise site, model validation, OpenFGA's own consolidated suite, openfga/language's model validation cases, and the usage pages' examples), so those rows read "see `d/`". The extension's total is the whole local run: 43 files, 2,463 assertions.
+The extension (`pg_permissions--0.0.1.sql`) is design D. It passes the engine-independent specs (G1-G6, G14 and the plan-time probe) like A, B and C. G7-G13 are per-design specs in the prototypes' native API; D's equivalents are the `d/` specs (the OpenFGA API, cycles, set-based walks, RBAC plus FGA in RLS, the API limits, an error-hint check of every raise site, model validation, OpenFGA's own consolidated suite, openfga/language's model validation cases, OpenFGA's conditions (its ABAC suite and in-house CEL specs), and the usage pages' examples), so those rows read "see `d/`". The extension's total is the whole local run: 53 files, 3,337 assertions.
 
 ## Performance goals
 

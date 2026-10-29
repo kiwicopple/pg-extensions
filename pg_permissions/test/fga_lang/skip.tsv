@@ -7,8 +7,12 @@
 #   server: http 201). fga_write_authorization_model follows the server, so a
 #   model OpenFGA accepts is accepted here too. The server's validateTypeRestrictions
 #   and isUsersetRewriteValid (pkg/typesystem/typesystem.go) have no duplicate check.
-# conditions: the model uses OpenFGA conditions, which raise 0A000
-#   (pg_permissions:conditions_not_supported) until phase 4.
+# inline-expression: the model uses an inline condition ($expression), an
+#   experimental OpenFGA feature behind the inline_expressions flag, off by
+#   default. OpenFGA v1.22.1 with default flags rejects these models with 2000
+#   (field server), as pg_permissions does; the language validator accepts
+#   them, so the expectation (accepted) disagrees with the server
+#   (designs/d-conditions.md, open question 1, decided out of scope).
 # schema-1.2: a modular model (schema 1.2). OpenFGA accepts 1.2; this extension
 #   accepts only 1.1 and raises 2057 before any other check (designs/d-per-model.md
 #   section 8, item 11). The server rejects these with 2056 for a missing relation.
@@ -28,14 +32,10 @@ duplicate relationship symbol in difference relationship definition	server-accep
 duplicate union relationship import in parent relationship definition	server-accepts	server 201
 duplicate intersection relationship import in parent relationship definition	server-accepts	server 201
 duplicate difference relationship import in parent relationship definition	server-accepts	server 201
-condition not defined - single character	conditions	server: 2056 condition c is undefined
-condition not defined	conditions	server: 2056 condition allowed_ip is undefined
-condition not defined x2	conditions	server: 2056 condition allowed_ip is undefined
-extraneous condition	conditions	an unused condition; the server accepts it too (201)
-handle single name duplicated type and unused condition	conditions	server: 2056 duplicate types; D checks conditions first
-unused condition whose name is a prefix of an earlier condition points at the correct line	conditions	an unused condition; the server accepts it too (201)
-inline expression mixed with plain and named condition is valid	conditions	server: 2000, $expression needs the inline_expressions feature flag
-inline expression on userset is valid	conditions	server: 2000, $expression needs the inline_expressions feature flag
+extraneous condition	server-accepts	an unused condition: the language validator flags it, the server accepts it (201), as does pg_permissions
+unused condition whose name is a prefix of an earlier condition points at the correct line	server-accepts	an unused condition: the language validator flags it, the server accepts it (201), as does pg_permissions
+inline expression mixed with plain and named condition is valid	inline-expression	server: 2000, $expression needs the inline_expressions feature flag; pg_permissions rejects it with 2000 too
+inline expression on userset is valid	inline-expression	server: 2000, $expression needs the inline_expressions feature flag; pg_permissions rejects it with 2000 too
 union does not require all child to have entry	upstream-skip	expects acceptance; server: 2056 cycle (action1 -> action2 -> action1 through computed usersets)
 union does not require all child to have entry even for intersection child	upstream-skip	expects acceptance; server: 2056 cycle (union1 -> union2 -> union1)
 union does not require all child to have entry even for exclusion child	upstream-skip	expects acceptance; server: 2056 cycle (union1 -> union2 -> union1)

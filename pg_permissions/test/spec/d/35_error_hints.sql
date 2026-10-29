@@ -9,7 +9,8 @@
 --
 -- Guard: a static scan of the extension's function bodies (pg_proc.prosrc)
 -- finds every raise site: each `raise`, and each call of the error helpers
--- _fga_error and _fga_unsupported. Each must pass a hint, and the number of
+-- _fga_error (and _fga_unsupported, gone since conditions are supported).
+-- Each must pass a hint, and the number of
 -- sites must equal the number of rows below, so a new raise site fails this
 -- file until it has a hint and a row.
 \ir ../../fixtures/ids.sql
@@ -17,6 +18,17 @@
 
 select permissions.create_role('viewer', '{documents.read}');
 select permissions.create_role('editor', '{documents.edit}', '{viewer}');
+
+-- a model with a condition (the first model; v1 below is the latest)
+select permissions.fga_write_authorization_model($m${
+  "schema_version": "1.1",
+  "type_definitions": [
+    {"type": "user"},
+    {"type": "doc", "relations": {"viewer": {"this": {}}},
+     "metadata": {"relations": {"viewer": {"directly_related_user_types": [{"type": "user", "condition": "cx"}]}}}}],
+  "conditions": {"cx": {"name": "cx", "expression": "x < 100", "parameters": {"x": {"type_name": "TYPE_NAME_INT"}}}}}$m$::jsonb) as vc \gset
+select permissions.fga_write('[{"user": "user:jon", "relation": "viewer", "object": "doc:1", "condition": {"name": "cx"}}]',
+                             authorization_model_id => :'vc');
 
 select permissions.fga_write_authorization_model($m${
   "schema_version": "1.1",
@@ -85,8 +97,15 @@ insert into sites (site, stmt, st, detail, msg, hint) values
 -- tuple keys (validation.ValidateTupleForWrite) and contextual tuples
 ('tuple_for_write: not an object', $$ select permissions.fga_write('[1]') $$,
  '22023', 'openfga:2027 invalid_tuple', '^invalid tuple key: 1$', null),
-('tuple_for_write: condition', $$ select permissions.fga_write('[{"user": "user:x", "relation": "editor", "object": "document:9", "condition": {"name": "c"}}]') $$,
- '0A000', 'pg_permissions:conditions_not_supported', '^relationship condition ''c'' on tuple ''document:9#editor@user:x'' is not supported$', 'without "condition"'),
+('tuple_for_write: condition', $$ select permissions.fga_write('[{"user": "user:x", "relation": "editor", "object": "document:9", "condition": {"name": "cx"}}]') $$,
+ '22023', 'openfga:2000 validation_error', '^Invalid tuple ''document:9#editor@user:x''\. Reason: undefined condition ''cx''$', 'the model''s conditions: none\.$'),
+-- conditions (designs/d-conditions.md)
+('context: not an object', $$ select permissions.fga_check('user:anne', 'viewer', 'document:1', context => '[1]') $$,
+ '22023', 'openfga:2000 validation_error', '^invalid context: must be a JSON object of condition parameters, got a JSON array$', 'context =>'),
+('condition: evaluation error', $$ select permissions.fga_check('user:jon', 'viewer', 'doc:1', authorization_model_id => (select m.id from permissions.fga_models m order by m.seq limit 1)) $$,
+ '22023', 'openfga:2000 validation_error', '^failed to evaluate relationship condition: ''cx'' - context is missing parameters ''\[x\]''$', '^Pass every parameter the condition declares'),
+('write: another condition, on_duplicate ignore', $$ select permissions.fga_write('{"tuple_keys": [{"user": "user:jon", "relation": "viewer", "object": "doc:1", "condition": {"name": "cx", "context": {"x": 1}}}], "on_duplicate": "ignore"}', authorization_model_id => (select m.id from permissions.fga_models m order by m.seq limit 1)) $$,
+ '22023', 'openfga:2017 write_failed_due_to_invalid_input', '^attempted to write a tuple which already exists with a different condition: doc:1#viewer@user:jon \(stored: condition cx \{\}, written: condition cx \{"x": 1\}\)$', 'delete it, then write it again'),
 ('tuple_for_write: invalid user or object', $$ select permissions.fga_write('[{"user": "usr:x", "relation": "editor", "object": "document:9"}]') $$,
  '22023', 'openfga:2027 invalid_tuple', '^Invalid tuple ''document:9#editor@usr:x''\. Reason: invalid ''user'' value: usr:x: type ''usr'' not found$', '^Did you mean ''user''\?'),
 ('tuple_for_write: tupleset', $$ select permissions.fga_write('[{"user": "folder:*", "relation": "parent", "object": "document:1"}]') $$,
@@ -101,13 +120,17 @@ insert into sites (site, stmt, st, detail, msg, hint) values
 ('model id: none written', $$ do $d$ begin perform permissions.fga_delete_store(); perform permissions.fga_check('user:anne', 'viewer', 'document:1'); end $d$ $$,
  '22023', 'openfga:2020 latest_authorization_model_not_found', '^No authorization models found for store$', 'fga_write_authorization_model\('),
 ('model id: unknown', $$ select permissions.fga_check('user:anne', 'viewer', 'document:1', null, '01ARZ3NDEKTSV4RRFFQ69G5FAV') $$,
- '22023', 'openfga:2001 authorization_model_not_found', '^Authorization Model ''01ARZ3NDEKTSV4RRFFQ69G5FAV'' not found$', '^Model ids, newest first: ' || :'v1' || '\.'),
+ '22023', 'openfga:2001 authorization_model_not_found', '^Authorization Model ''01ARZ3NDEKTSV4RRFFQ69G5FAV'' not found$', '^Model ids, newest first: ' || :'v1' || ', ' || :'vc' || '\.'),
 ('model: not an object', $$ select permissions.fga_write_authorization_model('[]') $$,
  '22023', 'openfga:2056 invalid_authorization_model', '^the authorization model must be a JSON object, got a JSON array$', 'schema_version'),
 ('model: schema version', $$ select permissions.fga_write_authorization_model('{"schema_version": "1.0", "type_definitions": [{"type": "user"}]}') $$,
  '22023', 'openfga:2056 invalid_authorization_model', '^unsupported schema version 1\.0: only 1\.1 is supported$', '"schema_version": "1\.1"'),
-('model: conditions', $$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [{"type": "user"}], "conditions": {"c": {"name": "c", "expression": "true"}}}') $$,
- '0A000', 'pg_permissions:conditions_not_supported', '^conditions are not supported: the model defines condition ''c''$', null),
+('model: condition request validation', $$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [{"type": "user"}], "conditions": {"a:b": {"name": "a:b", "expression": "true"}}}') $$,
+ '22023', 'openfga:2000 validation_error', '^invalid Condition\.Name ''a:b'': value does not match regex pattern', 'at most 25 parameters'),
+('model: inline expression', $$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [{"type": "user"}, {"type": "doc", "relations": {"viewer": {"this": {}}}, "metadata": {"relations": {"viewer": {"directly_related_user_types": [{"type": "user", "condition": "$expression"}]}}}}]}') $$,
+ '22023', 'openfga:2000 validation_error', '^\$expression requires the "inline_expressions" experimental feature flag: doc#viewer allows user with condition ''\$expression''$', 'define a named condition'),
+('model: condition does not compile', $$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [{"type": "user"}], "conditions": {"c": {"name": "c", "expression": "x < 1", "parameters": {"x": {"type_name": "TYPE_NAME_STRING"}}}}}') $$,
+ '22023', 'openfga:2056 invalid_authorization_model', '^failed to compile expression on condition ''c'' - found no matching overload for ''_<_'' applied to ''\(string, int\)'' \(column 3\)$', 'no implicit conversions'),
 ('model: no type definitions', $$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": []}') $$,
  '22023', 'openfga:2056 invalid_authorization_model', '^type_definitions must be a non-empty array, got \[\]$', null),
 ('model: type name', $$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [{"type": "a:b"}]}') $$,
@@ -122,8 +145,8 @@ insert into sites (site, stmt, st, detail, msg, hint) values
  '22023', 'openfga:2056 invalid_authorization_model', '^invalid relation name ''doc#this'': self and this are reserved keywords$', 'Rename the relation'),
 ('model: metadata for an undefined relation', $$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [{"type": "user"}, {"type": "doc", "relations": {"viewer": {"this": {}}}, "metadata": {"relations": {"viewer": {"directly_related_user_types": [{"type": "user"}]}, "viewr": {}}}}]}') $$,
  '22023', 'openfga:2056 invalid_authorization_model', '^metadata for undefined relation ''doc#viewr''$', '^Did you mean ''viewer''\?'),
-('model: condition on a type restriction', $$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [{"type": "user"}, {"type": "doc", "relations": {"viewer": {"this": {}}}, "metadata": {"relations": {"viewer": {"directly_related_user_types": [{"type": "user", "condition": "c"}]}}}}]}') $$,
- '0A000', 'pg_permissions:conditions_not_supported', '^conditions on type restrictions are not supported: ''doc#viewer'' allows ''user'' with condition ''c''$', null),
+('model: undefined condition', $$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [{"type": "user"}, {"type": "doc", "relations": {"viewer": {"this": {}}}, "metadata": {"relations": {"viewer": {"directly_related_user_types": [{"type": "user", "condition": "c"}]}}}}]}') $$,
+ '22023', 'openfga:2056 invalid_authorization_model', '^condition c is undefined for relation viewer \(doc#viewer allows user with c\)$', 'Conditions in this model: none\.$'),
 ('model: type restriction', $$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [{"type": "user"}, {"type": "doc", "relations": {"viewer": {"this": {}}}, "metadata": {"relations": {"viewer": {"directly_related_user_types": [{"type": "usr"}]}}}}]}') $$,
  '22023', 'openfga:2056 invalid_authorization_model', '^invalid type restriction: doc#viewer allows usr \(undefined type or relation\)$', '^Did you mean ''user''\?'),
 ('model: rewrite', $$ select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [{"type": "user"}, {"type": "doc", "relations": {"viewer": {"nonsense": {}}}}]}') $$,
@@ -205,8 +228,8 @@ select tap.is(
 select tap.is((select count(*)::int from raise_sites where fn not in ('_fga_error', '_fga_unsupported')),
               (select count(*)::int from sites), 'guard: one row below per raise site in the extension');
 select tap.is((select count(distinct site)::int from sites), (select count(*)::int from sites), 'each row is a different site');
-select tap.is((select count(*)::int from raise_sites where fn in ('_fga_error', '_fga_unsupported')), 2,
-              'the two error helpers raise once each');
+select tap.is((select count(*)::int from raise_sites where fn in ('_fga_error', '_fga_unsupported')), 1,
+              'the error helper raises once');
 
 select tap.is(
     (select concat_ws('; ',

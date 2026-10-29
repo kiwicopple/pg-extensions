@@ -22,7 +22,7 @@
 \set draft  'd0000000-0000-0000-0000-000000000004'
 \set diary  'd0000000-0000-0000-0000-000000000005'
 
-select tap.plan(32);
+select tap.plan(36);
 
 -- ============================================================================
 -- Setup
@@ -204,6 +204,47 @@ select tap.is(permissions.fga_check('user:' || :'bob', 'reader', 'document:' || 
                       then jsonb_build_array(jsonb_build_object('user', 'user:*', 'relation', 'published', 'object', 'document:' || d.id))
                   end), false, 'attributes: not reader of the draft')
 from public.documents d where d.id = :'draft';
+
+-- ============================================================================
+-- Conditions in policies
+-- ============================================================================
+
+-- `fga model transform` of the page's model with the viewer line and the condition changed (openfga/cli v0.8.2;
+-- its \u003c written as <, which psql's \set would mangle):
+\set model '{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"member":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"member":{"this":{}}},"type":"team"},{"metadata":{"relations":{"banned":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"banned":{"this":{}}},"type":"org"},{"metadata":{"relations":{"editor":{"directly_related_user_types":[{"type":"user"}]},"owner":{"directly_related_user_types":[{"type":"user"}]},"published":{"directly_related_user_types":[{"type":"user","wildcard":{}}]},"reader":{},"viewer":{"directly_related_user_types":[{"type":"user"},{"condition":"non_expired_grant","type":"user"},{"relation":"member","type":"team"}]}}},"relations":{"editor":{"union":{"child":[{"this":{}},{"computedUserset":{"relation":"owner"}}]}},"owner":{"this":{}},"published":{"this":{}},"reader":{"union":{"child":[{"intersection":{"child":[{"computedUserset":{"relation":"viewer"}},{"computedUserset":{"relation":"published"}}]}},{"computedUserset":{"relation":"editor"}}]}},"viewer":{"union":{"child":[{"this":{}},{"computedUserset":{"relation":"editor"}}]}}},"type":"document"}],"conditions":{"non_expired_grant":{"expression":"current_time < grant_time + grant_duration","name":"non_expired_grant","parameters":{"current_time":{"type_name":"TYPE_NAME_TIMESTAMP"},"grant_duration":{"type_name":"TYPE_NAME_DURATION"},"grant_time":{"type_name":"TYPE_NAME_TIMESTAMP"}}}}}'
+select permissions.fga_write_authorization_model(:'model');
+select permissions.fga_write(jsonb_build_array(jsonb_build_object(
+    'user', 'user:' || :'erin', 'relation', 'viewer', 'object', 'document:' || :'plan',
+    'condition', jsonb_build_object('name', 'non_expired_grant',
+        'context', jsonb_build_object('grant_time', now() - interval '1 day', 'grant_duration', '720h')))));
+
+set role authenticated;
+select set_config('permissions.subject_id', :'erin', false);
+select tap.set_eq(array(select id::text from public.documents), '{}'::text[], 'conditions: Erin sees nothing, the policies have no current_time');
+select tap.is(permissions.fga_check_current('viewer', 'document:' || :'plan'), false, 'conditions: fga_check_current is false, not an error');
+reset role;
+
+create function public.fga_check_now(relation text, object text) returns boolean
+language plpgsql stable security definer set search_path = ''
+as $$
+begin
+    return permissions.fga_check('user:' || permissions.current_subject_id(), relation, object,
+                                 context => jsonb_build_object('current_time', now()));
+exception when invalid_parameter_value then
+    return false;   -- no subject, or a condition that still can't be evaluated (openfga:2000): deny
+end;
+$$;
+revoke all on function public.fga_check_now(text, text) from public;
+grant execute on function public.fga_check_now(text, text) to authenticated;
+
+create policy documents_select_timed on public.documents for select to authenticated
+    using (public.fga_check_now('viewer', 'document:' || id));
+
+set role authenticated;
+select tap.set_eq(array(select id::text from public.documents), array[:'plan'], 'conditions: with the time passed by fga_check_now, Erin sees the acme plan');
+select set_config('permissions.subject_id', '', false);
+select tap.set_eq(array(select id::text from public.documents), '{}'::text[], 'conditions: no subject, nothing (fga_check_now denies)');
+reset role;
 
 -- ============================================================================
 -- Cleaning up when a user is deleted

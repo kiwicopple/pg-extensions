@@ -216,7 +216,52 @@ from public.documents d where d.id = :'notes';   -- true
 -- the same for :'draft' is false: no published tuple, and Bob doesn't edit it
 ```
 
-This needs `fga_check`, which is admin-only: the current-subject functions take no contextual tuples, because a client could pass any. Attributes on a relationship rather than on a row (an expiry, an IP range) will be OpenFGA conditions, which aren't supported yet ([PLAN.md](../PLAN.md), phase 4).
+This needs `fga_check`, which is admin-only: the current-subject functions take no contextual tuples, because a client could pass any. Attributes on a relationship rather than on a row (an expiry, an IP range) are [OpenFGA conditions](conditions.md); the next section is about them in policies.
+
+## Conditions in policies
+
+The current-subject functions take no request `context` either, for the same reason: a client could claim any time or address. A conditioned tuple counts in a policy when its condition is true from the context stored in the tuple alone. One whose condition needs a request parameter is denied, and so is any answer that depends on a condition that can't be evaluated: an erroring `but not` denies rather than lets the user through. A policy never fails because of a condition.
+
+A new version of the model gives `viewer` a time-limited grant (`[user, user with non_expired_grant, team#member] or editor`, with the condition from [OpenFGA conditions](conditions.md#a-model-with-conditions)), and Erin gets 30 days on the acme plan:
+
+```sql
+-- model.json is the model above with the viewer line and the condition changed
+\set model `cat model.json`
+select permissions.fga_write_authorization_model(:'model');
+select permissions.fga_write(jsonb_build_array(jsonb_build_object(
+    'user', 'user:' || :'erin', 'relation', 'viewer', 'object', 'document:' || :'plan',
+    'condition', jsonb_build_object('name', 'non_expired_grant',
+        'context', jsonb_build_object('grant_time', now() - interval '1 day', 'grant_duration', '720h')))));
+
+-- as Erin
+select id from public.documents;                                            -- nothing: the policies have no current_time
+select permissions.fga_check_current('viewer', 'document:' || :'plan');     -- false, not an error
+```
+
+A value the server can vouch for, such as the time, can be passed by a function of your own that calls `fga_check` (admin-only, so the function is `security definer`, like the trigger below) and supplies it:
+
+```sql
+create function public.fga_check_now(relation text, object text) returns boolean
+language plpgsql stable security definer set search_path = ''
+as $$
+begin
+    return permissions.fga_check('user:' || permissions.current_subject_id(), relation, object,
+                                 context => jsonb_build_object('current_time', now()));
+exception when invalid_parameter_value then
+    return false;   -- no subject, or a condition that still can't be evaluated (openfga:2000): deny
+end;
+$$;
+revoke all on function public.fga_check_now(text, text) from public;
+grant execute on function public.fga_check_now(text, text) to authenticated;
+
+create policy documents_select_timed on public.documents for select to authenticated
+    using (public.fga_check_now('viewer', 'document:' || id));
+
+-- as Erin
+select id from public.documents;   -- the acme plan, for 29 more days
+```
+
+That is one Check per row, each in an exception block (a subtransaction): fine for a single row or a short list, slow for a wide one. Whether the extension should give the RLS helpers trusted values such as the time itself is an open question ([`designs/d-conditions.md`](../designs/d-conditions.md), open question 2).
 
 ## Cleaning up when a user is deleted
 

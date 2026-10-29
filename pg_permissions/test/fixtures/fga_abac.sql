@@ -3,8 +3,7 @@
 -- test/fga_abac/generate.py). Load after fga_suite.sql. Like its helpers, each
 -- runs one upstream assertion and returns 'ok' or what differed; these also
 -- pass the request's condition context as the check functions' `context`
--- argument (designs/d-conditions.md, API). The argument does not exist before
--- phase 4's evaluator: until then every assertion here fails.
+-- argument (designs/d-conditions.md, section 7.2).
 
 create function fga_test.check_c(p_user text, p_relation text, p_object text, p_ctx jsonb, p_context jsonb,
                                  p_want boolean, p_code int, p_model text)
