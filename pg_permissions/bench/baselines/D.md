@@ -11,8 +11,138 @@ Design D ([`../../designs/d-per-model.md`](../../designs/d-per-model.md), [`../.
 - **The single-branch parents rows are not comparable** (D 1.4 ms against A's 45.6 ms at large): D keeps org roles in `rbac_*` and composes, so its FGA walk never visits the org-role documents that A, B and C walk to. With org roles mirrored into FGA (A's scenario literally), D's ListObjects for the same users takes 52 ms per call against A's 45.6 ms page (section "FGA-only parents").
 - **Worst hotspot: ListObjects on a relation with `but not`.** Not in the benchmark model; measured separately on the wide data: 2.1 s per call (6,700 candidates, each a full top-down Check), against 17 ms for the monotone relation.
 - **Storage:** 285 MB at large after the parents seed, between C (182 MB) and B/A (378/404 MB). Seeds through the native Write API are in A's range (large parents: 33.8 s; A 31.0, B 44.8, C 17.6).
+- **Phase 6 (small and medium measured, large budget re-baselined; section below):** D is within 1.1x of the best engine on reads at medium and large and 1.0-1.4x at small, trails most on Check (0.37-0.38 ms against 0.25-0.34), and misses no budget at small or medium; large `parents_proj_select_count` budget 9 → 20 ms for every engine (p50 7.5-9.4 ms is a heap-fetch floor; worst p95 ever measured 16.1), `--check` at large passes.
 - **opt3 (phase 5 of session 5, section below):** non-monotone ListObjects set-based over the rewrite tree (wide `viewer but not (blocked or muted)` 5.2 s → 7.6 ms, `editor and viewer` 621 → 6.1 ms), typed writes (0.25 → 0.16 ms; large parents seed 33 → 15 s), Check 0.45-0.47 → 0.40 ms at medium, conditions evaluated once per distinct context (wide conditioned ListObjects 14.8 → 10.6 ms; with a context per tuple 3.2 s → 0.17 s). The covering index is measured and left to the user (+120 MB at large, no pgbench gain). Checksums identical to A, B and C.
 - **opt2 (second pass, section below):** the fixes proposed under "Diagnosis" (pruned CTE walk, set-based `but not`), measured the same way. Wide FGA reads 2.2-4x faster, now 1.2-1.5x the best of A/B/C and faster than A on every wide page; deep ListObjects 0.78 → 0.33 ms; no budget miss except the large one all engines share; `but not` ListObjects 2.1 s → 4.2 ms. Check and writes unchanged.
+
+## Phase 6: small, medium and large across the four designs (2026-10-30)
+
+Phase 6 of [`PLAN.md`](../../PLAN.md) ("loose ends"): the small and medium default shapes had never been measured after the optimizations, and the large `parents_proj_select_count` budget missed for every engine. Tag `p6`, reports `pg18-docker-{d,a,b,c}-{small,medium,large}-default-p6.md` (JSON in `data/`), plus `pg18-docker-d-large-default-p6check.md` (the `--check` run, below). D is `pg_permissions--0.0.1.sql` at `f5a25a7` (after the API rename; the bench's d seed and workloads call the `rbac_*` names), A, B and C are the prototypes. Setup as in opt3: Docker, Postgres 18.6, pg_tle 1.5.3, `cpus: 4`, `mem_limit: 6g`, 4 pgbench clients, 10 s per workload, one run at a time through `docker/run-matrix.sh bench --versions 18 --designs <d> -- --scale <s> --tag p6 --check`, nothing else of mine running. The budgets in the tables are the ones in force when each run started (large `parents_proj_select_count` was still 9 ms).
+
+**What else was running** (`docker ps` and `uptime` before every run, summarized in `JOURNAL.md`): the unrelated `supabase_*_swarm-new` stack (idle), `freereps-local-*` (idle), `gallant_ritchie` (openfga, idle) and, from 15:37, a second unrelated Supabase stack (`supabase_*_agar`) that appeared on the same machine; idle once up (about 10% of one CPU across all containers) but noisy while it started. The laptop itself was in use (Chrome, Notion; host load average 4-8 at the start of each kept run, 15-21 during the discarded ones).
+
+**One batch was discarded.** The first small batch (15:28-15:40, D, A, B, C) ran while the machine was busy, and the C run (and a medium D run started right after) overlapped the `agar` stack starting: p95s were 2-5x their p50 on every engine, and A, B and C missed 11, 6 and 11 budgets at small (A's `rbac_check` p95 1.59 against 1 ms), D one (`nest_check` p95 3.59 ms). The medium D run was killed. I waited about 11 minutes, polling `docker stats`, until the other stacks were idle, and reran everything in the order small C, medium D/A/B/C, small D/A/B/C (a second time, so the four small runs share a batch), large D/A/B/C, large D check. The discarded runs' reports were in the git-ignored `bench/results/` only. The numbers below are the clean batch; large agrees with the opt3 section's p50s for every design (for example D `parents_select_count` 7.59 → 7.76 ms, A 75.08 → 69.89, B 21.57 → 21.21, C 11.88 → 11.45; those are D opt3 and A/B/C `opt`).
+
+p50 / p95 in ms. "vs best" is D's p50 over the best p50 of A, B and C. At small, most rows are 0.2-0.6 ms, so a 1.8x is 0.06 ms.
+
+#### Small (10k documents), default shape
+
+<!-- reports: pg18-docker-{d,a,b,c}-small-default-p6.md -->
+
+| workload | D p50 / p95 | A p50 / p95 | B p50 / p95 | C p50 / p95 | D vs best of A/B/C (p50) | budget p95 | over budget |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| rbac_check | 0.20 / 0.29 | 0.17 / 0.61 | 0.25 / 0.45 | 0.24 / 0.39 | 1.2x | 1 | none |
+| rbac_select_page | 0.28 / 0.38 | 0.23 / 0.81 | 0.33 / 0.46 | 0.30 / 0.43 | 1.2x | 2 | none |
+| rbac_select_count | 0.24 / 0.33 | 0.17 / 0.64 | 0.29 / 0.38 | 0.25 / 0.49 | 1.4x | 2 | none |
+| rbac_update_one | 0.26 / 0.40 | 0.49 / 1.32 | 0.43 / 0.66 | 0.36 / 0.84 | 0.7x | 4 | none |
+| write_assign_role | 0.14 / 0.23 | 0.08 / 0.32 | 0.14 / 0.20 | 0.17 / 0.41 | 1.8x | 1 | none |
+| share_list_objects | 0.28 / 0.46 | 0.26 / 0.51 | 0.28 / 0.38 | 0.23 / 0.48 | 1.2x | 2 | none |
+| share_select_page | 0.39 / 0.54 | 0.46 / 0.71 | 0.47 / 0.92 | 0.39 / 0.64 | 1.0x | 5 | none |
+| write_share | 0.15 / 0.26 | 0.14 / 0.23 | 0.14 / 0.23 | 0.17 / 0.40 | 1.1x | 1 | none |
+| parents_proj_select_page | 0.46 / 0.88 | 0.64 / 0.99 | 0.53 / 1.16 | 0.46 / 1.11 | 1.0x | 2 | none |
+| parents_proj_select_count | 0.44 / 0.63 | 0.62 / 0.98 | 0.51 / 0.94 | 0.44 / 1.04 | 1.0x | 2 | none |
+| parents_select_page | 0.41 / 0.63 | 2.68 / 4.03 | 1.21 / 1.86 | 0.74 / 1.58 | 0.6x | 4 | A |
+| parents_select_count | 0.40 / 1.03 | 2.52 / 3.22 | 1.11 / 1.57 | 0.63 / 1.24 | 0.6x | 4 | none |
+| write_nest_team | 0.13 / 0.35 | 0.14 / 0.28 | 0.81 / 1.27 | 32.03 / 44.74 | 0.9x | 1 | B, C |
+| nest_check | 0.37 / 0.99 | 0.33 / 0.79 | 0.30 / 0.47 | 0.25 / 0.49 | 1.5x | 1 | none |
+
+#### Medium (100k documents), default shape
+
+<!-- reports: pg18-docker-{d,a,b,c}-medium-default-p6.md -->
+
+| workload | D p50 / p95 | A p50 / p95 | B p50 / p95 | C p50 / p95 | D vs best of A/B/C (p50) | budget p95 | over budget |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| rbac_check | 0.15 / 0.38 | 0.28 / 0.67 | 0.27 / 0.37 | 0.24 / 0.35 | 0.6x | 1 | none |
+| rbac_select_page | 0.38 / 0.95 | 0.43 / 1.12 | 0.46 / 0.81 | 0.41 / 0.56 | 0.9x | 2 | none |
+| rbac_select_count | 0.30 / 0.45 | 0.34 / 0.59 | 0.33 / 0.76 | 0.33 / 0.44 | 0.9x | 2 | none |
+| rbac_update_one | 0.27 / 0.46 | 0.53 / 1.49 | 0.46 / 0.98 | 0.34 / 0.47 | 0.8x | 3 | none |
+| write_assign_role | 0.13 / 0.23 | 0.16 / 0.33 | 0.14 / 0.27 | 0.17 / 0.28 | 0.9x | 1 | none |
+| share_list_objects | 0.28 / 0.37 | 0.29 / 0.47 | 0.29 / 0.39 | 0.25 / 0.33 | 1.1x | 1 | none |
+| share_select_page | 0.57 / 1.18 | 0.65 / 1.14 | 0.64 / 1.32 | 0.54 / 0.75 | 1.1x | 3 | none |
+| write_share | 0.15 / 0.27 | 0.15 / 0.26 | 0.06 / 0.25 | 0.17 / 0.34 | 2.5x | 1 | none |
+| parents_proj_select_page | 0.64 / 0.84 | 0.86 / 1.15 | 0.73 / 1.17 | 0.65 / 1.74 | 1.0x | 3 | none |
+| parents_proj_select_count | 0.95 / 1.31 | 1.16 / 1.62 | 1.09 / 2.37 | 0.91 / 1.51 | 1.0x | 3 | none |
+| parents_select_page | 0.61 / 1.43 | 7.26 / 10.27 | 4.41 / 5.90 | 2.77 / 3.92 | 0.2x | 16 | none |
+| parents_select_count | 0.91 / 1.42 | 6.26 / 8.19 | 3.67 / 4.62 | 2.03 / 2.54 | 0.4x | 14 | none |
+| write_nest_team | 0.15 / 0.26 | 0.15 / 0.22 | 0.69 / 0.78 | 44.98 / 54.07 | 1.0x | 1 | C |
+| nest_check | 0.38 / 0.51 | 0.34 / 0.46 | 0.32 / 0.42 | 0.29 / 0.38 | 1.3x | 1 | none |
+
+#### Large (1M documents), default shape
+
+<!-- reports: pg18-docker-{d,a,b,c}-large-default-p6.md -->
+
+| workload | D p50 / p95 | A p50 / p95 | B p50 / p95 | C p50 / p95 | D vs best of A/B/C (p50) | budget p95 | over budget |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| rbac_check | 0.17 / 0.38 | 0.27 / 0.48 | 0.27 / 0.35 | 0.25 / 0.37 | 0.7x | 1 | none |
+| rbac_select_page | 0.72 / 2.06 | 0.74 / 1.96 | 0.71 / 0.92 | 0.69 / 0.96 | 1.0x | 3 | none |
+| rbac_select_count | 0.76 / 1.56 | 0.79 / 1.41 | 0.78 / 1.02 | 0.77 / 1.19 | 1.0x | 3 | none |
+| rbac_update_one | 0.24 / 0.54 | 0.52 / 1.09 | 0.40 / 0.57 | 0.35 / 0.49 | 0.7x | 3 | none |
+| write_assign_role | 0.12 / 0.27 | 0.14 / 0.27 | 0.14 / 0.21 | 0.18 / 0.24 | 0.9x | 1 | none |
+| share_list_objects | 0.27 / 0.62 | 0.28 / 0.67 | 0.28 / 0.39 | 0.26 / 0.35 | 1.0x | 2 | none |
+| share_select_page | 1.05 / 2.38 | 1.06 / 1.90 | 1.00 / 1.27 | 0.94 / 1.31 | 1.1x | 6 | none |
+| write_share | 0.14 / 0.33 | 0.14 / 0.24 | 0.14 / 0.20 | 0.17 / 0.25 | 1.0x | 1 | none |
+| parents_proj_select_page | 1.04 / 1.90 | 1.36 / 3.11 | 1.15 / 1.56 | 1.04 / 1.50 | 1.0x | 4 | none |
+| parents_proj_select_count | 7.89 / 13.25 | 8.70 / 16.10 | 7.74 / 8.49 | 7.50 / 8.21 | 1.1x | 9 | D, A |
+| parents_select_page | 1.05 / 6.99 | 43.54 / 57.54 | 13.46 / 16.38 | 4.71 / 6.43 | 0.2x | 32 | A |
+| parents_select_count | 7.76 / 13.26 | 69.89 / 80.93 | 21.21 / 26.61 | 11.45 / 14.47 | 0.7x | 70 | A |
+| write_nest_team | 0.15 / 0.29 | 0.14 / 0.21 | 0.61 / 0.70 | 53.69 / 66.33 | 1.1x | 1 | C |
+| nest_check | 0.38 / 0.66 | 0.29 / 0.41 | 0.32 / 0.41 | 0.30 / 0.41 | 1.3x | 2 | none |
+
+#### D-only workloads (conditions and non-monotone relations), p50 / p95 ms
+
+| workload | small | medium | large |
+| --- | --- | --- | --- |
+| plain_list_objects | 0.17 / 0.60 | 0.29 / 0.52 | 0.33 / 1.94 |
+| cond_list_objects | 0.43 / 1.20 | 0.46 / 0.87 | 0.65 / 3.08 |
+| cond_select_page | 0.61 / 1.68 | 0.85 / 2.19 | 1.51 / 8.47 |
+| cond_nest_check | 0.58 / 1.63 | 0.57 / 1.29 | 0.56 / 1.24 |
+| plain_list_users | 0.36 / 2.61 | 0.31 / 1.74 | 0.33 / 1.57 |
+| cond_list_users | 0.59 / 3.49 | 0.46 / 2.13 | 0.52 / 2.36 |
+| block_list_objects | 0.26 / 0.88 | 0.37 / 0.88 | 0.42 / 2.31 |
+| block_or_mute_list_objects | 0.63 / 1.58 | 0.59 / 1.08 | 0.54 / 2.62 |
+| intersect_list_objects | 0.35 / 1.01 | 0.41 / 1.10 | 0.49 / 2.68 |
+
+Seed time (s) / cumulative size of the `permissions` tables (MB) after each phase. D's later phases (conditions, blocklist) have no counterpart in A, B and C; compare through `nesting`.
+
+| scale | design | rbac | sharing | parents_proj | parents | nesting | conditions | blocklist |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| small | D | 0.06 / 1.1 | 0.37 / 3.2 | 0.02 / 3.3 | 0.14 / 6.3 | 0.02 / 6.3 | 0.43 / 7.3 | 0.31 / 8.1 |
+| small | A | 0.10 / 1.0 | 0.12 / 2.5 | 0.02 / 2.6 | 0.21 / 6.5 | 0.02 / 6.5 |  |  |
+| small | B | 0.09 / 1.1 | 0.16 / 2.7 | 0.03 / 2.8 | 0.60 / 6.5 | 0.02 / 6.5 |  |  |
+| small | C | 0.15 / 1.0 | 0.58 / 2.7 | 0.08 / 3.0 | 0.17 / 4.6 | 0.11 / 5.1 |  |  |
+| medium | D | 0.44 / 3.0 | 0.59 / 9.6 | 0.03 / 10.0 | 1.43 / 40.6 | 0.01 / 40.6 | 0.59 / 43.5 | 0.48 / 47.2 |
+| medium | A | 0.60 / 3.6 | 0.42 / 9.5 | 0.05 / 10.1 | 2.17 / 48.6 | 0.02 / 48.6 |  |  |
+| medium | B | 0.55 / 3.9 | 0.46 / 10.0 | 0.05 / 10.6 | 3.73 / 46.4 | 0.02 / 46.4 |  |  |
+| medium | C | 0.78 / 2.9 | 0.95 / 10.4 | 0.15 / 11.0 | 1.60 / 27.0 | 0.03 / 27.8 |  |  |
+| large | D | 4.39 / 5.4 | 1.04 / 17.9 | 0.05 / 18.6 | 15.35 / 323.7 | 0.02 / 323.7 | 1.37 / 329.5 | 0.78 / 337.0 |
+| large | A | 4.71 / 7.0 | 1.06 / 18.7 | 0.07 / 19.6 | 29.76 / 404.3 | 0.03 / 404.3 |  |  |
+| large | B | 3.82 / 7.4 | 0.82 / 19.6 | 0.10 / 20.6 | 43.26 / 377.9 | 0.02 / 377.9 |  |  |
+| large | C | 4.43 / 5.3 | 1.86 / 21.3 | 0.30 / 22.3 | 16.83 / 182.4 | 0.04 / 183.2 |  |  |
+**Checksums** (per read policy, from each run's output): identical across D, A, B and C at all three scales, and D's conditions phase equals its parents phase.
+
+| scale | rbac | sharing | parents_proj = parents |
+| --- | --- | --- | --- |
+| small | `8d25a1e0` | `577076ec` | `ca5b4e06` |
+| medium | `d394663f` | `9b43a472` | `afbedca5` |
+| large | `2e1dd348` | `58a66d1d` | `bffa5242` |
+
+### What the three scales show
+
+- **D is within 1.1x of the best engine on every read at medium and large, except Check.** At small every engine answers in under 1 ms (p50 0.2-0.6 ms on the common rows), D is 1.0-1.4x the best on the RBAC and sharing reads (0.03-0.07 ms apart), and its single-branch parents policy (`parents_select_*`) is 0.4 ms against A's 2.5-2.7. The gap opens with scale: D's `parents_select_count` p50 is 0.40, 0.91 and 7.76 ms at small, medium and large; A's is 2.52, 6.26 and 69.89; B's 1.11, 3.67 and 21.21; C's 0.63, 2.03 and 11.45.
+- **Check is the one workload where D trails** (`nest_check` 0.37-0.38 ms at every scale, 1.3-1.5x A, B and C at 0.25-0.34): the fixed statement count of `_fga_bidi` (opt3, remaining gap 2). It stays within its budget (1 ms at small and medium, 2 ms at large).
+- **Writes:** D's `write_share` and `write_nest_team` are 0.13-0.15 ms at every scale (no materialized memberships; a write is one row). B's nest write is 0.6-0.8 ms and C's 32 (small), 45 (medium) and 54 ms (large), the 50-100x over budget it has always had. At small, A's `write_assign_role` is 0.08 ms against D's 0.14 (a 1.8x on a row the preset API makes trivial for A); at medium and large D is equal (0.13 against 0.16, 0.12 against 0.14 ms).
+- **Budgets at small and medium:** D misses none at either scale. Over budget in the clean batch: small, A `parents_select_page` (p95 4.03 against 4 ms), B `write_nest_team` (1.27 against 1) and C `write_nest_team`; medium, C `write_nest_team` only; large (old budget), `parents_proj_select_count` for D (13.25) and A (16.10), plus A's two single-branch rows (57.5 against 32, 80.9 against 70), and C's nest write. B and C passed `parents_proj_select_count` at 9 ms in this run (8.49, 8.21) and not in earlier ones: the p95 of that row moves by 2x between runs of the same engine (below).
+- **Storage:** D is 6.3, 40.6 and 323.7 MB through nesting at small, medium and large, against A 6.5 / 48.6 / 404.3, B 6.5 / 46.4 / 377.9 and C 4.6-5.1 / 27.0-27.8 / 182.4-183.2. C is the smallest at large (its closure holds containers only). D's large parents seed is 15.4 s against A 29.8, B 43.3, C 16.8.
+
+### The large `parents_proj_select_count` budget, re-baselined 9 → 20 ms
+
+The row counts every document a sample user sees through the two-arm policy. Its plan is a bitmap heap scan over about 10,900 all-visible heap pages of `documents`, and the budget (3x the fastest p95 of session 2, 2.9 ms, on a local Postgres 16.4) assumed 16.4's behaviour of skipping the heap fetch for all-visible pages when the query needs no columns. Postgres 16.15, 17.11 and 18.6 read every page ([`VERSIONS.md`](./VERSIONS.md), Calibration), so the row has a floor that no engine can get under: p50 7.5-9.4 ms for A, B, C and D alike. It missed 9 ms in 22 of the 27 large reports on PG 16-18 that existed before this change (every `pg*-docker-*-large-default*.md` except the `p6check` one), for every engine.
+
+Measured spread over those 27 reports (all engines and tags): p50 7.48-9.43 ms, p95 8.21-16.10 ms. The p95 depends on the host (the same D file gave p95 9.35 in opt3, 13.25 in the `p6` run and 8.24 in the `p6check` run straight after it, with p50 7.74, 7.89 and 7.49). Pinning the budget to the p50 floor would make it fail on host noise; pinning it to the tightest p95 would make it fail on every busy afternoon.
+
+**Chosen: 20 ms for every engine.** It is above every p95 ever measured on PG 16-18 (worst 16.10, A in `p6`; worst D 15.76 in `opt3-covering`), 2.1x the worst p50, and it still fails if the plan gets worse in a way that matters: a floor that doubles puts p95 at 16-30 ms. The session rule (3x the fastest engine's p95 on the row) would give 25 ms with today's fastest (8.21 ms), so 20 is stricter than the rule, not looser. There is no engine-specific exemption: one number, in `bench/budgets.tsv`, with the reason in its header. Nothing else in `budgets.tsv` changed.
+
+`--check` at large, D, with the new budget (`bench/run.sh --scale large --tag p6check --check` through the Docker harness, 16:36-16:40, nothing else of mine running): every workload within budget, exit 0; `parents_proj_select_count` p50 7.49 / p95 8.24 ms against 20. The large runs of A, B and C in `p6` were taken before the change; with 20 ms their `parents_proj_select_count` (A 16.10, B 8.49, C 8.21) passes, and the other `--check` failures at large are the ones they always had (A's single-branch rows and C's `write_nest_team`), not part of this change.
 
 ## opt3: performance pass 2 (phase 5 of session 5, 2026-10-30)
 
