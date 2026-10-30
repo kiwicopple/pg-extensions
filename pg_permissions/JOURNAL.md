@@ -953,3 +953,22 @@ Orchestrator choices: fixed constant caps (OpenFGA makes them configurable; here
   - 55 spec files and 3,604 assertions on PG 16, 17 and 18.
   - The oracles are unchanged: consolidated suite 933/746, ABAC 302/271, fga_lang 70/70.
   - Budgets are unchanged; the only miss is the large `parents_proj_select_count` (9.35 > 9 ms), which every engine shares.
+
+### 8. API naming pass (commit c90853b)
+
+- **The trigger:** reading the code, the user noticed the RBAC functions had no `rbac_` prefix while the tables and every `fga_*` function did. That contradicted the session-4 decision itself. The RBAC API predates the per-model direction: it was designed when `has_permission` was meant to be *the* check, and was never renamed. Options offered: prefix every model-specific function (chosen), one schema per model (`rbac.has_permission`: an extension owning several schemas is awkward, and generic schema names collide), or leave RBAC unprefixed as the "blessed path".
+- **The user asked about cost before agreeing to named arguments.** Measured on a scratch cluster: EXPLAIN shows the identical expression for positional and named calls (Postgres resolves names at parse time), and 1M calls took 235–265 ms either way. Postgres can't *require* named calls, so the parameter names were made worth using instead.
+- **The renames:**
+  - All nine RBAC functions became `rbac_*`. Only `current_subject_id`, `current_subject_type` and `delete_subject` stay unprefixed, as genuinely cross-model.
+  - All `p_` prefixes are gone, and the shared vocabulary is `object`, `relation`, `role`, `permission`, `scope`, `context`, `model_id`, `page_size`.
+  - OpenFGA's `user` became `subject`, because `user` is a reserved word and `fga_check(user => …)` doesn't parse. RBAC keeps `user_id` (a bare id, matching its column).
+  - The plan-time-guard parameter is now honestly named `plan_time_guard`.
+- **Safety in the bodies:** every parameter is qualified with the function name, and `variable_conflict = error` is left on, so a missed clash raises rather than silently reading a column. In SQL-language bodies the column silently wins, so everything there is qualified too.
+- **The guard spec `d/04_api_naming` (34 assertions; 6/34 on the old file).** It `PREPARE`s every public function with all-named `null` arguments built from the catalog, which proves every name parses without running anything. Bite checks: an un-renamed `has_role` fails 3 assertions, and a `"user"` parameter or a `p_` prefix fails 5.
+- **Traps:**
+  - Col_name keywords also fail as `name => value`, but type_func_name keywords parse (the opposite of the first guess).
+  - `proargtypes` is 0-based while `proargnames` is 1-based, which misindexed every argument in the first draft.
+  - PL/pgSQL rejects an IN and an OUT parameter with the same name (SQL functions allow it), so `fga_read` uses `inout continuation_token`.
+- **Prototypes stay frozen:** the shared RBAC specs still test A, B and C under the old names, and the extension carries renamed copies in `test/spec/d/`. Prototype counts are unchanged (A 426, B 504, C 511 assertions).
+- **Mechanics:** about 360 doc and spec calls were converted to named style by a small parser aware of quotes, dollar-quoting and comments.
+- **Numbers:** 56 files and 3,638 assertions on PG 16, 17 and 18. The oracles are unchanged, and D's bench equivalence TSV is byte-identical to before the rename.
