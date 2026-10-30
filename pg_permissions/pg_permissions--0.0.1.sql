@@ -430,6 +430,10 @@ create table permissions.fga_relations (
     diff_tupleset text collate "C",
     -- the subtract can recurse or is deep: recheck what it removes with _fga_rec
     diff_recheck  boolean not null default false,
+    -- not monotone, and ListObjects evaluates its rewrite tree set-based
+    -- (_fga_set_rel; see fga_write_authorization_model): every leaf is a
+    -- walk, combined by union, intersection and difference
+    set_eval      boolean not null default false,
     -- a conditioned type restriction (or tupleset restriction) is reachable
     -- from it through any operand: evaluations take the conditional path.
     -- False: today's statements, no condition is ever evaluated.
@@ -811,6 +815,52 @@ begin
 end;
 $$;
 
+-- The typed write path (phase 5 of session 5): a tuple key from its three
+-- strings, split as _fga_split_object and _fga_split_user do, without
+-- validating anything against a model (object_id may be '*'). All fields null
+-- if either string is malformed; the relation is copied as given.
+create function permissions._fga_typed_key(p_user text, p_relation text, p_object text)
+returns permissions.fga_tuple
+language plpgsql immutable
+as $$
+declare
+    t permissions.fga_tuple;
+begin
+    if p_object ~ '^[^:# [:cntrl:]]+:[^:# [:cntrl:]]+$' then
+        if p_user ~ '^[^:# [:cntrl:]]+:[^:# [:cntrl:]]+$' then
+            t := row(split_part(p_object, ':', 1), substr(p_object, strpos(p_object, ':') + 1), p_relation,
+                     split_part(p_user, ':', 1), substr(p_user, strpos(p_user, ':') + 1), '', '', null);
+        elsif p_user ~ '^[^:# [:cntrl:]]+:[^:#* [:cntrl:]]+#[^:#* [:cntrl:]]+$' then
+            t := row(split_part(p_object, ':', 1), substr(p_object, strpos(p_object, ':') + 1), p_relation,
+                     split_part(p_user, ':', 1), split_part(substr(p_user, strpos(p_user, ':') + 1), '#', 1),
+                     split_part(p_user, '#', 2), '', null);
+        end if;
+    end if;
+    return t;
+end;
+$$;
+
+-- The typed write path's validation in one lookup: an unconditioned type
+-- restriction of model p_m allows the key. That is everything
+-- _fga_tuple_for_write checks for a key without a condition: a restriction
+-- names only types and relations the model defines, and a tupleset
+-- relation's restrictions are plain types (fga_write_authorization_model
+-- rejects wildcards and usersets there), so true means it would accept the
+-- key; false means "ask _fga_tuple_for_write", which finds the error.
+create function permissions._fga_write_key_ok(p_m text, p_ot text, p_rel text, p_ut text, p_uid text, p_urel text)
+returns boolean
+language plpgsql stable
+as $$
+begin
+    return exists (
+        select 1
+        from permissions.fga_type_restrictions tr
+        where tr.model_id = p_m and tr.type = p_ot and tr.relation = p_rel
+          and tr.user_type = p_ut and tr.user_relation = p_urel and tr.wildcard = (p_uid = '*')
+          and tr.condition = '');
+end;
+$$;
+
 -- validation.ValidateTupleForWrite: the tuple key is well formed and allowed by
 -- the model's type restrictions. Raises p_code (2027 for writes and
 -- contextual tuples). Then its condition ({"name", "context"}, optional):
@@ -834,6 +884,14 @@ declare
     bad text;
     x record;
 begin
+    -- the typed path: a key without a condition that an unconditioned
+    -- restriction allows (one lookup instead of six)
+    if jsonb_typeof(p_key) = 'object' and coalesce(jsonb_typeof(p_key -> 'condition'), 'null') = 'null' then
+        t := permissions._fga_typed_key(p_key ->> 'user', p_key ->> 'relation', p_key ->> 'object');
+        if t.object_id <> '*' and permissions._fga_write_key_ok(p_m, t.object_type, t.relation, t.user_type, t.user_id, t.user_relation) then
+            return t;
+        end if;
+    end if;
     if jsonb_typeof(p_key) <> 'object' then
         perform permissions._fga_error(p_code, format('invalid tuple key: %s', p_key),
             hint => 'A tuple key is a JSON object: {"user": "user:anne", "relation": "viewer", "object": "document:1"}.');
@@ -3414,6 +3472,52 @@ begin
              or (select count(*) from permissions.fga_reach rc
                  where rc.model_id = m and rc.target_type = st and rc.target_relation = r.diff_relation
                    and rc.relation <> '') + (r.diff_tupleset is not null)::int > 24);
+
+    -- Set-based ListObjects for the other relations that are not monotone
+    -- (set_eval; phase 5 of session 5): ListObjects evaluates the rewrite
+    -- tree bottom-up over sets of objects with levels (_fga_set_rel,
+    -- _fga_set_node) when every leaf is a walk that is exact:
+    --   - `this`: every userset in its type restrictions is monotone, so the
+    --     forward walk's direct tuples on the relation are exactly its
+    --     operand;
+    --   - a computed relation, and the relation of a tupleToUserset on every
+    --     parent type, are monotone or set_eval themselves;
+    --   - the relation doesn't reach itself in the positive graph (no
+    --     recursion through it), and the fixpoint below never marks a cycle
+    --     through a subtract (each relation needs its operands marked first).
+    -- A relation with a set-based difference (diff_relation) qualifies too:
+    -- its own ListObjects keeps that path, but other relations' trees can
+    -- use it as a leaf.
+    loop
+        update permissions.fga_relations r set set_eval = true
+        where r.model_id = m and not r.monotone and not r.set_eval
+          and not exists (select 1 from permissions.fga_reach rc
+                          where rc.model_id = m and rc.target_type = r.type and rc.target_relation = r.relation
+                            and rc.type = r.type and rc.relation = r.relation and rc.strict)
+          and not exists (
+              select 1
+              from permissions.fga_rewrite_nodes n
+              where n.model_id = m and n.type = r.type and n.relation = r.relation
+                and case n.op
+                    when 'this' then exists (
+                        select 1 from permissions.fga_type_restrictions tr
+                        join permissions.fga_relations y on y.model_id = m and y.type = tr.user_type and y.relation = tr.user_relation
+                        where tr.model_id = m and tr.type = r.type and tr.relation = r.relation and not y.monotone)
+                    when 'computed' then exists (
+                        select 1 from permissions.fga_relations y
+                        where y.model_id = m and y.type = r.type and y.relation = n.computed
+                          and not (y.monotone or y.set_eval))
+                    when 'ttu' then exists (
+                        select 1
+                        from permissions._fga_subtract_types(m, r.type, n.computed, n.tupleset) st
+                        join permissions.fga_relations y on y.model_id = m and y.type = st and y.relation = n.computed
+                        where not (y.monotone or y.set_eval))
+                    when 'union' then false
+                    when 'intersection' then false
+                    when 'difference' then false
+                    else true end);
+        exit when not found;
+    end loop;
     return m;
 end;
 $$;
@@ -3609,24 +3713,62 @@ end;
 $$;
 
 -- Convenience: one tuple, OpenFGA strings. Idempotent (on_duplicate/on_missing ignore).
+--
+-- Typed path (phase 5 of session 5): no JSON round trip. A well-formed key
+-- that an unconditioned type restriction of the latest model allows (one
+-- lookup: _fga_write_key_ok) is inserted directly; one that exists without a
+-- condition is left alone. Everything else (no model, a malformed or
+-- disallowed key, a key stored with a condition) goes to fga_write with the
+-- JSON key, which decides as before and raises its own error, so both
+-- functions behave exactly as the JSON path (test/spec/d/42_fga_write_paths).
 create function permissions.fga_write_tuple("user" text, relation text, object text)
 returns void
 language plpgsql security definer
 set search_path = ''
 as $$
+declare
+    m text;
+    t permissions.fga_tuple;
 begin
+    select x.id into m from permissions.fga_models x order by x.seq desc limit 1;
+    t := permissions._fga_typed_key("user", relation, object);
+    if m is not null and t.object_id <> '*'
+       and permissions._fga_write_key_ok(m, t.object_type, t.relation, t.user_type, t.user_id, t.user_relation) then
+        insert into permissions.fga_tuples (object_type, object_id, relation, user_type, user_id, user_relation,
+                                            condition_name, condition_context)
+        values (t.object_type, t.object_id, t.relation, t.user_type, t.user_id, t.user_relation, '', null)
+        on conflict do nothing;
+        if found or exists (
+            select 1 from permissions.fga_tuples x
+            where x.object_type = t.object_type and x.object_id = t.object_id and x.relation = t.relation
+              and x.user_type = t.user_type and x.user_id = t.user_id and x.user_relation = t.user_relation
+              and x.condition_name = '' and x.condition_context is null) then
+            return;
+        end if;
+    end if;
     perform permissions.fga_write(
         jsonb_build_object('tuple_keys', jsonb_build_array(jsonb_build_object('user', "user", 'relation', relation, 'object', object)),
                            'on_duplicate', 'ignore'));
 end;
 $$;
 
+-- Typed path as fga_write_tuple's: deletes only need a well-formed key (and a
+-- model to exist, as fga_write requires).
 create function permissions.fga_delete_tuple("user" text, relation text, object text)
 returns void
 language plpgsql security definer
 set search_path = ''
 as $$
+declare
+    t permissions.fga_tuple := permissions._fga_typed_key("user", relation, object);
 begin
+    if t.object_type is not null and t.relation ~ '^[^:#@ [:cntrl:]]+$'
+       and exists (select 1 from permissions.fga_models) then
+        delete from permissions.fga_tuples x
+        where x.object_type = t.object_type and x.object_id = t.object_id and x.relation = t.relation
+          and x.user_type = t.user_type and x.user_id = t.user_id and x.user_relation = t.user_relation;
+        return;
+    end if;
     perform permissions.fga_write(deletes => jsonb_build_object(
         'tuple_keys', jsonb_build_array(jsonb_build_object('user', "user", 'relation', relation, 'object', object)),
         'on_missing', 'ignore'));
@@ -3917,12 +4059,17 @@ $$;
 -- are taken when their condition is true, an error counted by p_mode (r, d,
 -- or e: one row (null, the message) and nothing else); p_types, if given,
 -- limits the plain users (and their wildcards) to those types, so ListUsers
--- never evaluates a condition on a user it would not return.
+-- never evaluates a condition on a user it would not return. With p_ut and
+-- p_uids (Check for a plain user: the user and its type's wildcard), also the
+-- tuples of exactly those users on the frontier, as rows with relation '' at
+-- the node's level: the user probe of _fga_bidi, read in the same statement
+-- as the step (phase 5 of session 5).
 create function permissions._fga_bstep(
     p_m text, p_ctx permissions.fga_tuple[],
     gt text[], gi text[], gr text[], gl int[],
     ut text[], ui text[], ur text[], p_subjects boolean,
-    p_req jsonb default null, p_mode "char" default null, p_types text[] default null)
+    p_req jsonb default null, p_mode "char" default null, p_types text[] default null,
+    p_ut text default null, p_uids text[] default null)
 returns table (t text, i text, r text, l int)
 language plpgsql stable
 rows 100
@@ -3970,6 +4117,27 @@ begin
             join unnest(p_ctx) x
               on x.object_type = g.t and x.object_id = g.i and x.relation = e.via
              and x.user_type = e.src_type and x.user_relation = '' and x.condition_name = e.condition
+          union all
+            -- the user probe (p_ut): the user's own tuples on the frontier
+            select x.user_type, x.user_id, x.user_relation, g.l
+            from g
+            join permissions.fga_edges e
+              on e.model_id = p_m and e.kind = 'd' and e.dst_type = g.t and e.dst_relation = g.r
+             and e.src_type = p_ut and e.src_relation = ''
+            join permissions.fga_tuples x
+              on x.object_type = g.t and x.object_id = g.i and x.relation = g.r
+             and x.user_type = p_ut and x.user_id = any (p_uids) and x.user_relation = '' and x.condition_name = e.condition
+            where not p_subjects and (x.user_id = '*') = e.src_wildcard
+          union all
+            select x.user_type, x.user_id, x.user_relation, g.l
+            from g
+            join permissions.fga_edges e
+              on e.model_id = p_m and e.kind = 'd' and e.dst_type = g.t and e.dst_relation = g.r
+             and e.src_type = p_ut and e.src_relation = ''
+            join unnest(p_ctx) x
+              on x.object_type = g.t and x.object_id = g.i and x.relation = g.r
+             and x.user_type = p_ut and x.user_id = any (p_uids) and x.user_relation = '' and x.condition_name = e.condition
+            where not p_subjects and (x.user_id = '*') = e.src_wildcard
         ),
         closed(t, i, r, l) as (
             select * from nx
@@ -4031,6 +4199,27 @@ begin
         join unnest(p_ctx) x
           on x.object_type = g.t and x.object_id = g.i and x.relation = e.via
          and x.user_type = e.src_type and x.user_relation = '' and x.condition_name = e.condition
+      union all
+        -- the user probe (p_ut), as in the unconditioned branch
+        select x.user_type, x.user_id, x.user_relation, g.l, x.condition_name, x.condition_context
+        from g
+        join permissions.fga_edges e
+          on e.model_id = p_m and e.kind = 'd' and e.dst_type = g.t and e.dst_relation = g.r
+         and e.src_type = p_ut and e.src_relation = ''
+        join permissions.fga_tuples x
+          on x.object_type = g.t and x.object_id = g.i and x.relation = g.r
+         and x.user_type = p_ut and x.user_id = any (p_uids) and x.user_relation = '' and x.condition_name = e.condition
+        where not p_subjects and (x.user_id = '*') = e.src_wildcard
+      union all
+        select x.user_type, x.user_id, x.user_relation, g.l, x.condition_name, x.condition_context
+        from g
+        join permissions.fga_edges e
+          on e.model_id = p_m and e.kind = 'd' and e.dst_type = g.t and e.dst_relation = g.r
+         and e.src_type = p_ut and e.src_relation = ''
+        join unnest(p_ctx) x
+          on x.object_type = g.t and x.object_id = g.i and x.relation = g.r
+         and x.user_type = p_ut and x.user_id = any (p_uids) and x.user_relation = '' and x.condition_name = e.condition
+        where not p_subjects and (x.user_id = '*') = e.src_wildcard
     ),
     ok(cn, cx) as materialized (
         select o.cn, o.cc
@@ -4084,6 +4273,7 @@ declare
     rq jsonb := case when p_mode is not null then p_req end;
     bm "char" := case when p_mode is not null then 'd' end;
     msg text;
+    fwd_rel boolean := p_urel <> '';                       -- the forward side has relation nodes
 begin
     xt := array[p_ut]; xi := array[p_uid]; xr := array[p_urel];
     if p_urel = '' and p_uid <> '*' then
@@ -4142,9 +4332,28 @@ begin
             exit when ft is null;
             fw := array_fill(1, array[cardinality(ft)]);
             st := st || ft; si := si || fi; sr := sr || fr; sl := sl || fl;
+            fwd_rel := true;
             select min(f.l + b.l) into best
             from unnest(ft, fi, fr, fl) f(t, i, r, l)
             join unnest(ut, ui, ur, ul) b(t, i, r, l) on b.t = f.t and b.i = f.i and b.r = f.r;
+        elsif p_urel = '' then
+            -- a plain user: the step and the user probe in one statement
+            -- (_fga_bstep's p_ut rows: the user's own tuples on the frontier,
+            -- at the frontier node's level, as the probe below counts them)
+            select array_agg(n.t) filter (where n.r <> ''), array_agg(n.i) filter (where n.r <> ''),
+                   array_agg(n.r) filter (where n.r <> ''), array_agg(n.l) filter (where n.r <> ''),
+                   min(n.l) filter (where n.r = '')
+            into gt, gi, gr, gl, best
+            from permissions._fga_bstep(p_m, p_ctx, gt, gi, gr, gl, ut, ui, ur, false, rq, bm, null, p_ut, xi) n;
+            continue when best is not null;
+            exit when gt is null;
+            ut := ut || gt; ui := ui || gi; ur := ur || gr; ul := ul || gl;
+            -- the forward side holds only the user (relation '') until its first step
+            if fwd_rel then
+                select min(f.l + b.l) into best
+                from unnest(st, si, sr, sl) f(t, i, r, l)
+                join unnest(gt, gi, gr, gl) b(t, i, r, l) on b.t = f.t and b.i = f.i and b.r = f.r;
+            end if;
         else
             -- the user itself (or its wildcard) in a tuple on a frontier node
             select min(g.l) into best
@@ -4285,9 +4494,15 @@ $$;
 -- With p_mode (r or d), a conditioned tuple is taken when its condition is
 -- true: evaluated per tuple inside the recursion (a recursive term can't
 -- deduplicate), once per distinct context for the leaves.
+--
+-- p_direct: only the objects reached through a direct tuple on p_rel itself
+-- (the `this` operand of p_rel's rewrite; the set-based evaluator,
+-- _fga_set_node), not through its other operands nor the user being
+-- p_type:id#p_rel.
 create function permissions._fga_forward(
     p_m text, p_ut text, p_uid text, p_urel text, p_ctx permissions.fga_tuple[],
-    p_type text, p_rel text, p_req jsonb default null, p_mode "char" default null)
+    p_type text, p_rel text, p_req jsonb default null, p_mode "char" default null,
+    p_direct boolean default false)
 returns table (object_id text, lvl int)
 language plpgsql stable
 rows 100
@@ -4339,12 +4554,13 @@ begin
             select w.t, w.i, w.r, min(w.l), min(w.l + w.c) from w group by w.t, w.i, w.r
         ),
         tg(i, l) as (
-            select b.i, b.l from b where b.t = p_type and b.r = p_rel
+            select b.i, b.l from b where b.t = p_type and b.r = p_rel and not p_direct
           union all
             select n.i, n.l
             from b
             join st on st.src_type = b.t and st.src_relation = b.r and st.src_wildcard = (b.i = '*')
                    and st.object_type = p_type and st.out_relation = p_rel
+                   and (not p_direct or (st.kind = 'd' and st.tuple_relation = p_rel))
             cross join lateral (
                 select tu.object_id, case when st.kind = 'd' then b.dl else b.l + 1 end
                 from permissions.fga_tuples tu
@@ -4366,7 +4582,7 @@ begin
         select res.i, least(res.l, 25) from res
         union all
         select f, 25
-        from permissions._fga_forward_ids(p_m, p_ut, p_uid, p_urel, p_ctx, p_type, p_rel) f
+        from permissions._fga_forward_ids(p_m, p_ut, p_uid, p_urel, p_ctx, p_type, p_rel, null, null, p_direct) f
         where exists (select 1 from b where b.l >= 25)
           and not exists (select 1 from res where res.i = f);
         return;
@@ -4419,6 +4635,7 @@ begin
         from b
         join st on st.src_type = b.t and st.src_relation = b.r and st.src_wildcard = (b.i = '*')
                and st.object_type = p_type and st.out_relation = p_rel
+               and (not p_direct or (st.kind = 'd' and st.tuple_relation = p_rel))
         cross join lateral (
             select tu.object_id, case when st.kind = 'd' then b.dl else b.l + 1 end, tu.condition_name, tu.condition_context
             from permissions.fga_tuples tu
@@ -4440,7 +4657,7 @@ begin
                                        p_req, p_mode) o
     ),
     tg(i, l) as (
-        select b.i, b.l from b where b.t = p_type and b.r = p_rel
+        select b.i, b.l from b where b.t = p_type and b.r = p_rel and not p_direct
       union all
         select v.i, v.l from leaves v
         where v.cn = '' or exists (select 1 from ok where ok.cn = v.cn and ok.cx is not distinct from v.cx)
@@ -4451,7 +4668,7 @@ begin
     select res.i, least(res.l, 25) from res
     union all
     select f, 25
-    from permissions._fga_forward_ids(p_m, p_ut, p_uid, p_urel, p_ctx, p_type, p_rel, p_req, p_mode) f
+    from permissions._fga_forward_ids(p_m, p_ut, p_uid, p_urel, p_ctx, p_type, p_rel, p_req, p_mode, p_direct) f
     where exists (select 1 from b where b.l >= 25)
       and not exists (select 1 from res where res.i = f);
 end;
@@ -4463,7 +4680,8 @@ $$;
 -- reconverging paths cost nothing extra.
 create function permissions._fga_forward_ids(
     p_m text, p_ut text, p_uid text, p_urel text, p_ctx permissions.fga_tuple[],
-    p_type text, p_rel text, p_req jsonb default null, p_mode "char" default null)
+    p_type text, p_rel text, p_req jsonb default null, p_mode "char" default null,
+    p_direct boolean default false)
 returns setof text
 language plpgsql stable
 rows 100
@@ -4474,7 +4692,7 @@ begin
         return query
         with recursive
         st as materialized (
-            select s.src_type, s.src_relation, s.src_wildcard, s.user_relation,
+            select s.kind, s.src_type, s.src_relation, s.src_wildcard, s.user_relation,
                    s.object_type, s.tuple_relation, s.out_relation, s.expand, s.condition
             from permissions.fga_walk_steps s
             where s.model_id = p_m and s.target_type = p_type and s.target_relation = p_rel
@@ -4506,12 +4724,13 @@ begin
                 offset 0
             ) n(t, i, r)
         )
-        select w.i from w where w.t = p_type and w.r = p_rel
+        select w.i from w where w.t = p_type and w.r = p_rel and not p_direct
         union
         select n.i
         from w
         join st on st.src_type = w.t and st.src_relation = w.r and st.src_wildcard = (w.i = '*')
                and st.object_type = p_type and st.out_relation = p_rel
+               and (not p_direct or (st.kind = 'd' and st.tuple_relation = p_rel))
         cross join lateral (
             select tu.object_id
             from permissions.fga_tuples tu
@@ -4531,7 +4750,7 @@ begin
     return query
     with recursive
     st as materialized (
-        select s.src_type, s.src_relation, s.src_wildcard, s.user_relation,
+        select s.kind, s.src_type, s.src_relation, s.src_wildcard, s.user_relation,
                s.object_type, s.tuple_relation, s.out_relation, s.expand, s.condition
         from permissions.fga_walk_steps s
         where s.model_id = p_m and s.target_type = p_type and s.target_relation = p_rel
@@ -4570,6 +4789,7 @@ begin
         from w
         join st on st.src_type = w.t and st.src_relation = w.r and st.src_wildcard = (w.i = '*')
                and st.object_type = p_type and st.out_relation = p_rel
+               and (not p_direct or (st.kind = 'd' and st.tuple_relation = p_rel))
         cross join lateral (
             select tu.object_id, tu.condition_name, tu.condition_context
             from permissions.fga_tuples tu
@@ -4590,7 +4810,7 @@ begin
         from permissions._fga_conds_ok(p_m, (select jsonb_agg(distinct jsonb_build_array(v.cn, v.cx)) from leaves v where v.cn <> ''),
                                        p_req, p_mode) o
     )
-    select w.i from w where w.t = p_type and w.r = p_rel
+    select w.i from w where w.t = p_type and w.r = p_rel and not p_direct
     union
     select v.i from leaves v
     where v.cn = '' or exists (select 1 from ok where ok.cn = v.cn and ok.cx is not distinct from v.cx);
@@ -4978,6 +5198,143 @@ begin
 end;
 $$;
 
+-- Set-based ListObjects over a rewrite tree (fga_relations.set_eval, phase 5
+-- of session 5). Every object of p_type the user has p_rel with, and the
+-- level of the answer, 25 meaning 25 or more (_fga_rec's result 3, too deep).
+-- One row per object. Each node is evaluated for all objects at once, with
+-- _fga_rec's rules for combining results:
+--   - this: the forward walk's direct tuples on p_rel (_fga_forward, p_direct);
+--   - computed r: r's own set (a monotone relation is its forward walk);
+--   - r from ts: the parents' sets for r, through the ts tuples, one level more;
+--   - union: present in any child, the lowest level (a true branch decides);
+--   - intersection: present in every child, the highest level (a false
+--     branch decides, then a too deep one);
+--   - difference: in the base and not in the subtract below 25 (a subtract
+--     that is true decides); a base or subtract 25 deep or more is 25.
+-- Conditions: p_mode as the walks take it, per relation (conditional);
+-- under a subtract (p_neg) an error in mode d counts as true (n), as in the
+-- set-based difference. A userset user always has its own relation.
+create function permissions._fga_set_rel(
+    p_m text, p_type text, p_rel text, p_ut text, p_uid text, p_urel text, p_ctx permissions.fga_tuple[],
+    p_req jsonb, p_mode "char", p_neg boolean)
+returns table (object_id text, lvl int)
+language plpgsql stable
+rows 100
+as $$
+#variable_conflict use_column
+declare
+    mono boolean;
+    md "char";
+    ops text[]; pars int[]; cs text[]; tss text[];
+begin
+    select r.monotone, case when r.conditional then p_mode end
+    into mono, md
+    from permissions.fga_relations r where r.model_id = p_m and r.type = p_type and r.relation = p_rel;
+    if mono is null then
+        return;
+    end if;
+    if mono then
+        return query
+        select f.object_id, f.lvl
+        from permissions._fga_forward(p_m, p_ut, p_uid, p_urel, p_ctx, p_type, p_rel, p_req,
+                                      case when p_neg and md = 'd' then 'n'::"char" else md end) f;
+        return;
+    end if;
+    -- not monotone: set_eval, which fga_write_authorization_model gives a
+    -- relation only when every operand it names is monotone or set_eval
+    select array_agg(n.op order by n.node), array_agg(n.parent order by n.node),
+           array_agg(n.computed order by n.node), array_agg(n.tupleset order by n.node)
+    into ops, pars, cs, tss
+    from permissions.fga_rewrite_nodes n
+    where n.model_id = p_m and n.type = p_type and n.relation = p_rel;
+    return query
+    select x.object_id, min(x.lvl)::int
+    from (select p_uid as object_id, 0 as lvl where p_urel <> '' and p_ut = p_type and p_urel = p_rel
+          union all
+          select * from permissions._fga_set_node(p_m, ops, pars, cs, tss, 1, p_type, p_rel,
+                                                  p_ut, p_uid, p_urel, p_ctx, p_req, md, p_neg)) x
+    group by x.object_id;
+end;
+$$;
+
+-- One node of p_rel's rewrite tree (arrays from fga_rewrite_nodes, index k)
+-- for _fga_set_rel. One row per object.
+create function permissions._fga_set_node(
+    p_m text, ops text[], pars int[], cs text[], tss text[], k int, p_type text, p_rel text,
+    p_ut text, p_uid text, p_urel text, p_ctx permissions.fga_tuple[],
+    p_req jsonb, p_mode "char", p_neg boolean)
+returns table (object_id text, lvl int)
+language plpgsql stable
+rows 100
+as $$
+#variable_conflict use_column
+declare
+    wm "char" := case when p_neg and p_mode = 'd' then 'n'::"char" else p_mode end;
+    kids int[] := array(select j from generate_subscripts(pars, 1) j where j > k and pars[j] = k order by j);
+begin
+    case ops[k]
+    when 'this' then
+        return query
+        select f.object_id, f.lvl
+        from permissions._fga_forward(p_m, p_ut, p_uid, p_urel, p_ctx, p_type, p_rel, p_req, wm, true) f;
+    when 'computed' then
+        return query
+        select * from permissions._fga_set_rel(p_m, p_type, cs[k], p_ut, p_uid, p_urel, p_ctx, p_req, p_mode, p_neg);
+    when 'ttu' then
+        return query
+        select n.i, least(min(p.lvl) + 1, 25)::int
+        from permissions.fga_type_restrictions tr
+        join permissions.fga_relations pr on pr.model_id = p_m and pr.type = tr.user_type and pr.relation = cs[k]
+        cross join lateral permissions._fga_set_rel(p_m, tr.user_type, cs[k], p_ut, p_uid, p_urel, p_ctx, p_req, p_mode, p_neg) p
+        cross join lateral (
+            select tu.object_id
+            from permissions.fga_tuples tu
+            where tu.user_type = tr.user_type and tu.user_id = p.object_id and tu.user_relation = ''
+              and tu.object_type = p_type and tu.relation = tss[k] and tu.condition_name = tr.condition
+              and (tu.condition_name = '' or permissions._fga_cond(p_m, tu.condition_name, tu.condition_context, p_req, wm))
+          union all
+            select x.object_id
+            from unnest(p_ctx) x
+            where x.user_type = tr.user_type and x.user_id = p.object_id and x.user_relation = ''
+              and x.object_type = p_type and x.relation = tss[k] and x.condition_name = tr.condition
+              and (x.condition_name = '' or permissions._fga_cond(p_m, x.condition_name, x.condition_context, p_req, wm))
+            offset 0
+        ) n(i)
+        where tr.model_id = p_m and tr.type = p_type and tr.relation = tss[k]
+          and tr.user_relation = '' and not tr.wildcard and p.object_id <> '*'
+        group by n.i;
+    when 'union' then
+        return query
+        select c.object_id, min(c.lvl)::int
+        from unnest(kids) j
+        cross join lateral permissions._fga_set_node(p_m, ops, pars, cs, tss, j, p_type, p_rel,
+                                                     p_ut, p_uid, p_urel, p_ctx, p_req, p_mode, p_neg) c
+        group by c.object_id;
+    when 'intersection' then
+        return query
+        select c.object_id, max(c.lvl)::int
+        from unnest(kids) j
+        cross join lateral permissions._fga_set_node(p_m, ops, pars, cs, tss, j, p_type, p_rel,
+                                                     p_ut, p_uid, p_urel, p_ctx, p_req, p_mode, p_neg) c
+        group by c.object_id
+        having count(*) = cardinality(kids);
+    when 'difference' then
+        return query
+        with b as materialized (
+            select * from permissions._fga_set_node(p_m, ops, pars, cs, tss, kids[1], p_type, p_rel,
+                                                    p_ut, p_uid, p_urel, p_ctx, p_req, p_mode, p_neg)
+        ),
+        s as materialized (
+            select * from permissions._fga_set_node(p_m, ops, pars, cs, tss, kids[2], p_type, p_rel,
+                                                    p_ut, p_uid, p_urel, p_ctx, p_req, p_mode, not p_neg)
+        )
+        select b.object_id, case when s.object_id is null then b.lvl else 25 end
+        from b left join s on s.object_id = b.object_id
+        where s.object_id is null or s.lvl >= 25;
+    end case;
+end;
+$$;
+
 -- ListObjects on parsed, validated input: object ids, unordered.
 --   - monotone relation: the forward walk;
 --   - set-based difference (fga_relations.diff_relation, compiled): the
@@ -4987,6 +5344,8 @@ $$;
 --     is an error unless the subtract removes it; a userset user always has
 --     its own relation; with diff_recheck, what the subtract removes is
 --     checked with _fga_rec (the depth limit on a recursive subtract).
+--   - set_eval (compiled): the rewrite tree over sets (_fga_set_rel), each
+--     leaf a walk, an object 25 levels deep or more an error;
 --   - otherwise: the candidates of the positive walk, each one checked by
 --     _fga_rec.
 -- p_mode: r for the API (an evaluation error on an edge the walk takes fails
@@ -5003,6 +5362,7 @@ declare
     sub_rel text;
     sub_ts text;
     recheck boolean;
+    sev boolean;
     md "char";
     sd "char";
     c text;
@@ -5010,8 +5370,8 @@ begin
     if not permissions._fga_path_exists(p_m, p_type, p_rel, p_ut, p_urel) then
         return;
     end if;
-    select r.monotone, r.diff_relation, r.diff_tupleset, r.diff_recheck, case when r.conditional then p_mode end
-    into mono, sub_rel, sub_ts, recheck, md
+    select r.monotone, r.diff_relation, r.diff_tupleset, r.diff_recheck, r.set_eval, case when r.conditional then p_mode end
+    into mono, sub_rel, sub_ts, recheck, sev, md
     from permissions.fga_relations r where r.model_id = p_m and r.type = p_type and r.relation = p_rel;
     -- the subtract's walk: in mode d (RLS) an erroring edge is taken, so the
     -- error removes the object (deny) instead of granting it
@@ -5059,6 +5419,14 @@ begin
                              else false end
                    when b.lvl < 25 then true
                    else permissions._fga_deep() end;
+        return;
+    end if;
+    -- the rewrite tree evaluated set-based (set_eval)
+    if sev then
+        return query
+        select f.object_id
+        from permissions._fga_set_rel(p_m, p_type, p_rel, p_ut, p_uid, p_urel, p_ctx, p_req, p_mode, false) f
+        where case when f.lvl < 25 then true else permissions._fga_deep() end;
         return;
     end if;
     -- candidates from the positive graph, each one checked
