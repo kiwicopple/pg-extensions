@@ -1,0 +1,234 @@
+# Benchmark: opt3-01b9fc2 (design d), medium scale, deep shape
+
+- Date: 2026-10-30 11:39
+- Postgres: 18.6 (Debian 18.6-1.pgdg13+2)
+- Data: 100000 documents, 5000 users, 50 orgs, 200 teams
+- Shape: deep (teams in chains 9 deep, users in the leaf teams, 5 documents per team)
+- pgbench: 10s per workload, 4 clients
+
+| workload | p50 ms | p95 ms | avg ms | tps | p95 budget ms | status |
+| --- | --- | --- | --- | --- | --- | --- |
+| rbac_check | 0.21 | 0.30 | 0.210 | 19010 | 1 | ok |
+| rbac_select_page | 0.39 | 0.49 | 0.371 | 10787 | 2 | ok |
+| rbac_select_count | 0.31 | 0.40 | 0.295 | 13540 | 2 | ok |
+| rbac_update_one | 0.27 | 0.36 | 0.273 | 14661 | 3 | ok |
+| write_assign_role | 0.14 | 0.21 | 0.141 | 28454 | 1 | ok |
+| share_list_objects | 0.32 | 0.43 | 0.303 | 13221 | 1 | ok |
+| share_select_page | 0.65 | 0.91 | 0.671 | 5965 | 3 | ok |
+| write_share | 0.15 | 0.22 | 0.155 | 25747 | 1 | ok |
+| parents_proj_select_page | 0.75 | 1.59 | 0.865 | 4621 | 4 | ok |
+| parents_proj_select_count | 1.02 | 1.29 | 1.027 | 3894 | 4 | ok |
+| parents_select_page | 0.70 | 1.35 | 0.815 | 4908 | 25 | ok |
+| parents_select_count | 0.97 | 1.40 | 1.032 | 3876 | 23 | ok |
+| write_nest_team | 0.16 | 0.22 | 0.160 | 25016 | 1 | ok |
+| nest_check | 0.40 | 0.53 | 0.398 | 10060 | 2 | ok |
+| plain_list_objects | 0.34 | 0.54 | 0.354 | 11283 | - | - |
+| cond_list_objects | 0.53 | 0.76 | 0.556 | 7199 | - | - |
+| cond_select_page | 0.95 | 1.60 | 1.047 | 3819 | - | - |
+| cond_nest_check | 0.56 | 0.70 | 0.556 | 7198 | - | - |
+| plain_list_users | 0.89 | 2.46 | 1.028 | 3892 | - | - |
+| cond_list_users | 1.37 | 3.54 | 1.515 | 2640 | - | - |
+| block_list_objects | 0.39 | 0.58 | 0.404 | 9905 | - | - |
+| block_or_mute_list_objects | 0.50 | 0.76 | 0.532 | 7516 | - | - |
+| intersect_list_objects | 0.44 | 0.65 | 0.453 | 8821 | - | - |
+
+## Seed time and storage
+
+Seed time is the native-API load only. Sizes are `pg_total_relation_size` (table, indexes, toast) of every table in schema `permissions` after the seed and `VACUUM FULL` (non-empty tables only, see `vacuum_nonempty` in run.sh), cumulative across phases.
+
+| phase | seed s | permission tables MB | rows |
+| --- | --- | --- | --- |
+| rbac | 0.44 | 3.0 | 10015 |
+| sharing | 0.55 | 9.6 | 27266 |
+| parents_proj | 0.03 | 10.0 | 28266 |
+| parents | 1.47 | 40.6 | 128266 |
+| nesting | 0.02 | 40.6 | 128267 |
+| conditions | 0.64 | 43.5 | 135563 |
+| blocklist | 0.47 | 47.3 | 145798 |
+
+| table | after rbac | after sharing | after parents_proj | after parents | after nesting | after conditions | after blocklist |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| fga_computed_closure | 0.02 MB, 0 rows | 0.08 MB, 1 rows | 0.08 MB, 1 rows | 0.08 MB, 1 rows | 0.08 MB, 1 rows | 0.08 MB, 3 rows | 0.08 MB, 11 rows |
+| fga_conditions | 0.02 MB, 0 rows | 0.02 MB, 0 rows | 0.02 MB, 0 rows | 0.02 MB, 0 rows | 0.02 MB, 0 rows | 0.06 MB, 1 rows | 0.06 MB, 2 rows |
+| fga_edges | 0.02 MB, 0 rows | 0.08 MB, 9 rows | 0.08 MB, 9 rows | 0.08 MB, 9 rows | 0.08 MB, 9 rows | 0.08 MB, 24 rows | 0.08 MB, 45 rows |
+| fga_models | 0.02 MB, 0 rows | 0.08 MB, 1 rows | 0.08 MB, 1 rows | 0.08 MB, 1 rows | 0.08 MB, 1 rows | 0.08 MB, 2 rows | 0.08 MB, 3 rows |
+| fga_paths | 0.02 MB, 0 rows | 0.06 MB, 13 rows | 0.06 MB, 13 rows | 0.06 MB, 13 rows | 0.06 MB, 13 rows | 0.06 MB, 33 rows | 0.06 MB, 78 rows |
+| fga_reach | 0.02 MB, 0 rows | 0.06 MB, 13 rows | 0.06 MB, 13 rows | 0.06 MB, 13 rows | 0.06 MB, 13 rows | 0.06 MB, 33 rows | 0.06 MB, 75 rows |
+| fga_relations | 0.02 MB, 0 rows | 0.06 MB, 5 rows | 0.06 MB, 5 rows | 0.06 MB, 5 rows | 0.06 MB, 5 rows | 0.06 MB, 12 rows | 0.06 MB, 24 rows |
+| fga_rewrite_nodes | 0.02 MB, 0 rows | 0.06 MB, 8 rows | 0.06 MB, 8 rows | 0.06 MB, 8 rows | 0.06 MB, 8 rows | 0.06 MB, 21 rows | 0.06 MB, 47 rows |
+| fga_tuples | 0.04 MB, 0 rows | 6.15 MB, 17177 rows | 6.51 MB, 18177 rows | 37.09 MB, 118177 rows | 37.09 MB, 118178 rows | 40.00 MB, 125356 rows | 43.72 MB, 135356 rows |
+| fga_type_restrictions | 0.02 MB, 0 rows | 0.06 MB, 7 rows | 0.06 MB, 7 rows | 0.06 MB, 7 rows | 0.06 MB, 7 rows | 0.06 MB, 18 rows | 0.06 MB, 31 rows |
+| fga_types | 0.02 MB, 0 rows | 0.06 MB, 4 rows | 0.06 MB, 4 rows | 0.06 MB, 4 rows | 0.06 MB, 4 rows | 0.06 MB, 9 rows | 0.06 MB, 14 rows |
+| fga_walk_steps | 0.02 MB, 0 rows | 0.06 MB, 13 rows | 0.06 MB, 13 rows | 0.06 MB, 13 rows | 0.06 MB, 13 rows | 0.06 MB, 36 rows | 0.07 MB, 97 rows |
+| rbac_assignments | 2.50 MB, 10000 rows | 2.50 MB, 10000 rows | 2.50 MB, 10000 rows | 2.50 MB, 10000 rows | 2.50 MB, 10000 rows | 2.50 MB, 10000 rows | 2.50 MB, 10000 rows |
+| rbac_role_closure | 0.08 MB, 6 rows | 0.08 MB, 6 rows | 0.08 MB, 6 rows | 0.08 MB, 6 rows | 0.08 MB, 6 rows | 0.08 MB, 6 rows | 0.08 MB, 6 rows |
+| rbac_role_inherits | 0.08 MB, 2 rows | 0.08 MB, 2 rows | 0.08 MB, 2 rows | 0.08 MB, 2 rows | 0.08 MB, 2 rows | 0.08 MB, 2 rows | 0.08 MB, 2 rows |
+| rbac_role_permissions | 0.08 MB, 4 rows | 0.08 MB, 4 rows | 0.08 MB, 4 rows | 0.08 MB, 4 rows | 0.08 MB, 4 rows | 0.08 MB, 4 rows | 0.08 MB, 4 rows |
+| rbac_roles | 0.06 MB, 3 rows | 0.06 MB, 3 rows | 0.06 MB, 3 rows | 0.06 MB, 3 rows | 0.06 MB, 3 rows | 0.06 MB, 3 rows | 0.06 MB, 3 rows |
+
+## Equivalence
+
+Documents each sample user sees through RLS after each seed, and the md5 of their sorted ids. Every 5th user is also a folder viewer, so for users not divisible by 5 parents_proj and parents must equal sharing, and parents_proj must always equal parents.
+
+| policy | user | visible | md5 |
+| --- | --- | --- | --- |
+| rbac | 1 | 4000 | abe7a5a8440045bf3a6b4d35af791d8b |
+| rbac | 2 | 4000 | 15806ec009213b1b8680a43dd9dae415 |
+| rbac | 3 | 4000 | a171b9d4a238ebe30a12f7d43e4792a6 |
+| rbac | 5 | 4000 | 3c906bb80bfb8cf875bcced92319d78e |
+| rbac | 10 | 4000 | 83682d14d44928065e8fcd51a0fa3904 |
+| rbac | 77 | 4000 | 266488027a22126548692c1fbb5615be |
+| rbac | 500 | 4000 | ac5436d43b03d0b83e3ab7c5eecb0aa0 |
+| rbac | 5000 | 4000 | ac5436d43b03d0b83e3ab7c5eecb0aa0 |
+| sharing | 1 | 4045 | 191b9e3562eac23676f2ae85efb3a6ee |
+| sharing | 2 | 4046 | 335c04f0b5bc3d03bcffc67aae3869ca |
+| sharing | 3 | 4045 | 75d3d9ab19d3c59998a6f1c0aa0b6948 |
+| sharing | 5 | 4047 | f93629e4f85e699b1035f55bdd839a18 |
+| sharing | 10 | 4044 | d14583b707a0b173a9335693da0f83ce |
+| sharing | 77 | 4044 | 1f5d5175497f9753469592e0dc00ef29 |
+| sharing | 500 | 4040 | 2311723442185f44718d106cc6157e17 |
+| sharing | 5000 | 4044 | 8d1cc59bb9cac19a9e3f641423c36bbc |
+| parents_proj | 1 | 4045 | 191b9e3562eac23676f2ae85efb3a6ee |
+| parents_proj | 2 | 4046 | 335c04f0b5bc3d03bcffc67aae3869ca |
+| parents_proj | 3 | 4045 | 75d3d9ab19d3c59998a6f1c0aa0b6948 |
+| parents_proj | 5 | 4247 | e901b7bd5efdcfbdba02c49ec5756579 |
+| parents_proj | 10 | 4243 | 27e3570218fbbdeb167dd1a25cad3a86 |
+| parents_proj | 77 | 4044 | 1f5d5175497f9753469592e0dc00ef29 |
+| parents_proj | 500 | 4240 | 33efaf6a01975b460f502f30ed1dd363 |
+| parents_proj | 5000 | 4244 | 9b47bb1a6b8c58829b3e82950e381c80 |
+| parents | 1 | 4045 | 191b9e3562eac23676f2ae85efb3a6ee |
+| parents | 2 | 4046 | 335c04f0b5bc3d03bcffc67aae3869ca |
+| parents | 3 | 4045 | 75d3d9ab19d3c59998a6f1c0aa0b6948 |
+| parents | 5 | 4247 | e901b7bd5efdcfbdba02c49ec5756579 |
+| parents | 10 | 4243 | 27e3570218fbbdeb167dd1a25cad3a86 |
+| parents | 77 | 4044 | 1f5d5175497f9753469592e0dc00ef29 |
+| parents | 500 | 4240 | 33efaf6a01975b460f502f30ed1dd363 |
+| parents | 5000 | 4244 | 9b47bb1a6b8c58829b3e82950e381c80 |
+| conditions | 1 | 4045 | 191b9e3562eac23676f2ae85efb3a6ee |
+| conditions | 2 | 4046 | 335c04f0b5bc3d03bcffc67aae3869ca |
+| conditions | 3 | 4045 | 75d3d9ab19d3c59998a6f1c0aa0b6948 |
+| conditions | 5 | 4247 | e901b7bd5efdcfbdba02c49ec5756579 |
+| conditions | 10 | 4243 | 27e3570218fbbdeb167dd1a25cad3a86 |
+| conditions | 77 | 4044 | 1f5d5175497f9753469592e0dc00ef29 |
+| conditions | 500 | 4240 | 33efaf6a01975b460f502f30ed1dd363 |
+| conditions | 5000 | 4244 | 9b47bb1a6b8c58829b3e82950e381c80 |
+
+Compared with other designs' latest runs at this scale and shape:
+- vs design a (2026-10-30 10:57): parents_proj: same; parents: same; sharing: same; rbac: same
+- vs design b (2026-10-30 11:00): parents_proj: same; parents: same; sharing: same; rbac: same
+- vs design c (2026-10-30 11:02): parents_proj: same; parents: same; sharing: same; rbac: same
+
+## Query plans
+
+### rbac_select_page (RBAC policy, user 1)
+
+```
+Limit (actual time=0.718..1.387 rows=50.00 loops=1)
+  Buffers: shared hit=1930 read=8
+  InitPlan 1
+    ->  Result (actual time=0.651..0.652 rows=2.00 loops=1)
+          Buffers: shared hit=453
+          ->  ProjectSet (actual time=0.651..0.651 rows=2.00 loops=1)
+                Buffers: shared hit=453
+                ->  Result (actual time=0.000..0.000 rows=1.00 loops=1)
+  ->  Index Scan using documents_pkey on documents (actual time=0.717..1.385 rows=50.00 loops=1)
+        Filter: (org_id = ANY ((InitPlan 1).col1))
+        Rows Removed by Filter: 1429
+        Index Searches: 1
+        Buffers: shared hit=1930 read=8
+Planning:
+  Buffers: shared hit=112
+Planning Time: 0.131 ms
+Execution Time: 1.578 ms
+```
+
+### share_select_page (two-branch policy, user 1)
+
+```
+Limit (actual time=2.866..3.662 rows=50.00 loops=1)
+  Buffers: shared hit=3078 read=3
+  InitPlan 1
+    ->  Result (actual time=2.538..2.551 rows=47.00 loops=1)
+          Buffers: shared hit=1383
+          ->  ProjectSet (actual time=2.537..2.539 rows=47.00 loops=1)
+                Buffers: shared hit=1383
+                ->  Result (actual time=0.000..0.000 rows=1.00 loops=1)
+  InitPlan 2
+    ->  Result (actual time=0.282..0.282 rows=2.00 loops=1)
+          Buffers: shared hit=214
+          ->  ProjectSet (actual time=0.281..0.282 rows=2.00 loops=1)
+                Buffers: shared hit=214
+                ->  Result (actual time=0.000..0.000 rows=1.00 loops=1)
+  ->  Index Scan using documents_pkey on documents (actual time=2.866..3.659 rows=50.00 loops=1)
+        Filter: ((id = ANY ((InitPlan 1).col1)) OR (org_id = ANY ((InitPlan 2).col1)))
+        Rows Removed by Filter: 1428
+        Index Searches: 1
+        Buffers: shared hit=3078 read=3
+Planning:
+  Buffers: shared hit=115
+Planning Time: 0.164 ms
+Execution Time: 3.841 ms
+```
+
+### parents_proj_select_page (two-arm projection policy, user 1)
+
+```
+Limit (actual time=3.112..3.919 rows=50.00 loops=1)
+  Buffers: shared hit=3087 read=3
+  InitPlan 1
+    ->  Result (actual time=2.691..2.704 rows=47.00 loops=1)
+          Buffers: shared hit=1384
+          ->  ProjectSet (actual time=2.691..2.692 rows=47.00 loops=1)
+                Buffers: shared hit=1384
+                ->  Result (actual time=0.000..0.000 rows=1.00 loops=1)
+  InitPlan 2
+    ->  Result (actual time=0.092..0.093 rows=0.00 loops=1)
+          Buffers: shared hit=9
+          ->  ProjectSet (actual time=0.092..0.092 rows=0.00 loops=1)
+                Buffers: shared hit=9
+                ->  Result (actual time=0.000..0.000 rows=1.00 loops=1)
+  InitPlan 3
+    ->  Result (actual time=0.283..0.284 rows=2.00 loops=1)
+          Buffers: shared hit=213
+          ->  ProjectSet (actual time=0.282..0.283 rows=2.00 loops=1)
+                Buffers: shared hit=213
+                ->  Result (actual time=0.000..0.000 rows=1.00 loops=1)
+  ->  Index Scan using documents_pkey on documents (actual time=3.112..3.915 rows=50.00 loops=1)
+        Filter: ((id = ANY ((InitPlan 1).col1)) OR (folder_id = ANY ((InitPlan 2).col1)) OR (org_id = ANY ((InitPlan 3).col1)))
+        Rows Removed by Filter: 1428
+        Index Searches: 1
+        Buffers: shared hit=3087 read=3
+Planning:
+  Buffers: shared hit=120
+Planning Time: 0.199 ms
+Execution Time: 4.121 ms
+```
+
+### parents_select_page (single-branch policy, user 1)
+
+```
+Limit (actual time=3.199..4.282 rows=50.00 loops=1)
+  Buffers: shared hit=3077 read=2
+  InitPlan 1
+    ->  Result (actual time=2.755..2.769 rows=47.00 loops=1)
+          Buffers: shared hit=1381
+          ->  ProjectSet (actual time=2.753..2.756 rows=47.00 loops=1)
+                Buffers: shared hit=1381
+                ->  Result (actual time=0.000..0.000 rows=1.00 loops=1)
+  InitPlan 2
+    ->  Result (actual time=0.375..0.376 rows=2.00 loops=1)
+          Buffers: shared hit=214
+          ->  ProjectSet (actual time=0.374..0.374 rows=2.00 loops=1)
+                Buffers: shared hit=214
+                ->  Result (actual time=0.000..0.000 rows=1.00 loops=1)
+  ->  Index Scan using documents_pkey on documents (actual time=3.198..4.278 rows=50.00 loops=1)
+        Filter: ((id = ANY ((InitPlan 1).col1)) OR (org_id = ANY ((InitPlan 2).col1)))
+        Rows Removed by Filter: 1428
+        Index Searches: 1
+        Buffers: shared hit=3077 read=2
+Planning:
+  Buffers: shared hit=115
+Planning Time: 0.189 ms
+Execution Time: 4.542 ms
+```
+

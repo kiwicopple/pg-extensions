@@ -1,4 +1,6 @@
--- Manual measurement, not a bench phase (bench/run.sh doesn't read this file):
+-- Manual measurement, not a bench phase (bench/run.sh doesn't read this file;
+-- since phase 5 of session 5 the same workload is the bench's
+-- block_list_objects, phase 7, seed_blocklist.sql):
 -- ListObjects on a relation with `but not`, on a database the D benchmark
 -- left behind (docker/run-matrix.sh bench ... --keep-running, or a local
 -- bench/run.sh --external run). bench/baselines/D.md, "Diagnosis" 3 and

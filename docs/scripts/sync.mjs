@@ -234,12 +234,15 @@ function syncData() {
 }
 
 function syncWorkloads() {
-	const dirs = [path.join(SRC_ROOT, 'bench', 'workloads'), path.join(SRC_ROOT, 'bench', 'designs', 'c', 'workloads')];
+	// design d's directory last, for the workloads only it has (conditions, blocklist); the shared names keep c's text
+	const dirs = [path.join(SRC_ROOT, 'bench', 'workloads'), path.join(SRC_ROOT, 'bench', 'designs', 'c', 'workloads'),
+		path.join(SRC_ROOT, 'bench', 'designs', 'd', 'workloads')];
 	const out = {};
 	for (const dir of dirs) {
 		if (!fs.existsSync(dir)) continue;
 		for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.sql'))) {
 			const name = f.replace(/\.sql$/, '');
+			if (out[name]) continue;
 			const header = [];
 			for (const line of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) {
 				const m = line.match(/^--\s?(.*)$/);
