@@ -590,6 +590,13 @@ create table permissions.fga_tuples (
 );
 create index fga_tuples_user_idx on permissions.fga_tuples (user_type, user_id, user_relation, object_type, relation);
 create unique index fga_tuples_seq_idx on permissions.fga_tuples (seq);
+-- The userset tuples of an object's relation, for the backward step of Check
+-- (_fga_bstep): without it, finding the one nested team among a team's
+-- thousand members reads all thousand (the primary key has user_id before
+-- user_relation). Partial: plain users and wildcards, most tuples, aren't in
+-- it (phase 5 of session 5).
+create index fga_tuples_userset_idx on permissions.fga_tuples (object_type, object_id, relation, user_type, user_relation)
+    where user_relation <> '';
 
 -- ----------------------------------------------------------------------------
 -- Limits
@@ -3915,6 +3922,36 @@ begin
 end;
 $$;
 
+-- Each (condition, context) pair of p_pairs ([[name, context], ...])
+-- evaluated once: 't', 'f' or the error message (_fga_cond_eval). The
+-- forward walks evaluate the pairs of every conditioned tuple their recursion
+-- could take this way, then look each tuple up (_fga_cond_take), so a
+-- condition is evaluated once per distinct context instead of once per tuple
+-- and level (phase 5 of session 5).
+create function permissions._fga_conds_eval(p_m text, p_pairs jsonb, p_req jsonb)
+returns table (cn text, cc jsonb, r text)
+language sql stable
+rows 10
+as $$
+    select x ->> 0, nullif(x -> 1, 'null'::jsonb), permissions._fga_cond_eval(p_m, x ->> 0, nullif(x -> 1, 'null'::jsonb), p_req)
+    from jsonb_array_elements(coalesce(p_pairs, '[]')) x
+$$;
+
+-- An evaluated pair as a filter, by p_mode as _fga_cond: true, false, an
+-- error fails (r), is true (n) or false (d); no pair (null) is false. Called
+-- on the one pair of the tuple, looked up by a scalar subquery, so an error
+-- counts only for a tuple that has it.
+create function permissions._fga_cond_take(p_r text, p_mode "char")
+returns boolean
+language sql stable
+as $$
+    select case when p_r is null then false
+                when p_r = 't' then true
+                when p_r = 'f' then false
+                when p_mode = 'r' then permissions._fga_cond_fail(p_r)
+                else p_mode = 'n' end
+$$;
+
 -- One step forwards from frontier nodes: the tuples whose user is a frontier
 -- node (direct and userset edges), the objects whose tupleset points at one
 -- (tupleToUserset), then the relations those compute. Levels: a direct edge
@@ -4028,12 +4065,15 @@ begin
     ),
     ok(cn, cx) as materialized (
         select o.cn, o.cc
-        from permissions._fga_conds_ok(p_m, (select jsonb_agg(distinct jsonb_build_array(h.cn, h.cx)) from hits h where h.cn <> ''),
+        from permissions._fga_conds_ok(p_m, (select jsonb_agg(jsonb_build_array(d.cn, d.cx))
+                                             from (select distinct h.cn, h.cx from hits h where h.cn <> '') d),
                                        p_req, 'd') o
     ),
     good(t, i, r, l) as (
-        select h.t, h.i, h.r, h.l from hits h
-        where h.cn = '' or exists (select 1 from ok where ok.cn = h.cn and ok.cx is not distinct from h.cx)
+        select h.t, h.i, h.r, h.l from hits h where h.cn = ''
+      union all
+        -- a conditioned tuple always has a context ({} if none was given)
+        select h.t, h.i, h.r, h.l from hits h join ok on ok.cn = h.cn and ok.cx = h.cx
     ),
     closed(t, i, r, l) as (
         select * from good
@@ -4059,17 +4099,12 @@ $$;
 -- are taken when their condition is true, an error counted by p_mode (r, d,
 -- or e: one row (null, the message) and nothing else); p_types, if given,
 -- limits the plain users (and their wildcards) to those types, so ListUsers
--- never evaluates a condition on a user it would not return. With p_ut and
--- p_uids (Check for a plain user: the user and its type's wildcard), also the
--- tuples of exactly those users on the frontier, as rows with relation '' at
--- the node's level: the user probe of _fga_bidi, read in the same statement
--- as the step (phase 5 of session 5).
+-- never evaluates a condition on a user it would not return.
 create function permissions._fga_bstep(
     p_m text, p_ctx permissions.fga_tuple[],
     gt text[], gi text[], gr text[], gl int[],
     ut text[], ui text[], ur text[], p_subjects boolean,
-    p_req jsonb default null, p_mode "char" default null, p_types text[] default null,
-    p_ut text default null, p_uids text[] default null)
+    p_req jsonb default null, p_mode "char" default null, p_types text[] default null)
 returns table (t text, i text, r text, l int)
 language plpgsql stable
 rows 100
@@ -4082,15 +4117,26 @@ begin
             select * from unnest(gt, gi, gr, gl)
         ),
         nx(t, i, r, l) as (
-            select x.user_type, x.user_id, x.user_relation, g.l + case when x.user_relation = '' then 0 else 1 end
+            -- usersets (fga_tuples_userset_idx), then plain users and wildcards (ListUsers only)
+            select x.user_type, x.user_id, x.user_relation, g.l + 1
             from g
             join permissions.fga_edges e
               on e.model_id = p_m and e.kind = 'd' and e.dst_type = g.t and e.dst_relation = g.r
-             and (p_subjects or e.src_relation <> '')
+             and e.src_relation <> ''
             join permissions.fga_tuples x
               on x.object_type = g.t and x.object_id = g.i and x.relation = g.r
              and x.user_type = e.src_type and x.user_relation = e.src_relation and x.condition_name = e.condition
-            where (x.user_id = '*') = e.src_wildcard
+            where x.user_relation <> '' and x.user_id <> '*'
+          union all
+            select x.user_type, x.user_id, x.user_relation, g.l
+            from g
+            join permissions.fga_edges e
+              on e.model_id = p_m and e.kind = 'd' and e.dst_type = g.t and e.dst_relation = g.r
+             and e.src_relation = ''
+            join permissions.fga_tuples x
+              on x.object_type = g.t and x.object_id = g.i and x.relation = g.r
+             and x.user_type = e.src_type and x.user_relation = '' and x.condition_name = e.condition
+            where p_subjects and (x.user_id = '*') = e.src_wildcard
           union all
             select x.user_type, x.user_id, x.user_relation, g.l + case when x.user_relation = '' then 0 else 1 end
             from g
@@ -4117,27 +4163,6 @@ begin
             join unnest(p_ctx) x
               on x.object_type = g.t and x.object_id = g.i and x.relation = e.via
              and x.user_type = e.src_type and x.user_relation = '' and x.condition_name = e.condition
-          union all
-            -- the user probe (p_ut): the user's own tuples on the frontier
-            select x.user_type, x.user_id, x.user_relation, g.l
-            from g
-            join permissions.fga_edges e
-              on e.model_id = p_m and e.kind = 'd' and e.dst_type = g.t and e.dst_relation = g.r
-             and e.src_type = p_ut and e.src_relation = ''
-            join permissions.fga_tuples x
-              on x.object_type = g.t and x.object_id = g.i and x.relation = g.r
-             and x.user_type = p_ut and x.user_id = any (p_uids) and x.user_relation = '' and x.condition_name = e.condition
-            where not p_subjects and (x.user_id = '*') = e.src_wildcard
-          union all
-            select x.user_type, x.user_id, x.user_relation, g.l
-            from g
-            join permissions.fga_edges e
-              on e.model_id = p_m and e.kind = 'd' and e.dst_type = g.t and e.dst_relation = g.r
-             and e.src_type = p_ut and e.src_relation = ''
-            join unnest(p_ctx) x
-              on x.object_type = g.t and x.object_id = g.i and x.relation = g.r
-             and x.user_type = p_ut and x.user_id = any (p_uids) and x.user_relation = '' and x.condition_name = e.condition
-            where not p_subjects and (x.user_id = '*') = e.src_wildcard
         ),
         closed(t, i, r, l) as (
             select * from nx
@@ -4160,17 +4185,27 @@ begin
         select * from unnest(gt, gi, gr, gl)
     ),
     nx(t, i, r, l, cn, cx) as materialized (
-        select x.user_type, x.user_id, x.user_relation, g.l + case when x.user_relation = '' then 0 else 1 end,
-               x.condition_name, x.condition_context
+        -- usersets (fga_tuples_userset_idx), then plain users and wildcards (ListUsers only)
+        select x.user_type, x.user_id, x.user_relation, g.l + 1, x.condition_name, x.condition_context
         from g
         join permissions.fga_edges e
           on e.model_id = p_m and e.kind = 'd' and e.dst_type = g.t and e.dst_relation = g.r
-         and (p_subjects or e.src_relation <> '')
-         and (e.src_relation <> '' or p_types is null or e.src_type = any (p_types))
+         and e.src_relation <> ''
         join permissions.fga_tuples x
           on x.object_type = g.t and x.object_id = g.i and x.relation = g.r
          and x.user_type = e.src_type and x.user_relation = e.src_relation and x.condition_name = e.condition
-        where (x.user_id = '*') = e.src_wildcard
+        where x.user_relation <> '' and x.user_id <> '*'
+      union all
+        select x.user_type, x.user_id, x.user_relation, g.l, x.condition_name, x.condition_context
+        from g
+        join permissions.fga_edges e
+          on e.model_id = p_m and e.kind = 'd' and e.dst_type = g.t and e.dst_relation = g.r
+         and e.src_relation = ''
+         and (p_types is null or e.src_type = any (p_types))
+        join permissions.fga_tuples x
+          on x.object_type = g.t and x.object_id = g.i and x.relation = g.r
+         and x.user_type = e.src_type and x.user_relation = '' and x.condition_name = e.condition
+        where p_subjects and (x.user_id = '*') = e.src_wildcard
       union all
         select x.user_type, x.user_id, x.user_relation, g.l + case when x.user_relation = '' then 0 else 1 end,
                x.condition_name, x.condition_context
@@ -4199,37 +4234,20 @@ begin
         join unnest(p_ctx) x
           on x.object_type = g.t and x.object_id = g.i and x.relation = e.via
          and x.user_type = e.src_type and x.user_relation = '' and x.condition_name = e.condition
-      union all
-        -- the user probe (p_ut), as in the unconditioned branch
-        select x.user_type, x.user_id, x.user_relation, g.l, x.condition_name, x.condition_context
-        from g
-        join permissions.fga_edges e
-          on e.model_id = p_m and e.kind = 'd' and e.dst_type = g.t and e.dst_relation = g.r
-         and e.src_type = p_ut and e.src_relation = ''
-        join permissions.fga_tuples x
-          on x.object_type = g.t and x.object_id = g.i and x.relation = g.r
-         and x.user_type = p_ut and x.user_id = any (p_uids) and x.user_relation = '' and x.condition_name = e.condition
-        where not p_subjects and (x.user_id = '*') = e.src_wildcard
-      union all
-        select x.user_type, x.user_id, x.user_relation, g.l, x.condition_name, x.condition_context
-        from g
-        join permissions.fga_edges e
-          on e.model_id = p_m and e.kind = 'd' and e.dst_type = g.t and e.dst_relation = g.r
-         and e.src_type = p_ut and e.src_relation = ''
-        join unnest(p_ctx) x
-          on x.object_type = g.t and x.object_id = g.i and x.relation = g.r
-         and x.user_type = p_ut and x.user_id = any (p_uids) and x.user_relation = '' and x.condition_name = e.condition
-        where not p_subjects and (x.user_id = '*') = e.src_wildcard
     ),
     ok(cn, cx) as materialized (
         select o.cn, o.cc
-        from permissions._fga_conds_ok(p_m, (select jsonb_agg(distinct jsonb_build_array(n.cn, n.cx)) from nx n where n.cn <> ''),
+        from permissions._fga_conds_ok(p_m, (select jsonb_agg(jsonb_build_array(d.cn, d.cx))
+                                             from (select distinct n.cn, n.cx from nx n where n.cn <> '') d),
                                        p_req, p_mode) o
     ),
     good(t, i, r, l) as (
         select n.t, n.i, n.r, n.l from nx n
-        where (n.cn = '' or exists (select 1 from ok where ok.cn = n.cn and ok.cx is not distinct from n.cx))
-          and not exists (select 1 from ok where ok.cn is null)
+        where n.cn = '' and not exists (select 1 from ok where ok.cn is null)
+      union all
+        -- a conditioned tuple always has a context ({} if none was given)
+        select n.t, n.i, n.r, n.l from nx n join ok on ok.cn = n.cn and ok.cx = n.cx
+        where not exists (select 1 from ok where ok.cn is null)
     ),
     closed(t, i, r, l) as (
         select * from good
@@ -4273,7 +4291,7 @@ declare
     rq jsonb := case when p_mode is not null then p_req end;
     bm "char" := case when p_mode is not null then 'd' end;
     msg text;
-    fwd_rel boolean := p_urel <> '';                       -- the forward side has relation nodes
+    fwd_rel boolean := p_urel <> '';                       -- the forward side holds relation nodes
 begin
     xt := array[p_ut]; xi := array[p_uid]; xr := array[p_urel];
     if p_urel = '' and p_uid <> '*' then
@@ -4336,24 +4354,6 @@ begin
             select min(f.l + b.l) into best
             from unnest(ft, fi, fr, fl) f(t, i, r, l)
             join unnest(ut, ui, ur, ul) b(t, i, r, l) on b.t = f.t and b.i = f.i and b.r = f.r;
-        elsif p_urel = '' then
-            -- a plain user: the step and the user probe in one statement
-            -- (_fga_bstep's p_ut rows: the user's own tuples on the frontier,
-            -- at the frontier node's level, as the probe below counts them)
-            select array_agg(n.t) filter (where n.r <> ''), array_agg(n.i) filter (where n.r <> ''),
-                   array_agg(n.r) filter (where n.r <> ''), array_agg(n.l) filter (where n.r <> ''),
-                   min(n.l) filter (where n.r = '')
-            into gt, gi, gr, gl, best
-            from permissions._fga_bstep(p_m, p_ctx, gt, gi, gr, gl, ut, ui, ur, false, rq, bm, null, p_ut, xi) n;
-            continue when best is not null;
-            exit when gt is null;
-            ut := ut || gt; ui := ui || gi; ur := ur || gr; ul := ul || gl;
-            -- the forward side holds only the user (relation '') until its first step
-            if fwd_rel then
-                select min(f.l + b.l) into best
-                from unnest(st, si, sr, sl) f(t, i, r, l)
-                join unnest(gt, gi, gr, gl) b(t, i, r, l) on b.t = f.t and b.i = f.i and b.r = f.r;
-            end if;
         else
             -- the user itself (or its wildcard) in a tuple on a frontier node
             select min(g.l) into best
@@ -4378,6 +4378,9 @@ begin
             from permissions._fga_bstep(p_m, p_ctx, gt, gi, gr, gl, ut, ui, ur, false, rq, bm) n;
             exit when gt is null;
             ut := ut || gt; ui := ui || gi; ur := ur || gr; ul := ul || gl;
+            -- a plain user's forward side holds only the user (relation '')
+            -- until its first step: nothing to meet yet
+            continue when not fwd_rel;
             select min(f.l + b.l) into best
             from unnest(st, si, sr, sl) f(t, i, r, l)
             join unnest(gt, gi, gr, gl) b(t, i, r, l) on b.t = f.t and b.i = f.i and b.r = f.r;
@@ -4595,6 +4598,55 @@ begin
         from permissions.fga_walk_steps s
         where s.model_id = p_m and s.target_type = p_type and s.target_relation = p_rel
     ),
+    -- first the recursion without conditions and levels (one row per node,
+    -- a superset of what the walk reaches), for the distinct (condition,
+    -- context) pairs of the conditioned tuples it could take, each evaluated
+    -- once (ev); the leveled walk then takes a tuple by looking its pair up,
+    -- so an error counts only on a tuple it takes
+    w0(t, i, r) as (
+        select p_ut::text collate "C", p_uid::text collate "C", p_urel::text collate "C"
+      union all
+        select p_ut, '*', '' where p_urel = '' and p_uid <> '*'
+      union all
+        select p_ut, p_uid, cc.dst_relation
+        from permissions.fga_computed_closure cc
+        where cc.model_id = p_m and cc.type = p_ut and cc.src_relation = p_urel and p_urel <> ''
+      union
+        select n.t, n.i, n.r
+        from w0
+        join st on st.src_type = w0.t and st.src_relation = w0.r and st.src_wildcard = (w0.i = '*') and st.expand
+        cross join lateral (
+            select tu.object_type, tu.object_id, st.out_relation
+            from permissions.fga_tuples tu
+            where tu.user_type = w0.t and tu.user_id = w0.i and tu.user_relation = st.user_relation
+              and tu.object_type = st.object_type and tu.relation = st.tuple_relation
+              and tu.condition_name = st.condition
+          union all
+            select x.object_type, x.object_id, st.out_relation
+            from unnest(p_ctx) x
+            where x.user_type = w0.t and x.user_id = w0.i and x.user_relation = st.user_relation
+              and x.object_type = st.object_type and x.relation = st.tuple_relation
+              and x.condition_name = st.condition
+            offset 0
+        ) n(t, i, r)
+    ),
+    ev(cn, cc, r) as materialized (
+        select e.cn, e.cc, e.r
+        from permissions._fga_conds_eval(p_m, (
+            select jsonb_agg(jsonb_build_array(d.cn, d.cx))
+            from (select distinct tu.condition_name as cn, tu.condition_context as cx
+                  from w0
+                  join st on st.src_type = w0.t and st.src_relation = w0.r and st.src_wildcard = (w0.i = '*')
+                         and st.expand and st.condition <> ''
+                  join permissions.fga_tuples tu
+                    on tu.user_type = w0.t and tu.user_id = w0.i and tu.user_relation = st.user_relation
+                   and tu.object_type = st.object_type and tu.relation = st.tuple_relation
+                   and tu.condition_name = st.condition
+                union
+                  select x.condition_name, x.condition_context
+                  from unnest(p_ctx) x
+                  where x.condition_name <> '') d), p_req) e
+    ),
     w(t, i, r, l, c) as (
         select p_ut::text collate "C", p_uid::text collate "C", p_urel::text collate "C", 0, 0
       union all
@@ -4614,7 +4666,8 @@ begin
             where tu.user_type = w.t and tu.user_id = w.i and tu.user_relation = st.user_relation
               and tu.object_type = st.object_type and tu.relation = st.tuple_relation
               and tu.condition_name = st.condition
-              and (tu.condition_name = '' or permissions._fga_cond(p_m, tu.condition_name, tu.condition_context, p_req, p_mode))
+              and (tu.condition_name = '' or permissions._fga_cond_take(
+                       (select ev.r from ev where ev.cn = tu.condition_name and ev.cc = tu.condition_context), p_mode))
           union all
             select x.object_type, x.object_id, st.out_relation,
                    w.l + case when st.kind = 'd' then w.c else 1 end
@@ -4622,7 +4675,8 @@ begin
             where x.user_type = w.t and x.user_id = w.i and x.user_relation = st.user_relation
               and x.object_type = st.object_type and x.relation = st.tuple_relation
               and x.condition_name = st.condition
-              and (x.condition_name = '' or permissions._fga_cond(p_m, x.condition_name, x.condition_context, p_req, p_mode))
+              and (x.condition_name = '' or permissions._fga_cond_take(
+                       (select ev.r from ev where ev.cn = x.condition_name and ev.cc = x.condition_context), p_mode))
             offset 0
         ) n(t, i, r, l)
         where w.l < 25
@@ -4653,14 +4707,17 @@ begin
     ),
     ok(cn, cx) as materialized (
         select o.cn, o.cc
-        from permissions._fga_conds_ok(p_m, (select jsonb_agg(distinct jsonb_build_array(v.cn, v.cx)) from leaves v where v.cn <> ''),
+        from permissions._fga_conds_ok(p_m, (select jsonb_agg(jsonb_build_array(d.cn, d.cx))
+                                             from (select distinct v.cn, v.cx from leaves v where v.cn <> '') d),
                                        p_req, p_mode) o
     ),
     tg(i, l) as (
         select b.i, b.l from b where b.t = p_type and b.r = p_rel and not p_direct
       union all
-        select v.i, v.l from leaves v
-        where v.cn = '' or exists (select 1 from ok where ok.cn = v.cn and ok.cx is not distinct from v.cx)
+        select v.i, v.l from leaves v where v.cn = ''
+      union all
+        -- a conditioned tuple always has a context ({} if none was given)
+        select v.i, v.l from leaves v join ok on ok.cn = v.cn and ok.cx = v.cx
     ),
     res(i, l) as materialized (
         select tg.i, min(tg.l) from tg group by tg.i
@@ -4807,13 +4864,16 @@ begin
     ),
     ok(cn, cx) as materialized (
         select o.cn, o.cc
-        from permissions._fga_conds_ok(p_m, (select jsonb_agg(distinct jsonb_build_array(v.cn, v.cx)) from leaves v where v.cn <> ''),
+        from permissions._fga_conds_ok(p_m, (select jsonb_agg(jsonb_build_array(d.cn, d.cx))
+                                             from (select distinct v.cn, v.cx from leaves v where v.cn <> '') d),
                                        p_req, p_mode) o
     )
     select w.i from w where w.t = p_type and w.r = p_rel and not p_direct
     union
-    select v.i from leaves v
-    where v.cn = '' or exists (select 1 from ok where ok.cn = v.cn and ok.cx is not distinct from v.cx);
+    select v.i from leaves v where v.cn = ''
+    union
+    -- a conditioned tuple always has a context ({} if none was given)
+    select v.i from leaves v join ok on ok.cn = v.cn and ok.cx = v.cx;
 end;
 $$;
 

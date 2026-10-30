@@ -214,7 +214,7 @@ insert into users values ('user:a'), ('user:b'), ('user:c'), ('user:d'), ('user:
                          ('team:t1#member'), ('team:t2#member'), ('group:g1#member'),
                          ('folder:f1#fv'), ('document:d1#v_unmuted');
 
-select tap.plan(195);
+select tap.plan(199);
 
 -- which relations are set-based
 select tap.is(array(select format('%s:%s:%s', r.type, r.relation, case when r.set_eval then 'set' else '-' end)
@@ -323,5 +323,40 @@ select tap.set_eq(array(select permissions.fga_list_objects('user:a', 'document'
                         '[{"user": "user:a", "relation": "muted", "object": "document:d9"},
                           {"user": "user:a", "relation": "viewer", "object": "document:d10"}]')),
                   '{document:d4,document:d10}', 'the contextual mute removes d9, the contextual share adds d10');
+
+-- an erroring condition on an expandable node of a subtract (a conditioned
+-- group membership, x missing): the RLS helpers take the edge (n), so the
+-- block holds and access is denied; the API decides by the request's x
+select permissions.fga_write_authorization_model($m${
+  "schema_version": "1.1",
+  "type_definitions": [
+    {"type": "user"},
+    {"type": "group", "relations": {"member": {"this": {}}},
+     "metadata": {"relations": {"member": {"directly_related_user_types": [{"type": "user"}, {"type": "user", "condition": "cx"}]}}}},
+    {"type": "document",
+     "relations": {
+       "viewer": {"this": {}}, "blocked": {"this": {}}, "muted": {"this": {}},
+       "can_view": {"difference": {"base": {"computedUserset": {"relation": "viewer"}},
+                                   "subtract": {"computedUserset": {"relation": "blocked"}}}},
+       "can_view2": {"difference": {"base": {"computedUserset": {"relation": "viewer"}},
+                                    "subtract": {"union": {"child": [{"computedUserset": {"relation": "blocked"}},
+                                                                     {"computedUserset": {"relation": "muted"}}]}}}}},
+     "metadata": {"relations": {
+       "viewer": {"directly_related_user_types": [{"type": "user"}]},
+       "blocked": {"directly_related_user_types": [{"type": "user"}, {"type": "group", "relation": "member"}]},
+       "muted": {"directly_related_user_types": [{"type": "user"}]}}}}],
+  "conditions": {"cx": {"name": "cx", "expression": "x < 100", "parameters": {"x": {"type_name": "TYPE_NAME_INT"}}}}
+}$m$::jsonb) is not null as model_written;
+select permissions.fga_write('[
+  {"user": "user:a", "relation": "viewer", "object": "document:e1"},
+  {"user": "user:a", "relation": "viewer", "object": "document:e2"},
+  {"user": "user:a", "relation": "member", "object": "group:g", "condition": {"name": "cx"}},
+  {"user": "group:g#member", "relation": "blocked", "object": "document:e1"}]');
+select tap.is(pg_temp.current_list('user:a', r), '{e2}', format('RLS helper, %s: an erroring membership in the subtract blocks e1', r))
+from unnest('{can_view,can_view2}'::text[]) r;
+select tap.set_eq(array(select permissions.fga_list_objects('user:a', 'document', 'can_view2', null, null, '{"x": 1}')),
+                  '{document:e2}', 'API, x 1: the membership holds, e1 is blocked');
+select tap.set_eq(array(select permissions.fga_list_objects('user:a', 'document', 'can_view2', null, null, '{"x": 500}')),
+                  '{document:e1,document:e2}', 'API, x 500: the membership is false, e1 is not blocked');
 
 select * from tap.finish();
