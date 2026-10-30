@@ -40,7 +40,15 @@
 #               single-branch policy, one engine call returns every visible id);
 #               parents_select_page and parents_select_count
 #   5. nesting  write_nest_team, then designs/<design>/seed_nest.sql, then nest_check
-# Phases 2-5 are skipped if the design has no files for them. All designs read
+#   6. conditions  designs/<design>/seed_conditions.sql (a conditioned copy of the
+#               team graph and a policy on it; its checksum must equal parents');
+#               plain_* and cond_* twins: list_objects, select_page (twin:
+#               parents_select_page), nest_check (twin: nest_check), list_users
+#   7. blocklist  designs/<design>/seed_blocklist.sql (relations with `but not`
+#               and `and`); block_list_objects, block_or_mute_list_objects,
+#               intersect_list_objects
+# Phases 2-7 are skipped if the design has no files for them (6 and 7 exist
+# for design d only). All designs read
 # the same data from the shape tables (bench/seed_shape.sql). Checksums are
 # saved to bench/results/equivalence-<scale>-<shape>-<design>.tsv (complete
 # runs only, not --only) and compared with the other designs' latest files: identical data and correct engines
@@ -124,6 +132,8 @@ PHASE2="share_list_objects share_select_page write_share"
 PHASE3="parents_proj_select_page parents_proj_select_count"
 PHASE4="parents_select_page parents_select_count"
 PHASE5="write_nest_team nest_check"
+PHASE6="plain_list_objects cond_list_objects cond_select_page cond_nest_check plain_list_users cond_list_users"
+PHASE7="block_list_objects block_or_mute_list_objects intersect_list_objects"
 # users whose visible documents are checksummed (every 5th user is a folder viewer)
 SAMPLE_USERS="1 2 3 5 10 77 500 $USERS"
 
@@ -167,7 +177,7 @@ selected() {
 # so phase N must be seeded if so.
 phase_needed() {
     local p w list
-    for p in 1 2 3 4 5; do
+    for p in 1 2 3 4 5 6 7; do
         [ "$p" -ge "$1" ] || continue
         eval "list=\$PHASE$p"
         for w in $list; do selected "$w" && return 0; done
@@ -361,7 +371,7 @@ if phase_needed 2; then
     echo
     if [ ! -f "$DESIGN_DIR/seed_sharing.sql" ]; then
         echo "Sharing skipped: no sharing benchmark for design $DESIGN (bench/designs/$DESIGN/)"
-        skip_workloads "$PHASE2 $PHASE3 $PHASE4 $PHASE5"
+        skip_workloads "$PHASE2 $PHASE3 $PHASE4 $PHASE5 $PHASE6 $PHASE7"
     elif seed sharing "$DESIGN_DIR/seed_sharing.sql"; then
         SHARED=1
         checksums sharing
@@ -369,7 +379,7 @@ if phase_needed 2; then
         for w in $PHASE2; do run_workload "$w"; done
     else
         echo "  skipped: this implementation doesn't support the sharing API"
-        skip_workloads "$PHASE2 $PHASE3 $PHASE4 $PHASE5"
+        skip_workloads "$PHASE2 $PHASE3 $PHASE4 $PHASE5 $PHASE6 $PHASE7"
     fi
 fi
 
@@ -430,6 +440,37 @@ SQL
         run_workload nest_check
     else
         skip_workloads nest_check
+    fi
+fi
+
+# ---- 6. conditions: a conditioned copy of the team graph (design d only)
+if [ $SHARED = 1 ] && phase_needed 6; then
+    echo
+    if [ ! -f "$DESIGN_DIR/seed_conditions.sql" ]; then
+        echo "Conditions skipped: no seed_conditions.sql for design $DESIGN (not a report row: d only)"
+    elif seed conditions "$DESIGN_DIR/seed_conditions.sql"; then
+        checksums conditions
+        # every condition is true: the visible sets are the parents phase's
+        same=$(awk -F'\t' '$1 == "parents" { p[$2] = $3 FS $4 } $1 == "conditions" { c[$2] = $3 FS $4 }
+                END { n = 0; bad = 0; for (u in c) { n++; if (!(u in p) || p[u] != c[u]) bad++ }
+                      print (n == 0 ? "no rows" : (bad ? "MISMATCH" : "same")) }' "$WORK/equiv.tsv")
+        echo "  conditions vs parents (same run): $same"
+        [ "$same" = same ] || echo "  warning: the conditioned copy doesn't see what the parents phase saw" >&2
+        for w in $PHASE6; do run_workload "$w"; done
+    else
+        skip_workloads "$PHASE6"
+    fi
+fi
+
+# ---- 7. blocklist: relations that are not monotone (design d only)
+if [ $SHARED = 1 ] && phase_needed 7; then
+    echo
+    if [ ! -f "$DESIGN_DIR/seed_blocklist.sql" ]; then
+        echo "Blocklist skipped: no seed_blocklist.sql for design $DESIGN (not a report row: d only)"
+    elif seed blocklist "$DESIGN_DIR/seed_blocklist.sql"; then
+        for w in $PHASE7; do run_workload "$w"; done
+    else
+        skip_workloads "$PHASE7"
     fi
 fi
 
