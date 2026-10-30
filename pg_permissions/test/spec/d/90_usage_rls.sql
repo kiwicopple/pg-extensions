@@ -28,8 +28,8 @@ select tap.plan(36);
 -- Setup
 -- ============================================================================
 
-select permissions.create_role('viewer', '{documents.read}');
-select permissions.create_role('editor', '{documents.edit}', '{viewer}');
+select permissions.rbac_create_role(role => 'viewer', permissions => '{documents.read}');
+select permissions.rbac_create_role(role => 'editor', permissions => '{documents.edit}', inherits => '{viewer}');
 
 -- model.fga, transformed with `fga model transform`:
 --   type user
@@ -47,7 +47,7 @@ select permissions.create_role('editor', '{documents.edit}', '{viewer}');
 --       define published: [user:*]
 --       define reader: (viewer and published) or editor
 \set model '{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"member":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"member":{"this":{}}},"type":"team"},{"metadata":{"relations":{"banned":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"banned":{"this":{}}},"type":"org"},{"metadata":{"relations":{"editor":{"directly_related_user_types":[{"type":"user"}]},"owner":{"directly_related_user_types":[{"type":"user"}]},"published":{"directly_related_user_types":[{"type":"user","wildcard":{}}]},"reader":{},"viewer":{"directly_related_user_types":[{"type":"user"},{"relation":"member","type":"team"}]}}},"relations":{"editor":{"union":{"child":[{"this":{}},{"computedUserset":{"relation":"owner"}}]}},"owner":{"this":{}},"published":{"this":{}},"reader":{"union":{"child":[{"intersection":{"child":[{"computedUserset":{"relation":"viewer"}},{"computedUserset":{"relation":"published"}}]}},{"computedUserset":{"relation":"editor"}}]}},"viewer":{"union":{"child":[{"this":{}},{"computedUserset":{"relation":"editor"}}]}}},"type":"document"}]}'
-select permissions.fga_write_authorization_model(:'model');
+select permissions.fga_write_authorization_model(model => :'model');
 
 create table public.documents (
     id     uuid primary key,
@@ -66,12 +66,12 @@ alter table public.documents enable row level security;
 grant select, update on public.documents to authenticated;
 
 -- RBAC: Alice reads acme, Carol edits acme, Dave reads acme
-select permissions.assign_role(:'alice', 'viewer', :'acme');
-select permissions.assign_role(:'carol', 'editor', :'acme');
-select permissions.assign_role(:'dave',  'viewer', :'acme');
+select permissions.rbac_assign_role(user_id => :'alice', role => 'viewer', scope => :'acme');
+select permissions.rbac_assign_role(user_id => :'carol', role => 'editor', scope => :'acme');
+select permissions.rbac_assign_role(user_id => :'dave',  role => 'viewer', scope => :'acme');
 -- FGA: team eng (Bob) views the globex notes and the draft, Bob edits the acme
 -- readme, Dave owns his diary, views the globex notes and is banned from acme
-select permissions.fga_write(jsonb_build_array(
+select permissions.fga_write(writes => jsonb_build_array(
     jsonb_build_object('user', 'user:' || :'bob',  'relation', 'member', 'object', 'team:' || :'eng'),
     jsonb_build_object('user', 'team:' || :'eng' || '#member', 'relation', 'viewer', 'object', 'document:' || :'notes'),
     jsonb_build_object('user', 'team:' || :'eng' || '#member', 'relation', 'viewer', 'object', 'document:' || :'draft'),
@@ -87,14 +87,14 @@ select tap.pass('setup: roles, model, table and tuples');
 
 begin;
 select set_config('permissions.subject_id', :'bob', true);
-select tap.is(permissions.fga_check_current('editor', 'document:' || :'readme'), true, 'current subject: fga_check_current asks for user:<current_subject_id()>');
-select tap.set_eq(array(select permissions.fga_list_object_ids_current('document', 'viewer')),
+select tap.is(permissions.fga_check_current(relation => 'editor', object => 'document:' || :'readme'), true, 'current subject: fga_check_current asks for user:<current_subject_id()>');
+select tap.set_eq(array(select permissions.fga_list_object_ids_current(type => 'document', relation => 'viewer')),
                   array[:'readme', :'notes', :'draft'], 'current subject: fga_list_object_ids_current returns bare ids');
-select tap.set_eq(array(select permissions.fga_list_objects_current('document', 'viewer')),
+select tap.set_eq(array(select permissions.fga_list_objects_current(type => 'document', relation => 'viewer')),
                   array['document:' || :'readme', 'document:' || :'notes', 'document:' || :'draft'], 'current subject: fga_list_objects_current returns type:id');
 commit;
-select tap.is(permissions.fga_check_current('editor', 'document:' || :'readme'), false, 'current subject: no subject, false');
-select tap.set_eq(array(select permissions.fga_list_object_ids_current('document', 'viewer')), '{}'::text[], 'current subject: no subject, nothing');
+select tap.is(permissions.fga_check_current(relation => 'editor', object => 'document:' || :'readme'), false, 'current subject: no subject, false');
+select tap.set_eq(array(select permissions.fga_list_object_ids_current(type => 'document', relation => 'viewer')), '{}'::text[], 'current subject: no subject, nothing');
 
 -- ============================================================================
 -- Policies
@@ -102,17 +102,17 @@ select tap.set_eq(array(select permissions.fga_list_object_ids_current('document
 
 -- reads: permissive policies OR together
 create policy documents_select_rbac on public.documents for select to authenticated
-    using (org_id = any (array(select unnest(permissions.scopes_with_permission('documents.read'))::uuid)));
+    using (org_id = any (array(select unnest(permissions.rbac_scopes_with_permission(permission => 'documents.read'))::uuid)));
 create policy documents_select_fga on public.documents for select to authenticated
-    using (id = any (array(select permissions.fga_list_object_ids_current('document', 'viewer')::uuid)));
+    using (id = any (array(select permissions.fga_list_object_ids_current(type => 'document', relation => 'viewer')::uuid)));
 -- a restrictive policy ANDs: nobody sees the documents of an org they are banned from
 create policy documents_not_banned on public.documents as restrictive for select to authenticated
-    using (org_id is null or org_id <> all (array(select permissions.fga_list_object_ids_current('org', 'banned')::uuid)));
+    using (org_id is null or org_id <> all (array(select permissions.fga_list_object_ids_current(type => 'org', relation => 'banned')::uuid)));
 -- writes: check the row
 create policy documents_update_rbac on public.documents for update to authenticated
-    using (permissions.has_permission('documents.edit', org_id::text));
+    using (permissions.rbac_has_permission(permission => 'documents.edit', scope => org_id::text));
 create policy documents_update_fga on public.documents for update to authenticated
-    using (permissions.fga_check_current('editor', 'document:' || id));
+    using (permissions.fga_check_current(relation => 'editor', object => 'document:' || id));
 
 set role authenticated;
 select set_config('permissions.subject_id', :'alice', false);
@@ -168,13 +168,13 @@ select tap.is((select proretset from pg_proc where oid = 'permissions.fga_list_o
 
 begin;
 select set_config('permissions.subject_id', :'bob', true);
-select tap.is((fga_test.error_of($$ select permissions.fga_check_current('editr', 'document:x') $$)).msg,
+select tap.is((fga_test.error_of($$ select permissions.fga_check_current(relation => 'editr', object => 'document:x') $$)).msg,
               'relation ''document#editr'' not found', 'typos: an unknown relation raises');
-select tap.is((fga_test.error_of($$ select permissions.fga_check_current('editr', 'document:x') $$)).hint,
+select tap.is((fga_test.error_of($$ select permissions.fga_check_current(relation => 'editr', object => 'document:x') $$)).hint,
               'Did you mean ''editor''? Relations on type ''document'': editor, owner, published, reader, viewer.', 'typos: with a hint');
-select tap.is((fga_test.error_of($$ select permissions.fga_list_object_ids_current('documnt', 'viewer') $$)).detail,
+select tap.is((fga_test.error_of($$ select permissions.fga_list_object_ids_current(type => 'documnt', relation => 'viewer') $$)).detail,
               'openfga:2000 validation_error', 'typos: an unknown type too');
-select tap.is(permissions.has_permission('documents.reed'), false, 'typos: an unknown RBAC permission is false');
+select tap.is(permissions.rbac_has_permission(permission => 'documents.reed'), false, 'typos: an unknown RBAC permission is false');
 commit;
 
 -- ============================================================================
@@ -182,24 +182,24 @@ commit;
 -- ============================================================================
 
 create policy documents_published on public.documents as restrictive for select to authenticated
-    using (status = 'published' or id = any (array(select permissions.fga_list_object_ids_current('document', 'editor')::uuid)));
+    using (status = 'published' or id = any (array(select permissions.fga_list_object_ids_current(type => 'document', relation => 'editor')::uuid)));
 
 set role authenticated;
 select set_config('permissions.subject_id', :'bob', false);
 select tap.set_eq(array(select title from public.documents), '{acme readme!?,globex notes}', 'attributes: RLS hides the draft from Bob');
-select tap.is(permissions.fga_check_current('viewer', 'document:' || :'draft'), true, 'attributes: fga_check_current still says Bob views it');
+select tap.is(permissions.fga_check_current(relation => 'viewer', object => 'document:' || :'draft'), true, 'attributes: fga_check_current still says Bob views it');
 reset role;
 select set_config('permissions.subject_id', '', false);
 
 -- pass the attribute in, from a backend
-select tap.is(permissions.fga_check('user:' || :'bob', 'reader', 'document:' || :'draft'), false,
+select tap.is(permissions.fga_check(subject => 'user:' || :'bob', relation => 'reader', object => 'document:' || :'draft'), false,
               'attributes: reader, with no published tuple for the draft');
-select tap.is(permissions.fga_check('user:' || :'bob', 'reader', 'document:' || d.id,
+select tap.is(permissions.fga_check(subject => 'user:' || :'bob', relation => 'reader', object => 'document:' || d.id,
                   contextual_tuples => case when d.status = 'published'
                       then jsonb_build_array(jsonb_build_object('user', 'user:*', 'relation', 'published', 'object', 'document:' || d.id))
                   end), true, 'attributes: reader of the notes, published passed in')
 from public.documents d where d.id = :'notes';
-select tap.is(permissions.fga_check('user:' || :'bob', 'reader', 'document:' || d.id,
+select tap.is(permissions.fga_check(subject => 'user:' || :'bob', relation => 'reader', object => 'document:' || d.id,
                   contextual_tuples => case when d.status = 'published'
                       then jsonb_build_array(jsonb_build_object('user', 'user:*', 'relation', 'published', 'object', 'document:' || d.id))
                   end), false, 'attributes: not reader of the draft')
@@ -212,8 +212,8 @@ from public.documents d where d.id = :'draft';
 -- `fga model transform` of the page's model with the viewer line and the condition changed (openfga/cli v0.8.2;
 -- its \u003c written as <, which psql's \set would mangle):
 \set model '{"schema_version":"1.1","type_definitions":[{"type":"user"},{"metadata":{"relations":{"member":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"member":{"this":{}}},"type":"team"},{"metadata":{"relations":{"banned":{"directly_related_user_types":[{"type":"user"}]}}},"relations":{"banned":{"this":{}}},"type":"org"},{"metadata":{"relations":{"editor":{"directly_related_user_types":[{"type":"user"}]},"owner":{"directly_related_user_types":[{"type":"user"}]},"published":{"directly_related_user_types":[{"type":"user","wildcard":{}}]},"reader":{},"viewer":{"directly_related_user_types":[{"type":"user"},{"condition":"non_expired_grant","type":"user"},{"relation":"member","type":"team"}]}}},"relations":{"editor":{"union":{"child":[{"this":{}},{"computedUserset":{"relation":"owner"}}]}},"owner":{"this":{}},"published":{"this":{}},"reader":{"union":{"child":[{"intersection":{"child":[{"computedUserset":{"relation":"viewer"}},{"computedUserset":{"relation":"published"}}]}},{"computedUserset":{"relation":"editor"}}]}},"viewer":{"union":{"child":[{"this":{}},{"computedUserset":{"relation":"editor"}}]}}},"type":"document"}],"conditions":{"non_expired_grant":{"expression":"current_time < grant_time + grant_duration","name":"non_expired_grant","parameters":{"current_time":{"type_name":"TYPE_NAME_TIMESTAMP"},"grant_duration":{"type_name":"TYPE_NAME_DURATION"},"grant_time":{"type_name":"TYPE_NAME_TIMESTAMP"}}}}}'
-select permissions.fga_write_authorization_model(:'model');
-select permissions.fga_write(jsonb_build_array(jsonb_build_object(
+select permissions.fga_write_authorization_model(model => :'model');
+select permissions.fga_write(writes => jsonb_build_array(jsonb_build_object(
     'user', 'user:' || :'erin', 'relation', 'viewer', 'object', 'document:' || :'plan',
     'condition', jsonb_build_object('name', 'non_expired_grant',
         'context', jsonb_build_object('grant_time', now() - interval '1 day', 'grant_duration', '720h')))));
@@ -221,14 +221,15 @@ select permissions.fga_write(jsonb_build_array(jsonb_build_object(
 set role authenticated;
 select set_config('permissions.subject_id', :'erin', false);
 select tap.set_eq(array(select id::text from public.documents), '{}'::text[], 'conditions: Erin sees nothing, the policies have no current_time');
-select tap.is(permissions.fga_check_current('viewer', 'document:' || :'plan'), false, 'conditions: fga_check_current is false, not an error');
+select tap.is(permissions.fga_check_current(relation => 'viewer', object => 'document:' || :'plan'), false, 'conditions: fga_check_current is false, not an error');
 reset role;
 
 create function public.fga_check_now(relation text, object text) returns boolean
 language plpgsql stable security definer set search_path = ''
 as $$
 begin
-    return permissions.fga_check('user:' || permissions.current_subject_id(), relation, object,
+    return permissions.fga_check(subject => 'user:' || permissions.current_subject_id(),
+                                 relation => relation, object => object,
                                  context => jsonb_build_object('current_time', now()));
 exception when invalid_parameter_value then
     return false;   -- no subject, or a condition that still can't be evaluated (openfga:2000): deny
@@ -257,18 +258,18 @@ create function public.forget_user() returns trigger
 language plpgsql security definer set search_path = ''
 as $$
 begin
-    perform permissions.delete_subject('user', old.id::text);
+    perform permissions.delete_subject(subject_type => 'user', subject_id => old.id::text);
     return old;
 end;
 $$;
 create trigger forget_user after delete on public.users
     for each row execute function public.forget_user();
 
-select tap.set_eq(permissions.user_permissions(:'dave', :'acme'), '{documents.read}', 'cleanup: Dave holds a role');
-select tap.is((select jsonb_array_length(tuples) from permissions.fga_read(p_user => 'user:' || :'dave')), 3, 'cleanup: and three tuples');
+select tap.set_eq(permissions.rbac_user_permissions(user_id => :'dave', scope => :'acme'), '{documents.read}', 'cleanup: Dave holds a role');
+select tap.is((select jsonb_array_length(tuples) from permissions.fga_read(subject => 'user:' || :'dave')), 3, 'cleanup: and three tuples');
 delete from public.users where id = :'dave';
-select tap.set_eq(permissions.user_permissions(:'dave', :'acme'), '{}'::text[], 'cleanup: deleting the user removes his roles');
-select tap.is((select jsonb_array_length(tuples) from permissions.fga_read(p_user => 'user:' || :'dave')), 0, 'cleanup: and his tuples');
-select tap.is(permissions.delete_subject('team', :'eng'), 3::bigint, 'cleanup: delete_subject works for any type: team eng''s two viewer tuples and its member');
+select tap.set_eq(permissions.rbac_user_permissions(user_id => :'dave', scope => :'acme'), '{}'::text[], 'cleanup: deleting the user removes his roles');
+select tap.is((select jsonb_array_length(tuples) from permissions.fga_read(subject => 'user:' || :'dave')), 0, 'cleanup: and his tuples');
+select tap.is(permissions.delete_subject(subject_type => 'team', subject_id => :'eng'), 3::bigint, 'cleanup: delete_subject works for any type: team eng''s two viewer tuples and its member');
 
 select * from tap.finish();

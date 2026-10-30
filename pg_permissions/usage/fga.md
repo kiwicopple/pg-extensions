@@ -65,15 +65,15 @@ The spec file has the whole output. Write it as the admin. In psql:
 
 ```sql
 \set model `cat model.json`
-select permissions.fga_write_authorization_model(:'model') as model_id \gset
+select permissions.fga_write_authorization_model(model => :'model') as model_id \gset
 ```
 
-The function returns the new model's id, a ULID such as `01JB...`, and the model becomes the latest. Every function on this page uses the latest model unless you pass `authorization_model_id`. `fga_read_authorization_models()` lists the models, newest first, and `fga_read_authorization_model(id)` returns one (the latest without an argument).
+The function returns the new model's id, a ULID such as `01JB...`, and the model becomes the latest. Every function on this page uses the latest model unless you pass `model_id` (OpenFGA's `authorization_model_id`). `fga_read_authorization_models()` lists the models, newest first, and `fga_read_authorization_model(id)` returns one (the latest without an argument).
 
 The model is checked as OpenFGA's server checks it, with the same error codes. A typo in a relation name, for example:
 
 ```sql
-select permissions.fga_write_authorization_model('{"schema_version": "1.1", "type_definitions": [
+select permissions.fga_write_authorization_model(model => '{"schema_version": "1.1", "type_definitions": [
   {"type": "user"},
   {"type": "document",
    "relations": {"editor": {"this": {}}, "viewer": {"computedUserset": {"relation": "editr"}}},
@@ -90,7 +90,7 @@ Relations that can never be satisfied are refused too: two relations that only r
 A tuple says that a user has a relation to an object: `{"user": "user:bob", "relation": "member", "object": "team:eng"}`. A user is `type:id`, a typed wildcard `type:*` (everyone of that type), or a userset `type:id#relation` (everyone with that relation to that object). Write them with `fga_write`:
 
 ```sql
-select permissions.fga_write('[
+select permissions.fga_write(writes => '[
   {"user": "user:bob",            "relation": "member", "object": "team:eng"},
   {"user": "team:design#member",  "relation": "member", "object": "team:eng"},
   {"user": "user:carl",           "relation": "member", "object": "team:design"},
@@ -109,9 +109,9 @@ Bob is in team `eng`, and so is everyone in team `design` (Carl). Anne owns the 
 For one tuple at a time, `fga_write_tuple` and `fga_delete_tuple` don't fail when the tuple is already there or already gone:
 
 ```sql
-select permissions.fga_write_tuple('user:erin', 'owner', 'document:notes');
-select permissions.fga_write_tuple('user:erin', 'owner', 'document:notes');   -- no error: already there
-select permissions.fga_delete_tuple('user:erin', 'owner', 'document:notes');
+select permissions.fga_write_tuple(subject => 'user:erin', relation => 'owner', object => 'document:notes');
+select permissions.fga_write_tuple(subject => 'user:erin', relation => 'owner', object => 'document:notes');   -- no error: already there
+select permissions.fga_delete_tuple(subject => 'user:erin', relation => 'owner', object => 'document:notes');
 ```
 
 `fga_write` takes writes and deletes together, in one transaction. Each side is an array of tuple keys, or OpenFGA's `{"tuple_keys": [...]}` with `"on_duplicate": "ignore"` (writes) or `"on_missing": "ignore"` (deletes):
@@ -125,7 +125,7 @@ select permissions.fga_write(
 Without those options, writing a tuple that exists or deleting one that doesn't is an error, as in OpenFGA:
 
 ```sql
-select permissions.fga_write('[{"user": "user:erin", "relation": "editor", "object": "document:notes"}]');
+select permissions.fga_write(writes => '[{"user": "user:erin", "relation": "editor", "object": "document:notes"}]');
 -- ERROR:  cannot write a tuple which already exists: document:notes#editor@user:erin
 -- DETAIL:  openfga:2017 write_failed_due_to_invalid_input
 -- HINT:  Pass writes as {"tuple_keys": [...], "on_duplicate": "ignore"} to skip tuples that already exist.
@@ -134,35 +134,35 @@ select permissions.fga_write('[{"user": "user:erin", "relation": "editor", "obje
 Every tuple is checked against the model's type restrictions. `editor` is `[user, team#member]`, so a wildcard is refused:
 
 ```sql
-select permissions.fga_write('[{"user": "user:*", "relation": "editor", "object": "document:notes"}]');
+select permissions.fga_write(writes => '[{"user": "user:*", "relation": "editor", "object": "document:notes"}]');
 -- DETAIL:  openfga:2027 invalid_tuple
 -- HINT:  'document#editor' allows users of type: team#member, user.
 ```
 
 ## Check
 
-`fga_check(user, relation, object)` is OpenFGA's Check:
+`fga_check(subject, relation, object)` is OpenFGA's Check. `subject` is OpenFGA's `user` field (`user` is a reserved word in SQL, so `user => ...` wouldn't parse); the examples name every argument:
 
 ```sql
-select permissions.fga_check('user:anne', 'viewer', 'document:roadmap');    -- true: owns folder:projects, two parents up
-select permissions.fga_check('user:bob',  'viewer', 'document:roadmap');    -- true: team:eng views folder:projects
-select permissions.fga_check('user:carl', 'viewer', 'document:roadmap');    -- true: team:design is in team:eng
-select permissions.fga_check('user:carl', 'can_view', 'document:roadmap');  -- false: carl is blocked
-select permissions.fga_check('user:dana', 'viewer', 'document:roadmap');    -- true: editors view
-select permissions.fga_check('user:erin', 'viewer', 'document:roadmap');    -- false
-select permissions.fga_check('user:erin', 'viewer', 'document:handbook');   -- true: user:*
+select permissions.fga_check(subject => 'user:anne', relation => 'viewer', object => 'document:roadmap');    -- true: owns folder:projects, two parents up
+select permissions.fga_check(subject => 'user:bob',  relation => 'viewer', object => 'document:roadmap');    -- true: team:eng views folder:projects
+select permissions.fga_check(subject => 'user:carl', relation => 'viewer', object => 'document:roadmap');    -- true: team:design is in team:eng
+select permissions.fga_check(subject => 'user:carl', relation => 'can_view', object => 'document:roadmap');  -- false: carl is blocked
+select permissions.fga_check(subject => 'user:dana', relation => 'viewer', object => 'document:roadmap');    -- true: editors view
+select permissions.fga_check(subject => 'user:erin', relation => 'viewer', object => 'document:roadmap');    -- false
+select permissions.fga_check(subject => 'user:erin', relation => 'viewer', object => 'document:handbook');   -- true: user:*
 ```
 
 A deny belongs in the model, as `but not`: `can_view` is `viewer but not blocked`. Check `can_view` where you mean "can see it", and keep `viewer` for "was given access".
 
 ## ListObjects
 
-`fga_list_objects(user, type, relation)` returns the objects of a type the user has the relation to, as `type:id` strings in no particular order:
+`fga_list_objects(subject, type, relation)` returns the objects of a type the user has the relation to, as `type:id` strings in no particular order:
 
 ```sql
-select permissions.fga_list_objects('user:bob', 'document', 'viewer');     -- document:roadmap, document:handbook
-select permissions.fga_list_objects('user:carl', 'document', 'can_view');  -- document:handbook
-select permissions.fga_list_objects('user:anne', 'folder', 'viewer');      -- folder:projects, folder:roadmaps
+select permissions.fga_list_objects(subject => 'user:bob', type => 'document', relation => 'viewer');     -- document:roadmap, document:handbook
+select permissions.fga_list_objects(subject => 'user:carl', type => 'document', relation => 'can_view');  -- document:handbook
+select permissions.fga_list_objects(subject => 'user:anne', type => 'folder', relation => 'viewer');      -- folder:projects, folder:roadmaps
 ```
 
 It returns at most 1,000 objects, like OpenFGA, and drops the rest without an error ([Errors and limits](#errors-and-limits)). For RLS use `fga_list_object_ids_current`, which has no cap ([RLS with both models](rls.md)).
@@ -172,34 +172,34 @@ It returns at most 1,000 objects, like OpenFGA, and drops the rest without an er
 `fga_list_users(object, relation, user_filters)` returns who has the relation to the object. The filters say which kind of user you want: a type (`user`) or a userset (`team#member`):
 
 ```sql
-select permissions.fga_list_users('document:roadmap', 'viewer', '{user}');         -- user:anne, user:bob, user:carl, user:dana
-select permissions.fga_list_users('document:roadmap', 'can_view', '{user}');       -- user:anne, user:bob, user:dana
-select permissions.fga_list_users('document:roadmap', 'viewer', '{team#member}');  -- team:eng#member, team:design#member
-select permissions.fga_list_users('document:handbook', 'viewer', '{user}');        -- user:*
+select permissions.fga_list_users(object => 'document:roadmap', relation => 'viewer', user_filters => '{user}');         -- user:anne, user:bob, user:carl, user:dana
+select permissions.fga_list_users(object => 'document:roadmap', relation => 'can_view', user_filters => '{user}');       -- user:anne, user:bob, user:dana
+select permissions.fga_list_users(object => 'document:roadmap', relation => 'viewer', user_filters => '{team#member}');  -- team:eng#member, team:design#member
+select permissions.fga_list_users(object => 'document:handbook', relation => 'viewer', user_filters => '{user}');        -- user:*
 ```
 
 A wildcard comes back as `user:*`: everyone. Like ListObjects, at most 1,000.
 
 ## Read
 
-`fga_read` returns the stored tuples, without evaluating anything: one page of OpenFGA's ReadResponse as a row of `(tuples jsonb, continuation_token text)`. Filter by object (`type:id`, or `type:` for every object of a type), relation and user, in any combination:
+`fga_read` returns the stored tuples, without evaluating anything: one page of OpenFGA's ReadResponse as a row of `(tuples jsonb, continuation_token text)`. Filter by `object` (`type:id`, or `type:` for every object of a type), `relation` and `subject`, in any combination:
 
 ```sql
-select tuples, continuation_token from permissions.fga_read('document:roadmap');
+select tuples, continuation_token from permissions.fga_read(object => 'document:roadmap');
 -- tuples: [{"key": {"user": "folder:roadmaps", "relation": "parent", "object": "document:roadmap"}, "timestamp": "..."}, ...] (3 tuples)
 -- continuation_token: '' (the last page)
 
 -- as rows
 select t #>> '{key,relation}', t #>> '{key,user}'
-from permissions.fga_read('document:roadmap') r, jsonb_array_elements(r.tuples) t;
+from permissions.fga_read(object => 'document:roadmap') r, jsonb_array_elements(r.tuples) t;
 ```
 
-A page holds 50 tuples unless `p_page_size` (1 to 100) says otherwise, in the order they were written. When there are more, `continuation_token` is not empty: pass it back unchanged to get the next page.
+A page holds 50 tuples unless `page_size` (1 to 100) says otherwise, in the order they were written. When there are more, `continuation_token` is not empty: pass it back unchanged to get the next page.
 
 ```sql
-select tuples, continuation_token as token from permissions.fga_read('folder:', p_page_size => 1) \gset
-select tuples, continuation_token as token from permissions.fga_read('folder:', p_page_size => 1, p_continuation_token => :'token') \gset
-select tuples, continuation_token as token from permissions.fga_read('folder:', p_page_size => 1, p_continuation_token => :'token') \gset
+select tuples, continuation_token as token from permissions.fga_read(object => 'folder:', page_size => 1) \gset
+select tuples, continuation_token as token from permissions.fga_read(object => 'folder:', page_size => 1, continuation_token => :'token') \gset
+select tuples, continuation_token as token from permissions.fga_read(object => 'folder:', page_size => 1, continuation_token => :'token') \gset
 -- three pages of one tuple each; the third token is ''
 ```
 
@@ -207,10 +207,10 @@ Or walk every page in one query:
 
 ```sql
 with recursive pages(tuples, token, n) as (
-    select r.tuples, r.continuation_token, 1 from permissions.fga_read(p_page_size => 4) r
+    select r.tuples, r.continuation_token, 1 from permissions.fga_read(page_size => 4) r
   union all
     select r.tuples, r.continuation_token, n + 1
-    from pages, permissions.fga_read(p_page_size => 4, p_continuation_token => pages.token) r
+    from pages, permissions.fga_read(page_size => 4, continuation_token => pages.token) r
     where pages.token <> ''
 )
 select sum(jsonb_array_length(tuples)) from pages;   -- 11
@@ -223,11 +223,11 @@ A tuple's `key` is the tuple key `fga_write` takes, so a page can be passed back
 Check, ListObjects and ListUsers take `contextual_tuples`: tuples that count for this one call and are never written. They are checked against the model like writes:
 
 ```sql
-select permissions.fga_check('user:erin', 'viewer', 'document:roadmap',
+select permissions.fga_check(subject => 'user:erin', relation => 'viewer', object => 'document:roadmap',
     contextual_tuples => '[{"user": "user:erin", "relation": "member", "object": "team:eng"}]');   -- true
-select permissions.fga_list_objects('user:erin', 'document', 'viewer',
+select permissions.fga_list_objects(subject => 'user:erin', type => 'document', relation => 'viewer',
     contextual_tuples => '[{"user": "user:erin", "relation": "member", "object": "team:eng"}]');   -- document:roadmap, document:handbook, document:notes
-select permissions.fga_check('user:erin', 'viewer', 'document:roadmap');                          -- false: nothing was written
+select permissions.fga_check(subject => 'user:erin', relation => 'viewer', object => 'document:roadmap');                          -- false: nothing was written
 ```
 
 Use them for facts your application knows at request time and doesn't store as tuples, such as a group membership that comes from the identity provider. The current-subject functions used in RLS don't take them: a client could vouch for itself.
@@ -237,7 +237,7 @@ Use them for facts your application knows at request time and doesn't store as t
 Invalid input raises an exception. The SQLSTATE is `22023` (`invalid_parameter_value`; `54001` when a check needs more than 25 levels), `DETAIL` carries OpenFGA's error code and name, the message names the values that were wrong, and `HINT` says how to fix it:
 
 ```sql
-select permissions.fga_check('user:anne', 'viewr', 'document:roadmap');
+select permissions.fga_check(subject => 'user:anne', relation => 'viewr', object => 'document:roadmap');
 -- ERROR:  relation 'document#viewr' not found
 -- DETAIL:  openfga:2000 validation_error
 -- HINT:  Did you mean 'viewer'? Relations on type 'document': blocked, can_view, editor, owner, parent, viewer.
@@ -258,9 +258,9 @@ Write more than 100 tuples in batches; the batches can share a transaction:
 
 ```sql
 begin;
-select permissions.fga_write((select jsonb_agg(jsonb_build_object('user', 'user:u' || g, 'relation', 'viewer', 'object', 'document:big'))
+select permissions.fga_write(writes => (select jsonb_agg(jsonb_build_object('user', 'user:u' || g, 'relation', 'viewer', 'object', 'document:big'))
                               from generate_series(1, 100) g));
-select permissions.fga_write((select jsonb_agg(jsonb_build_object('user', 'user:u' || g, 'relation', 'viewer', 'object', 'document:big'))
+select permissions.fga_write(writes => (select jsonb_agg(jsonb_build_object('user', 'user:u' || g, 'relation', 'viewer', 'object', 'document:big'))
                               from generate_series(101, 200) g));
 commit;
 ```
@@ -273,14 +273,14 @@ Models are never changed in place. Write a new one and it becomes the latest; th
 
 ```sql
 select permissions.fga_write_authorization_model(
-    jsonb_set(:'model'::jsonb, '{type_definitions,3}',
+    model => jsonb_set(:'model'::jsonb, '{type_definitions,3}',
               (:'model'::jsonb #> '{type_definitions,3}') #- '{relations,blocked}' #- '{relations,can_view}'
                 #- '{metadata,relations,blocked}' #- '{metadata,relations,can_view}')) as model_v2 \gset
 
-select permissions.fga_check('user:carl', 'can_view', 'document:roadmap');
+select permissions.fga_check(subject => 'user:carl', relation => 'can_view', object => 'document:roadmap');
 -- ERROR:  relation 'document#can_view' not found (openfga:2000): not in the latest model
-select permissions.fga_check('user:carl', 'can_view', 'document:roadmap', authorization_model_id => :'model_id');   -- false: the old model
-select tuples from permissions.fga_read('document:roadmap', 'blocked');   -- carl's tuple is still there
+select permissions.fga_check(subject => 'user:carl', relation => 'can_view', object => 'document:roadmap', model_id => :'model_id');  -- false: the old model
+select tuples from permissions.fga_read(object => 'document:roadmap', relation => 'blocked');                                         -- carl's tuple is still there
 ```
 
 In practice you'd edit `model.fga` and transform it again. `fga_delete_store()` removes every model and tuple.
@@ -291,9 +291,9 @@ Every function on this page takes the user as an argument or changes data, so on
 
 ```sql
 set role authenticated;
-select permissions.fga_check('user:anne', 'viewer', 'document:roadmap');      -- ERROR:  permission denied for function fga_check
-select permissions.fga_write_tuple('user:erin', 'owner', 'document:roadmap'); -- ERROR:  permission denied for function fga_write_tuple
-select permissions.fga_check_current('viewer', 'document:roadmap');           -- fine: answers for the current subject
+select permissions.fga_check(subject => 'user:anne', relation => 'viewer', object => 'document:roadmap');        -- ERROR:  permission denied for function fga_check
+select permissions.fga_write_tuple(subject => 'user:erin', relation => 'owner', object => 'document:roadmap');  -- ERROR:  permission denied for function fga_write_tuple
+select permissions.fga_check_current(relation => 'viewer', object => 'document:roadmap');           -- fine: answers for the current subject
 reset role;
 ```
 

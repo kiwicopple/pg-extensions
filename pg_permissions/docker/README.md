@@ -1,6 +1,6 @@
 # Postgres 16, 17 and 18 with pg_tle (Docker)
 
-Runs the test suite and the benchmark on three Postgres versions, each with [pg_tle](https://github.com/aws/pg_tle) preloaded, so `test/spec/03_tle_install.sql` exercises its `pgtle.install_extension` branch (the local throwaway cluster has no pg_tle and skips it).
+Runs the test suite and the benchmark on three Postgres versions, each with [pg_tle](https://github.com/aws/pg_tle) preloaded, so `test/spec/d/03_tle_install.sql` (and its prototype copy `test/spec/03_tle_install.sql`) exercises its `pgtle.install_extension` branch (the local throwaway cluster has no pg_tle and skips it).
 
 | Service | Image | Postgres | Host port |
 | --- | --- | --- | --- |

@@ -173,23 +173,23 @@ select tap.is((select tuples from permissions.fga_read(null, null, null, 3,
               '[]'::jsonb, 'a well-formed token beyond the last tuple gives an empty page');
 
 -- page_size and token validation
-select tap.ok(fga_test.code_of($$ select permissions.fga_read(p_page_size => 0) $$) like 'openfga:2000 %', 'page_size 0 fails (2000)');
-select tap.is(fga_test.code_of($$ select permissions.fga_read(p_page_size => 101) $$),
+select tap.ok(fga_test.code_of($$ select permissions.fga_read(page_size => 0) $$) like 'openfga:2000 %', 'page_size 0 fails (2000)');
+select tap.is(fga_test.code_of($$ select permissions.fga_read(page_size => 101) $$),
               'openfga:2000 invalid ReadRequest.PageSize: value must be inside range [1, 100], got 101', 'page_size 101 fails (2000)');
-select tap.ok(fga_test.code_of($$ select permissions.fga_read(p_page_size => -5) $$) like 'openfga:2000 %', 'a negative page_size fails (2000)');
-select tap.ok(fga_test.code_of($$ select permissions.fga_read(p_continuation_token => 'not a token!') $$) like 'openfga:2000 %',
+select tap.ok(fga_test.code_of($$ select permissions.fga_read(page_size => -5) $$) like 'openfga:2000 %', 'a negative page_size fails (2000)');
+select tap.ok(fga_test.code_of($$ select permissions.fga_read(continuation_token => 'not a token!') $$) like 'openfga:2000 %',
               'a token outside the base64url alphabet fails (2000)');
-select tap.ok(fga_test.code_of($$ select permissions.fga_read(p_continuation_token => repeat('A', 5121)) $$) like 'openfga:2000 %',
+select tap.ok(fga_test.code_of($$ select permissions.fga_read(continuation_token => repeat('A', 5121)) $$) like 'openfga:2000 %',
               'a token over 5,120 bytes fails (2000)');
-select tap.ok(fga_test.code_of($$ select permissions.fga_read(p_continuation_token => 'AAAA') $$) like 'openfga:2007 %',
+select tap.ok(fga_test.code_of($$ select permissions.fga_read(continuation_token => 'AAAA') $$) like 'openfga:2007 %',
               'a token that decodes to the wrong shape fails (2007)');
-select tap.ok(fga_test.code_of($$ select permissions.fga_read(p_continuation_token => 'A') $$) like 'openfga:2007 %',
+select tap.ok(fga_test.code_of($$ select permissions.fga_read(continuation_token => 'A') $$) like 'openfga:2007 %',
               'a token that is not valid base64 fails (2007)');
-select tap.ok(fga_test.code_of(format('select permissions.fga_read(p_continuation_token => %L)',
+select tap.ok(fga_test.code_of(format('select permissions.fga_read(continuation_token => %L)',
                                       translate(encode(convert_to('abc|', 'UTF8'), 'base64'), '+/', '-_'))) like 'openfga:2007 %',
               'a token with a non-numeric position fails (2007)');
 select tap.is(
-    (select array[e.st, e.hint] from fga_test.error_of($$ select permissions.fga_read(p_continuation_token => 'AAAA') $$) e),
+    (select array[e.st, e.hint] from fga_test.error_of($$ select permissions.fga_read(continuation_token => 'AAAA') $$) e),
     array['22023', 'Pass the continuation_token from the previous fga_read call unchanged, or '''' (or null) for the first page.'],
     '2007 is SQLSTATE 22023 with a hint');
 

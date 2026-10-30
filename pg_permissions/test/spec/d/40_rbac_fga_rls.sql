@@ -4,7 +4,7 @@
 -- sees the documents of an org that FGA says they are banned from. Updates:
 -- documents.edit in the org (RBAC) or editor of the document (FGA).
 \ir ../../fixtures/ids.sql
-\ir ../../fixtures/rbac_roles.sql
+\ir ../../fixtures/d/rbac_roles.sql
 
 -- model:
 --   type user
@@ -44,20 +44,20 @@ alter table public.documents enable row level security;
 grant select, update on public.documents to authenticated;
 
 create policy documents_select_rbac on public.documents for select to authenticated
-    using (org_id = any (array(select unnest(permissions.scopes_with_permission('documents.read'))::uuid)));
+    using (org_id = any (array(select unnest(permissions.rbac_scopes_with_permission('documents.read'))::uuid)));
 create policy documents_select_fga on public.documents for select to authenticated
     using (id = any (array(select permissions.fga_list_object_ids_current('document', 'viewer')::uuid)));
 create policy documents_not_banned on public.documents as restrictive for select to authenticated
     using (org_id <> all (array(select permissions.fga_list_object_ids_current('org', 'banned')::uuid)));
 create policy documents_update_rbac on public.documents for update to authenticated
-    using (permissions.has_permission('documents.edit', org_id::text));
+    using (permissions.rbac_has_permission('documents.edit', org_id::text));
 create policy documents_update_fga on public.documents for update to authenticated
     using (permissions.fga_check_current('editor', 'document:' || id));
 
 -- RBAC: Alice reads acme, Carol edits acme, Dave reads acme
-select permissions.assign_role(:'alice', 'viewer', :'acme');
-select permissions.assign_role(:'carol', 'editor', :'acme');
-select permissions.assign_role(:'dave',  'viewer', :'acme');
+select permissions.rbac_assign_role(:'alice', 'viewer', :'acme');
+select permissions.rbac_assign_role(:'carol', 'editor', :'acme');
+select permissions.rbac_assign_role(:'dave',  'viewer', :'acme');
 -- FGA: team eng (Bob) views the globex notes, Carol views them directly,
 -- Bob edits the acme readme, Dave views the globex notes but is banned from acme
 select permissions.fga_write(jsonb_build_array(
@@ -132,7 +132,7 @@ select tap.ok(not exists (select 1 from plan_lines where line ~* 'SubPlan'), 'an
 reset role;
 
 -- the RBAC data is untouched by the FGA writes, and the other way round
-select tap.ok(permissions.user_permissions(:'bob', :'acme') = '{}' and permissions.fga_check('user:' || :'carol', 'viewer', 'document:' || :'acme_plan') = false,
+select tap.ok(permissions.rbac_user_permissions(:'bob', :'acme') = '{}' and permissions.fga_check('user:' || :'carol', 'viewer', 'document:' || :'acme_plan') = false,
               'the models are separate: FGA grants no roles, RBAC grants no relations');
 
 select * from tap.finish();

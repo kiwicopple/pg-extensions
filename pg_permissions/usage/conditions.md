@@ -54,7 +54,7 @@ condition in_office_network(user_ip: ipaddress, cidr: string) {
 ```
 
 ```sql
-select permissions.fga_write_authorization_model(:'model');
+select permissions.fga_write_authorization_model(model => :'model');
 ```
 
 The expression is parsed and type-checked here, as OpenFGA does, so mistakes surface when the model is written. CEL has no implicit conversions, so comparing a timestamp with a string is refused:
@@ -73,27 +73,27 @@ Parameter types are OpenFGA's: `bool`, `string`, `int`, `uint`, `double`, `durat
 The tuple stores when the grant started and how long it lasts; the request says what time it is:
 
 ```sql
-select permissions.fga_write('[{"user": "user:anne", "relation": "viewer", "object": "document:roadmap",
+select permissions.fga_write(writes => '[{"user": "user:anne", "relation": "viewer", "object": "document:roadmap",
   "condition": {"name": "non_expired_grant",
                 "context": {"grant_time": "2026-01-01T00:00:00Z", "grant_duration": "720h"}}}]');
 
-select permissions.fga_check('user:anne', 'viewer', 'document:roadmap',
+select permissions.fga_check(subject => 'user:anne', relation => 'viewer', object => 'document:roadmap',
                              context => '{"current_time": "2026-01-15T00:00:00Z"}');   -- true
-select permissions.fga_check('user:anne', 'viewer', 'document:roadmap',
+select permissions.fga_check(subject => 'user:anne', relation => 'viewer', object => 'document:roadmap',
                              context => '{"current_time": "2026-03-01T00:00:00Z"}');   -- false: 30 days have passed
 ```
 
 Read returns the condition with the tuple key, so a page of Read can be written back:
 
 ```sql
-select r.tuples #> '{0,key,condition}' from permissions.fga_read('document:roadmap') r;
+select r.tuples #> '{0,key,condition}' from permissions.fga_read(object => 'document:roadmap') r;
 -- {"name": "non_expired_grant", "context": {"grant_time": "2026-01-01T00:00:00Z", "grant_duration": "720h"}}
 ```
 
 A timestamp is RFC 3339 (`2026-01-15T00:00:00Z`, `2026-01-15T02:00:00+02:00`), a duration Go's format (`720h`, `1h30m`, `300ms`; there is no `d`). A parameter the condition declares must have a value, in the tuple or in the request. Without `current_time` the condition can't be evaluated, and Check fails rather than guess:
 
 ```sql
-select permissions.fga_check('user:anne', 'viewer', 'document:roadmap');
+select permissions.fga_check(subject => 'user:anne', relation => 'viewer', object => 'document:roadmap');
 -- ERROR:  failed to evaluate relationship condition: 'non_expired_grant' - context is missing parameters '[current_time]' ...
 -- DETAIL:  openfga:2000 validation_error
 -- HINT:  Pass every parameter the condition declares, in the request's context argument or in the tuple's condition context, ...
@@ -106,11 +106,11 @@ select permissions.fga_check('user:anne', 'viewer', 'document:roadmap');
 The tuple stores the network; the request says where the user is:
 
 ```sql
-select permissions.fga_write('[{"user": "user:bob", "relation": "viewer", "object": "document:roadmap",
+select permissions.fga_write(writes => '[{"user": "user:bob", "relation": "viewer", "object": "document:roadmap",
   "condition": {"name": "in_office_network", "context": {"cidr": "10.20.0.0/16"}}}]');
 
-select permissions.fga_check('user:bob', 'viewer', 'document:roadmap', context => '{"user_ip": "10.20.3.4"}');     -- true
-select permissions.fga_check('user:bob', 'viewer', 'document:roadmap', context => '{"user_ip": "192.168.1.9"}');   -- false
+select permissions.fga_check(subject => 'user:bob', relation => 'viewer', object => 'document:roadmap', context => '{"user_ip": "10.20.3.4"}');    -- true
+select permissions.fga_check(subject => 'user:bob', relation => 'viewer', object => 'document:roadmap', context => '{"user_ip": "192.168.1.9"}');  -- false
 ```
 
 ## Lists
@@ -118,11 +118,11 @@ select permissions.fga_check('user:bob', 'viewer', 'document:roadmap', context =
 ListObjects and ListUsers take the same `context`. One request context serves every condition, so pass all the parameters the walk may meet:
 
 ```sql
-select permissions.fga_write('[{"user": "user:carl", "relation": "viewer", "object": "document:handbook"}]');
+select permissions.fga_write(writes => '[{"user": "user:carl", "relation": "viewer", "object": "document:handbook"}]');
 
-select permissions.fga_list_users('document:roadmap', 'viewer', '{user}',
+select permissions.fga_list_users(object => 'document:roadmap', relation => 'viewer', user_filters => '{user}',
     context => '{"current_time": "2026-01-15T00:00:00Z", "user_ip": "10.20.3.4"}');   -- user:anne, user:bob
-select permissions.fga_list_objects('user:bob', 'document', 'viewer',
+select permissions.fga_list_objects(subject => 'user:bob', type => 'document', relation => 'viewer',
     context => '{"user_ip": "10.20.3.4"}');                                           -- document:roadmap
 ```
 
@@ -133,7 +133,7 @@ A list fails with 2000 if a condition on its way can't be evaluated, as OpenFGA'
 When the tuple's context and the request's both have a parameter, the tuple's wins, as in OpenFGA. A request can't extend a grant by sending its own `grant_duration`:
 
 ```sql
-select permissions.fga_check('user:anne', 'viewer', 'document:roadmap',
+select permissions.fga_check(subject => 'user:anne', relation => 'viewer', object => 'document:roadmap',
     context => '{"current_time": "2026-03-01T00:00:00Z", "grant_duration": "9000h"}');   -- false
 ```
 
@@ -142,7 +142,7 @@ select permissions.fga_check('user:anne', 'viewer', 'document:roadmap',
 A contextual tuple can carry a condition too, validated like a written one (for Check an invalid one is 2027, for the lists 2000):
 
 ```sql
-select permissions.fga_check('user:dana', 'viewer', 'document:roadmap',
+select permissions.fga_check(subject => 'user:dana', relation => 'viewer', object => 'document:roadmap',
     contextual_tuples => '[{"user": "user:dana", "relation": "viewer", "object": "document:roadmap",
                             "condition": {"name": "in_office_network", "context": {"cidr": "10.20.0.0/16"}}}]',
     context => '{"user_ip": "10.20.9.9"}');   -- true
@@ -153,7 +153,7 @@ select permissions.fga_check('user:dana', 'viewer', 'document:roadmap',
 A tuple's condition must exist in the model and be one its relation allows for that kind of user, and its context may only hold the condition's parameters, with values of their types; otherwise the write fails with 2000:
 
 ```sql
-select permissions.fga_write('[{"user": "user:erin", "relation": "viewer", "object": "document:roadmap",
+select permissions.fga_write(writes => '[{"user": "user:erin", "relation": "viewer", "object": "document:roadmap",
   "condition": {"name": "in_office_network", "context": {"cidr": "10.20.0.0/16", "region": "eu"}}}]');
 -- ERROR:  Invalid tuple 'document:roadmap#viewer@user:erin'. Reason: found invalid context parameter: region
 -- DETAIL:  openfga:2000 validation_error
@@ -164,7 +164,7 @@ The condition is not part of the tuple's key: a user has at most one `viewer` tu
 ```sql
 begin;
 select permissions.fga_write(deletes => '[{"user": "user:bob", "relation": "viewer", "object": "document:roadmap"}]');
-select permissions.fga_write('[{"user": "user:bob", "relation": "viewer", "object": "document:roadmap",
+select permissions.fga_write(writes => '[{"user": "user:bob", "relation": "viewer", "object": "document:roadmap",
   "condition": {"name": "in_office_network", "context": {"cidr": "10.0.0.0/8"}}}]');
 commit;
 ```

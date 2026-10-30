@@ -27,8 +27,8 @@ The examples use these IDs:
 Two roles, as in the README:
 
 ```sql
-select permissions.create_role('viewer', '{documents.read}');
-select permissions.create_role('editor', '{documents.edit}', '{viewer}');
+select permissions.rbac_create_role(role => 'viewer', permissions => '{documents.read}');
+select permissions.rbac_create_role(role => 'editor', permissions => '{documents.edit}', inherits => '{viewer}');
 ```
 
 And a model. `banned` will be a deny across both models; `published` and `reader` are for [row attributes](#row-attributes-that-only-rls-sees):
@@ -59,7 +59,7 @@ type document
 ```sql
 -- model.json is the output of: fga model transform --file model.fga > model.json
 \set model `cat model.json`
-select permissions.fga_write_authorization_model(:'model');
+select permissions.fga_write_authorization_model(model => :'model');
 ```
 
 The table. `org_id` is null for a personal document:
@@ -86,12 +86,12 @@ Roles and tuples. Object and user IDs in tuples are text, so a UUID goes in as `
 
 ```sql
 -- RBAC: Alice reads acme, Carol edits acme, Dave reads acme
-select permissions.assign_role(:'alice', 'viewer', :'acme');
-select permissions.assign_role(:'carol', 'editor', :'acme');
-select permissions.assign_role(:'dave',  'viewer', :'acme');
+select permissions.rbac_assign_role(user_id => :'alice', role => 'viewer', scope => :'acme');
+select permissions.rbac_assign_role(user_id => :'carol', role => 'editor', scope => :'acme');
+select permissions.rbac_assign_role(user_id => :'dave',  role => 'viewer', scope => :'acme');
 -- FGA: team eng (Bob) views the globex notes and the draft, Bob edits the acme
 -- readme, Dave owns his diary, views the globex notes and is banned from acme
-select permissions.fga_write(jsonb_build_array(
+select permissions.fga_write(writes => jsonb_build_array(
     jsonb_build_object('user', 'user:' || :'bob',  'relation', 'member', 'object', 'team:' || :'eng'),
     jsonb_build_object('user', 'team:' || :'eng' || '#member', 'relation', 'viewer', 'object', 'document:' || :'notes'),
     jsonb_build_object('user', 'team:' || :'eng' || '#member', 'relation', 'viewer', 'object', 'document:' || :'draft'),
@@ -113,9 +113,9 @@ Clients and policies can't call `fga_check`, which takes the user as an argument
 
 ```sql
 -- as Bob
-select permissions.fga_check_current('editor', 'document:' || :'readme');   -- true
-select permissions.fga_list_object_ids_current('document', 'viewer');       -- the readme, notes and draft ids
-select permissions.fga_list_objects_current('document', 'viewer');          -- the same as document:<id>
+select permissions.fga_check_current(relation => 'editor', object => 'document:' || :'readme');  -- true
+select permissions.fga_list_object_ids_current(type => 'document', relation => 'viewer');        -- the readme, notes and draft ids
+select permissions.fga_list_objects_current(type => 'document', relation => 'viewer');           -- the same as document:<id>
 ```
 
 With no subject they return false and nothing, and the same with no model yet or a subject type the model doesn't define: a policy denies instead of failing. Unlike `fga_list_objects`, the list functions have no 1,000 cap: a cap in a policy would hide rows without an error.
@@ -125,17 +125,17 @@ With no subject they return false and nothing, and the same with no model yet or
 ```sql
 -- reads: permissive policies OR together
 create policy documents_select_rbac on public.documents for select to authenticated
-    using (org_id = any (array(select unnest(permissions.scopes_with_permission('documents.read'))::uuid)));
+    using (org_id = any (array(select unnest(permissions.rbac_scopes_with_permission(permission => 'documents.read'))::uuid)));
 create policy documents_select_fga on public.documents for select to authenticated
-    using (id = any (array(select permissions.fga_list_object_ids_current('document', 'viewer')::uuid)));
+    using (id = any (array(select permissions.fga_list_object_ids_current(type => 'document', relation => 'viewer')::uuid)));
 -- a restrictive policy ANDs: nobody sees the documents of an org they are banned from
 create policy documents_not_banned on public.documents as restrictive for select to authenticated
-    using (org_id is null or org_id <> all (array(select permissions.fga_list_object_ids_current('org', 'banned')::uuid)));
+    using (org_id is null or org_id <> all (array(select permissions.fga_list_object_ids_current(type => 'org', relation => 'banned')::uuid)));
 -- writes: check the row
 create policy documents_update_rbac on public.documents for update to authenticated
-    using (permissions.has_permission('documents.edit', org_id::text));
+    using (permissions.rbac_has_permission(permission => 'documents.edit', scope => org_id::text));
 create policy documents_update_fga on public.documents for update to authenticated
-    using (permissions.fga_check_current('editor', 'document:' || id));
+    using (permissions.fga_check_current(relation => 'editor', object => 'document:' || id));
 ```
 
 What each user sees:
@@ -166,8 +166,8 @@ explain select * from public.documents;   -- as Bob: three InitPlans, no SubPlan
 
 Keep it that way:
 
-- Use `id = any (array(select f(...)::uuid))`, with the cast inside. `id in (select ...)` stops the table's index from being used, as for `scopes_with_permission` ([README](README.md#tenant-tables-the-fast-path)).
-- Call the set-returning function directly. Don't wrap it in your own function that returns an array: Postgres can evaluate a STABLE function with constant arguments while planning (that is why `scopes_with_permission` has a trailing parameter that isn't yours to pass), and marking the wrapper VOLATILE has its own problem ([README](README.md#other-rules)).
+- Use `id = any (array(select f(...)::uuid))`, with the cast inside. `id in (select ...)` stops the table's index from being used, as for `rbac_scopes_with_permission` ([README](README.md#tenant-tables-the-fast-path)).
+- Call the set-returning function directly. Don't wrap it in your own function that returns an array: Postgres can evaluate a STABLE function with constant arguments while planning (that is why `rbac_scopes_with_permission` has a trailing parameter that isn't yours to pass), and marking the wrapper VOLATILE has its own problem ([README](README.md#other-rules)).
 - Use `fga_check_current` only in write policies, which touch a few rows. In a read policy it runs once per row.
 
 ## Typos raise
@@ -175,17 +175,17 @@ Keep it that way:
 A misspelled relation or type in an FGA call is an error, not a silent "no access", in policies too:
 
 ```sql
-select permissions.fga_check_current('editr', 'document:x');
+select permissions.fga_check_current(relation => 'editr', object => 'document:x');
 -- ERROR:  relation 'document#editr' not found
 -- DETAIL:  openfga:2000 validation_error
 -- HINT:  Did you mean 'editor'? Relations on type 'document': editor, owner, published, reader, viewer.
-select permissions.fga_list_object_ids_current('documnt', 'viewer');   -- ERROR, openfga:2000
+select permissions.fga_list_object_ids_current(type => 'documnt', relation => 'viewer');   -- ERROR, openfga:2000
 ```
 
 The `rbac` preset is the other way round: an unknown permission is false ([README](README.md#function-reference)), so a policy that names a dropped permission denies instead of breaking every query:
 
 ```sql
-select permissions.has_permission('documents.reed');   -- false
+select permissions.rbac_has_permission(permission => 'documents.reed');   -- false
 ```
 
 ## Row attributes that only RLS sees
@@ -194,21 +194,21 @@ A rule on a column of the row, such as "drafts are visible to editors only", bel
 
 ```sql
 create policy documents_published on public.documents as restrictive for select to authenticated
-    using (status = 'published' or id = any (array(select permissions.fga_list_object_ids_current('document', 'editor')::uuid)));
+    using (status = 'published' or id = any (array(select permissions.fga_list_object_ids_current(type => 'document', relation => 'editor')::uuid)));
 ```
 
 The check functions don't read your tables, so they don't know about it. Bob views the draft through his team; RLS hides it, but `fga_check_current` still says yes:
 
 ```sql
 -- as Bob
-select title from public.documents;                                  -- acme readme, globex notes: no draft
-select permissions.fga_check_current('viewer', 'document:' || :'draft');   -- true
+select title from public.documents;                                                             -- acme readme, globex notes: no draft
+select permissions.fga_check_current(relation => 'viewer', object => 'document:' || :'draft');  -- true
 ```
 
 So treat the check functions as advisory and RLS as final. Use the checks to decide what to show in a UI, and let the query, under RLS, decide what is returned. If a check must take the attribute into account, pass the attribute in. With the model's `published` and `reader` relations, a backend sends the row's status as a contextual tuple, which is never written:
 
 ```sql
-select permissions.fga_check('user:' || :'bob', 'reader', 'document:' || d.id,
+select permissions.fga_check(subject => 'user:' || :'bob', relation => 'reader', object => 'document:' || d.id,
     contextual_tuples => case when d.status = 'published'
         then jsonb_build_array(jsonb_build_object('user', 'user:*', 'relation', 'published', 'object', 'document:' || d.id))
     end)
@@ -227,15 +227,15 @@ A new version of the model gives `viewer` a time-limited grant (`[user, user wit
 ```sql
 -- model.json is the model above with the viewer line and the condition changed
 \set model `cat model.json`
-select permissions.fga_write_authorization_model(:'model');
-select permissions.fga_write(jsonb_build_array(jsonb_build_object(
+select permissions.fga_write_authorization_model(model => :'model');
+select permissions.fga_write(writes => jsonb_build_array(jsonb_build_object(
     'user', 'user:' || :'erin', 'relation', 'viewer', 'object', 'document:' || :'plan',
     'condition', jsonb_build_object('name', 'non_expired_grant',
         'context', jsonb_build_object('grant_time', now() - interval '1 day', 'grant_duration', '720h')))));
 
 -- as Erin
-select id from public.documents;                                            -- nothing: the policies have no current_time
-select permissions.fga_check_current('viewer', 'document:' || :'plan');     -- false, not an error
+select id from public.documents;                                                               -- nothing: the policies have no current_time
+select permissions.fga_check_current(relation => 'viewer', object => 'document:' || :'plan');  -- false, not an error
 ```
 
 A value the server can vouch for, such as the time, can be passed by a function of your own that calls `fga_check` (admin-only, so the function is `security definer`, like the trigger below) and supplies it:
@@ -245,7 +245,8 @@ create function public.fga_check_now(relation text, object text) returns boolean
 language plpgsql stable security definer set search_path = ''
 as $$
 begin
-    return permissions.fga_check('user:' || permissions.current_subject_id(), relation, object,
+    return permissions.fga_check(subject => 'user:' || permissions.current_subject_id(),
+                                 relation => relation, object => object,
                                  context => jsonb_build_object('current_time', now()));
 exception when invalid_parameter_value then
     return false;   -- no subject, or a condition that still can't be evaluated (openfga:2000): deny
@@ -275,7 +276,7 @@ create function public.forget_user() returns trigger
 language plpgsql security definer set search_path = ''
 as $$
 begin
-    perform permissions.delete_subject('user', old.id::text);
+    perform permissions.delete_subject(subject_type => 'user', subject_id => old.id::text);
     return old;
 end;
 $$;
@@ -286,4 +287,4 @@ delete from public.users where id = :'dave';
 -- his acme role and his three tuples are gone
 ```
 
-The trigger function is `security definer` because `delete_subject` is admin-only. It works for any type and returns how many rows it removed: `delete_subject('team', :'eng')` removes the team's two viewer tuples and Bob's membership (3).
+The trigger function is `security definer` because `delete_subject` is admin-only. It works for any type and returns how many rows it removed: `delete_subject(subject_type => 'team', subject_id => :'eng')` removes the team's two viewer tuples and Bob's membership (3).

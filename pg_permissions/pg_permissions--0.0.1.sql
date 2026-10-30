@@ -116,13 +116,14 @@ $$;
 --
 -- A role grants permissions and includes the roles it inherits. Assignments
 -- give a user a role app-wide (scope null) or in one scope (a tenant or org
--- id). App-wide and scoped roles are separate: has_permission(p) looks only at
--- app-wide assignments, has_permission(p, scope) only at that scope.
+-- id). App-wide and scoped roles are separate: rbac_has_permission(p) looks
+-- only at app-wide assignments, rbac_has_permission(p, scope) only at that
+-- scope.
 --
--- rbac_role_closure is maintained by create_role/drop_role: every role a role
--- includes, itself too. Roles can't change after creation and a role can only
--- inherit roles that exist, so the closure of a new role is its parents'
--- closures plus itself, and no other row ever changes.
+-- rbac_role_closure is maintained by rbac_create_role/rbac_drop_role: every
+-- role a role includes, itself too. Roles can't change after creation and a
+-- role can only inherit roles that exist, so the closure of a new role is its
+-- parents' closures plus itself, and no other row ever changes.
 
 create table permissions.rbac_roles (
     role       text collate "C" primary key,
@@ -167,10 +168,15 @@ language sql stable
 as $$
     select coalesce(
         permissions._did_you_mean(p_role, array(select r.role from permissions.rbac_roles r), 'Existing roles'),
-        format('No roles exist yet: create it first, e.g. select permissions.create_role(%L, ''{documents.read}'').', p_role))
+        format('No roles exist yet: create it first, e.g. select permissions.rbac_create_role(role => %L, permissions => ''{documents.read}'').', p_role))
 $$;
 
-create function permissions.create_role(p_role text, p_permissions text[], p_inherits text[] default '{}')
+-- Parameters share names with the rbac_* columns (role, permission, scope,
+-- user_id, inherits), so bodies qualify every parameter with the function's
+-- name and every column with its table alias. PL/pgSQL's default
+-- variable_conflict = error turns any unqualified clash into an error; the
+-- SQL functions would silently read the column, so they qualify too.
+create function permissions.rbac_create_role(role text, permissions text[], inherits text[] default '{}')
 returns void
 language plpgsql security definer
 set search_path = ''
@@ -178,41 +184,41 @@ as $$
 declare
     x text;
 begin
-    if exists (select 1 from permissions.rbac_roles where role = p_role) then
-        raise exception 'role ''%'' already exists', p_role using errcode = '23505',
-            hint = format('Roles are immutable: pick another name, or drop_role(%L) and create it again (that also removes its assignments).', p_role);
+    if exists (select 1 from permissions.rbac_roles r where r.role = rbac_create_role.role) then
+        raise exception 'role ''%'' already exists', rbac_create_role.role using errcode = '23505',
+            hint = format('Roles are immutable: pick another name, or rbac_drop_role(role => %L) and create it again (that also removes its assignments).', rbac_create_role.role);
     end if;
-    select case when exists (select 1 from permissions.rbac_role_permissions where permission = p_role)
-                then format('%L is already a permission', p_role)
-                when p_role = any (p_permissions)
-                then format('role %L lists itself as a permission', p_role)
+    select case when exists (select 1 from permissions.rbac_role_permissions rp where rp.permission = rbac_create_role.role)
+                then format('%L is already a permission', rbac_create_role.role)
+                when rbac_create_role.role = any (rbac_create_role.permissions)
+                then format('role %L lists itself as a permission', rbac_create_role.role)
                 else (select format('%L is already a role', r.role) from permissions.rbac_roles r
-                      where r.role = any (p_permissions) order by r.role limit 1) end
+                      where r.role = any (rbac_create_role.permissions) order by r.role limit 1) end
     into x;
     if x is not null then
         raise exception 'role and permission names must not overlap: %', x using errcode = '22023',
-            hint = 'has_role and has_permission share one namespace: use distinct names, e.g. a role ''editor'' with permissions like ''documents.edit''.';
+            hint = 'rbac_has_role and rbac_has_permission share one namespace: use distinct names, e.g. a role ''editor'' with permissions like ''documents.edit''.';
     end if;
-    select i into x from unnest(p_inherits) i
-    where not exists (select 1 from permissions.rbac_roles where role = i) limit 1;
+    select i into x from unnest(rbac_create_role.inherits) i
+    where not exists (select 1 from permissions.rbac_roles r where r.role = i) limit 1;
     if x is not null then
-        raise exception 'unknown role ''%'' in inherits of role ''%''', x, p_role using errcode = '22023',
+        raise exception 'unknown role ''%'' in inherits of role ''%''', x, rbac_create_role.role using errcode = '22023',
             hint = permissions._rbac_role_hint(x);
     end if;
 
-    insert into permissions.rbac_roles (role) values (p_role);
+    insert into permissions.rbac_roles (role) values (rbac_create_role.role);
     insert into permissions.rbac_role_permissions (role, permission)
-    select distinct p_role, p from unnest(p_permissions) p where p is not null;
+    select distinct rbac_create_role.role, p from unnest(rbac_create_role.permissions) p where p is not null;
     insert into permissions.rbac_role_inherits (role, inherits)
-    select distinct p_role, i from unnest(p_inherits) i;
+    select distinct rbac_create_role.role, i from unnest(rbac_create_role.inherits) i;
     insert into permissions.rbac_role_closure (role, includes)
-    select p_role, p_role
+    select rbac_create_role.role, rbac_create_role.role
     union
-    select p_role, c.includes from permissions.rbac_role_closure c where c.role = any (p_inherits);
+    select rbac_create_role.role, c.includes from permissions.rbac_role_closure c where c.role = any (rbac_create_role.inherits);
 end;
 $$;
 
-create function permissions.drop_role(p_role text)
+create function permissions.rbac_drop_role(role text)
 returns void
 language plpgsql security definer
 set search_path = ''
@@ -220,52 +226,54 @@ as $$
 declare
     heirs text[];
 begin
-    if not exists (select 1 from permissions.rbac_roles where role = p_role) then
-        raise exception 'unknown role ''%''', p_role using errcode = '22023',
-            hint = permissions._rbac_role_hint(p_role);
+    if not exists (select 1 from permissions.rbac_roles r where r.role = rbac_drop_role.role) then
+        raise exception 'unknown role ''%''', rbac_drop_role.role using errcode = '22023',
+            hint = permissions._rbac_role_hint(rbac_drop_role.role);
     end if;
-    heirs := array(select role from permissions.rbac_role_inherits where inherits = p_role order by role);
+    heirs := array(select i.role from permissions.rbac_role_inherits i where i.inherits = rbac_drop_role.role order by i.role);
     if cardinality(heirs) > 0 then
-        raise exception 'role ''%'' is inherited by %', p_role,
+        raise exception 'role ''%'' is inherited by %', rbac_drop_role.role,
             (select string_agg(format('%L', h), ', ') from unnest(heirs) h) using errcode = '2BP01',
             hint = format('Drop the roles that inherit it first (%s), or keep %L.',
-                          (select string_agg(format('drop_role(%L)', h), ', ') from unnest(heirs) h), p_role);
+                          (select string_agg(format('rbac_drop_role(role => %L)', h), ', ') from unnest(heirs) h), rbac_drop_role.role);
     end if;
     -- cascades to its permissions, inherits, closure rows and assignments
-    delete from permissions.rbac_roles where role = p_role;
+    delete from permissions.rbac_roles r where r.role = rbac_drop_role.role;
 end;
 $$;
 
-create function permissions.assign_role(p_user_id text, p_role text, p_scope text default null)
+create function permissions.rbac_assign_role(user_id text, role text, scope text default null)
 returns void
 language plpgsql security definer
 set search_path = ''
 as $$
 begin
-    if not exists (select 1 from permissions.rbac_roles where role = p_role) then
-        raise exception 'unknown role ''%''', p_role using errcode = '22023',
-            hint = permissions._rbac_role_hint(p_role);
+    if not exists (select 1 from permissions.rbac_roles r where r.role = rbac_assign_role.role) then
+        raise exception 'unknown role ''%''', rbac_assign_role.role using errcode = '22023',
+            hint = permissions._rbac_role_hint(rbac_assign_role.role);
     end if;
-    if p_user_id is null then
-        raise exception 'user_id is required to assign role ''%''', p_role using errcode = '22004',
-            hint = format('Pass the user''s id as text, e.g. select permissions.assign_role(user_id::text, %L, scope).', p_role);
+    if rbac_assign_role.user_id is null then
+        raise exception 'user_id is required to assign role ''%''', rbac_assign_role.role using errcode = '22004',
+            hint = format('Pass the user''s id as text, e.g. select permissions.rbac_assign_role(user_id => id::text, role => %L, scope => org_id::text).', rbac_assign_role.role);
     end if;
     insert into permissions.rbac_assignments (user_id, role, scope)
-    values (p_user_id, p_role, p_scope)
+    values (rbac_assign_role.user_id, rbac_assign_role.role, rbac_assign_role.scope)
     on conflict on constraint rbac_assignments_key do nothing;
 end;
 $$;
 
-create function permissions.unassign_role(p_user_id text, p_role text, p_scope text default null)
+create function permissions.rbac_unassign_role(user_id text, role text, scope text default null)
 returns void
 language plpgsql security definer
 set search_path = ''
 as $$
 begin
-    if p_scope is null then
-        delete from permissions.rbac_assignments where user_id = p_user_id and role = p_role and scope is null;
+    if rbac_unassign_role.scope is null then
+        delete from permissions.rbac_assignments a
+        where a.user_id = rbac_unassign_role.user_id and a.role = rbac_unassign_role.role and a.scope is null;
     else
-        delete from permissions.rbac_assignments where user_id = p_user_id and role = p_role and scope = p_scope;
+        delete from permissions.rbac_assignments a
+        where a.user_id = rbac_unassign_role.user_id and a.role = rbac_unassign_role.role and a.scope = rbac_unassign_role.scope;
     end if;
 end;
 $$;
@@ -274,7 +282,7 @@ $$;
 -- subject type has none. PL/pgSQL so the plans are cached per session
 -- (PLAN.md §4); app-wide and scoped lookups are separate statements so each
 -- one probes rbac_assignments_key directly.
-create function permissions.has_permission(p_permission text, p_scope text default null)
+create function permissions.rbac_has_permission(permission text, scope text default null)
 returns boolean
 language plpgsql stable security definer
 set search_path = ''
@@ -285,24 +293,24 @@ begin
     if uid is null or permissions.current_subject_type() <> 'user' then
         return false;
     end if;
-    if p_scope is null then
+    if rbac_has_permission.scope is null then
         return exists (
             select 1
             from permissions.rbac_assignments a
             join permissions.rbac_role_closure c on c.role = a.role
             join permissions.rbac_role_permissions p on p.role = c.includes
-            where a.user_id = uid and a.scope is null and p.permission = p_permission);
+            where a.user_id = uid and a.scope is null and p.permission = rbac_has_permission.permission);
     end if;
     return exists (
         select 1
         from permissions.rbac_assignments a
         join permissions.rbac_role_closure c on c.role = a.role
         join permissions.rbac_role_permissions p on p.role = c.includes
-        where a.user_id = uid and a.scope = p_scope and p.permission = p_permission);
+        where a.user_id = uid and a.scope = rbac_has_permission.scope and p.permission = rbac_has_permission.permission);
 end;
 $$;
 
-create function permissions.has_role(p_role text, p_scope text default null)
+create function permissions.rbac_has_role(role text, scope text default null)
 returns boolean
 language plpgsql stable security definer
 set search_path = ''
@@ -313,26 +321,27 @@ begin
     if uid is null or permissions.current_subject_type() <> 'user' then
         return false;
     end if;
-    if p_scope is null then
+    if rbac_has_role.scope is null then
         return exists (
             select 1
             from permissions.rbac_assignments a
             join permissions.rbac_role_closure c on c.role = a.role
-            where a.user_id = uid and a.scope is null and c.includes = p_role);
+            where a.user_id = uid and a.scope is null and c.includes = rbac_has_role.role);
     end if;
     return exists (
         select 1
         from permissions.rbac_assignments a
         join permissions.rbac_role_closure c on c.role = a.role
-        where a.user_id = uid and a.scope = p_scope and c.includes = p_role);
+        where a.user_id = uid and a.scope = rbac_has_role.scope and c.includes = rbac_has_role.role);
 end;
 $$;
 
 -- The RLS fast path for tenant scoping:
---   org_id = any (array(select unnest(permissions.scopes_with_permission('documents.read'))::uuid))
--- p_unfold is ignored (see _unfolded_null). Unordered.
-create function permissions.scopes_with_permission(p_permission text,
-                                                   p_unfold boolean default permissions._unfolded_null())
+--   org_id = any (array(select unnest(permissions.rbac_scopes_with_permission(permission => 'documents.read'))::uuid))
+-- plan_time_guard is ignored: its volatile default keeps the call out of
+-- plan-time evaluation (see _unfolded_null); don't pass it. Unordered.
+create function permissions.rbac_scopes_with_permission(permission text,
+                                                        plan_time_guard boolean default permissions._unfolded_null())
 returns text[]
 language plpgsql stable security definer
 set search_path = ''
@@ -348,12 +357,12 @@ begin
         from permissions.rbac_assignments a
         join permissions.rbac_role_closure c on c.role = a.role
         join permissions.rbac_role_permissions p on p.role = c.includes
-        where a.user_id = uid and a.scope is not null and p.permission = p_permission);
+        where a.user_id = uid and a.scope is not null and p.permission = rbac_scopes_with_permission.permission);
 end;
 $$;
 
 -- Admin and debugging (not callable by clients)
-create function permissions.user_permissions(p_user_id text, p_scope text default null)
+create function permissions.rbac_user_permissions(user_id text, scope text default null)
 returns text[]
 language sql stable security definer
 set search_path = ''
@@ -362,10 +371,10 @@ as $$
     from permissions.rbac_assignments a
     join permissions.rbac_role_closure c on c.role = a.role
     join permissions.rbac_role_permissions p on p.role = c.includes
-    where a.user_id = p_user_id and a.scope is not distinct from p_scope
+    where a.user_id = rbac_user_permissions.user_id and a.scope is not distinct from rbac_user_permissions.scope
 $$;
 
-create function permissions.users_with_role(p_role text, p_scope text default null)
+create function permissions.rbac_users_with_role(role text, scope text default null)
 returns setof text
 language sql stable security definer
 set search_path = ''
@@ -373,7 +382,7 @@ as $$
     select distinct a.user_id
     from permissions.rbac_role_closure c
     join permissions.rbac_assignments a on a.role = c.role
-    where c.includes = p_role and a.scope is not distinct from p_scope
+    where c.includes = rbac_users_with_role.role and a.scope is not distinct from rbac_users_with_role.scope
 $$;
 
 -- ============================================================================
@@ -719,12 +728,12 @@ returns text
 language sql stable
 as $$
     select coalesce(
-        (select format('Model ids, newest first: %s%s. Omit authorization_model_id to use the latest.',
+        (select format('Model ids, newest first: %s%s. Omit model_id to use the latest.',
                        string_agg(m.id, ', ' order by m.seq desc) filter (where m.rn <= 10),
                        case when count(*) > 10 then format(' and %s more', count(*) - 10) end)
          from (select x.id, x.seq, row_number() over (order by x.seq desc) as rn from permissions.fga_models x) m
          having count(*) > 0),
-        'No authorization model exists yet: write one first with select permissions.fga_write_authorization_model(...).')
+        'No authorization model exists yet: write one first with select permissions.fga_write_authorization_model(model => ...).')
 $$;
 
 -- ----------------------------------------------------------------------------
@@ -1023,7 +1032,7 @@ begin
         select id into m from permissions.fga_models order by seq desc limit 1;
         if m is null then
             perform permissions._fga_error(2020, 'No authorization models found for store',
-                hint => 'Write a model first: select permissions.fga_write_authorization_model(''{"schema_version": "1.1", "type_definitions": [...]}'').');
+                hint => 'Write a model first: select permissions.fga_write_authorization_model(model => ''{"schema_version": "1.1", "type_definitions": [...]}'').');
         end if;
         return m;
     end if;
@@ -3529,13 +3538,13 @@ begin
 end;
 $$;
 
-create function permissions.fga_read_authorization_model(authorization_model_id text default null)
+create function permissions.fga_read_authorization_model(model_id text default null)
 returns jsonb
 language plpgsql stable security definer
 set search_path = ''
 as $$
 declare
-    m text := permissions._fga_model_id(authorization_model_id);
+    m text := permissions._fga_model_id(fga_read_authorization_model.model_id);
 begin
     return (select jsonb_build_object('id', id) || model from permissions.fga_models where id = m);
 end;
@@ -3580,7 +3589,7 @@ $$;
 -- a key that exists with a different condition is 2017 even with
 -- on_duplicate ignore (OpenFGA answers 409 Aborted there, which has no code).
 create function permissions.fga_write(writes jsonb default null, deletes jsonb default null,
-                                      authorization_model_id text default null)
+                                      model_id text default null)
 returns void
 language plpgsql security definer
 set search_path = ''
@@ -3626,9 +3635,9 @@ begin
     end if;
     if not w_given and not d_given then
         perform permissions._fga_error(2003, 'Invalid input. Make sure you provide at least one write, or at least one delete',
-            hint => 'Pass writes, deletes or both, e.g. select permissions.fga_write(''[{"user": "user:anne", "relation": "viewer", "object": "document:1"}]'').');
+            hint => 'Pass writes, deletes or both, e.g. select permissions.fga_write(writes => ''[{"user": "user:anne", "relation": "viewer", "object": "document:1"}]'').');
     end if;
-    m := permissions._fga_model_id(authorization_model_id);
+    m := permissions._fga_model_id(fga_write.model_id);
 
     w := array(select permissions._fga_tuple_for_write(m, e, 2027, 2000)
                from jsonb_array_elements(coalesce(writes, '[]')) with ordinality x(e, o) order by o);
@@ -3719,7 +3728,8 @@ begin
 end;
 $$;
 
--- Convenience: one tuple, OpenFGA strings. Idempotent (on_duplicate/on_missing ignore).
+-- Convenience: one tuple, OpenFGA strings (subject is OpenFGA's user field).
+-- Idempotent (on_duplicate/on_missing ignore).
 --
 -- Typed path (phase 5 of session 5): no JSON round trip. A well-formed key
 -- that an unconditioned type restriction of the latest model allows (one
@@ -3728,7 +3738,7 @@ $$;
 -- disallowed key, a key stored with a condition) goes to fga_write with the
 -- JSON key, which decides as before and raises its own error, so both
 -- functions behave exactly as the JSON path (test/spec/d/42_fga_write_paths).
-create function permissions.fga_write_tuple("user" text, relation text, object text)
+create function permissions.fga_write_tuple(subject text, relation text, object text)
 returns void
 language plpgsql security definer
 set search_path = ''
@@ -3738,7 +3748,7 @@ declare
     t permissions.fga_tuple;
 begin
     select x.id into m from permissions.fga_models x order by x.seq desc limit 1;
-    t := permissions._fga_typed_key("user", relation, object);
+    t := permissions._fga_typed_key(subject, relation, object);
     if m is not null and t.object_id <> '*'
        and permissions._fga_write_key_ok(m, t.object_type, t.relation, t.user_type, t.user_id, t.user_relation) then
         insert into permissions.fga_tuples (object_type, object_id, relation, user_type, user_id, user_relation,
@@ -3754,20 +3764,20 @@ begin
         end if;
     end if;
     perform permissions.fga_write(
-        jsonb_build_object('tuple_keys', jsonb_build_array(jsonb_build_object('user', "user", 'relation', relation, 'object', object)),
+        jsonb_build_object('tuple_keys', jsonb_build_array(jsonb_build_object('user', subject, 'relation', relation, 'object', object)),
                            'on_duplicate', 'ignore'));
 end;
 $$;
 
 -- Typed path as fga_write_tuple's: deletes only need a well-formed key (and a
 -- model to exist, as fga_write requires).
-create function permissions.fga_delete_tuple("user" text, relation text, object text)
+create function permissions.fga_delete_tuple(subject text, relation text, object text)
 returns void
 language plpgsql security definer
 set search_path = ''
 as $$
 declare
-    t permissions.fga_tuple := permissions._fga_typed_key("user", relation, object);
+    t permissions.fga_tuple := permissions._fga_typed_key(subject, relation, object);
 begin
     if t.object_type is not null and t.relation ~ '^[^:#@ [:cntrl:]]+$'
        and exists (select 1 from permissions.fga_models) then
@@ -3777,27 +3787,28 @@ begin
         return;
     end if;
     perform permissions.fga_write(deletes => jsonb_build_object(
-        'tuple_keys', jsonb_build_array(jsonb_build_object('user', "user", 'relation', relation, 'object', object)),
+        'tuple_keys', jsonb_build_array(jsonb_build_object('user', subject, 'relation', relation, 'object', object)),
         'on_missing', 'ignore'));
 end;
 $$;
 
 -- OpenFGA Read: one page of the stored tuples matching a partial key, in
 -- insertion order (fga_tuples.seq). object is 'type:id' or 'type:' (every
--- object of the type); user is 'type:id', 'type:*' or 'type:id#relation'. Not
--- filtered by the model. Returns OpenFGA's ReadResponse as one row: tuples, a
--- JSON array of {"key": {"user", "relation", "object"[, "condition": {"name",
--- "context"}]}, "timestamp"}, and
+-- object of the type); subject (OpenFGA's user field) is 'type:id', 'type:*'
+-- or 'type:id#relation'. Not filtered by the model. Returns OpenFGA's
+-- ReadResponse as one row: tuples, a JSON array of {"key": {"user",
+-- "relation", "object"[, "condition": {"name", "context"}]}, "timestamp"}, and
 -- continuation_token, '' on the last page. Pass the token back unchanged for
--- the next page. page_size: default 50, 1 to 100 (2000 otherwise). The token
--- is base64url (padded) of '<seq>|', seq being the first tuple of the next
--- page (OpenFGA: '<ulid>|'), found by reading page_size + 1 rows. A token
--- outside the base64url alphabet or over 5,120 bytes is 2000; one that
--- doesn't decode to that shape is 2007. A token whose tuple was deleted since
--- seeks past it.
-create function permissions.fga_read(p_object text default null, p_relation text default null, p_user text default null,
-                                     p_page_size int default null, p_continuation_token text default null,
-                                     out tuples jsonb, out continuation_token text)
+-- the next page (continuation_token is INOUT: the input and the output column
+-- share OpenFGA's name, and PL/pgSQL allows one variable per name). page_size:
+-- default 50, 1 to 100 (2000 otherwise). The token is base64url (padded) of
+-- '<seq>|', seq being the first tuple of the next page (OpenFGA: '<ulid>|'),
+-- found by reading page_size + 1 rows. A token outside the base64url alphabet
+-- or over 5,120 bytes is 2000; one that doesn't decode to that shape is 2007.
+-- A token whose tuple was deleted since seeks past it.
+create function permissions.fga_read(object text default null, relation text default null, subject text default null,
+                                     page_size int default null,
+                                     out tuples jsonb, inout continuation_token text default null)
 language plpgsql stable security definer
 set search_path = ''
 as $$
@@ -3809,26 +3820,26 @@ declare
     nxt bigint;
 begin
     select * into l from permissions._fga_limits();
-    n := coalesce(p_page_size, l.read_page_default);
+    n := coalesce(fga_read.page_size, l.read_page_default);
     if n not between 1 and l.read_page_max then
         perform permissions._fga_error(2000, format('invalid ReadRequest.PageSize: value must be inside range [1, %s], got %s',
                                                     l.read_page_max, n),
             hint => format('Omit page_size for the default of %s, or pass 1 to %s.', l.read_page_default, l.read_page_max));
     end if;
-    if coalesce(p_continuation_token, '') <> '' then
-        if octet_length(p_continuation_token) > 5120 or p_continuation_token !~ '^[A-Za-z0-9_-]+={0,2}$' then
-            perform permissions._fga_error(2000, case when octet_length(p_continuation_token) > 5120
-                then format('invalid ReadRequest.ContinuationToken: value length must be at most 5120 bytes, got %s', octet_length(p_continuation_token))
-                else format('invalid ReadRequest.ContinuationToken: value does not match regex pattern "^$|^[A-Za-z0-9-_]+={0,2}$", got %L', p_continuation_token) end,
+    if coalesce(fga_read.continuation_token, '') <> '' then
+        if octet_length(fga_read.continuation_token) > 5120 or fga_read.continuation_token !~ '^[A-Za-z0-9_-]+={0,2}$' then
+            perform permissions._fga_error(2000, case when octet_length(fga_read.continuation_token) > 5120
+                then format('invalid ReadRequest.ContinuationToken: value length must be at most 5120 bytes, got %s', octet_length(fga_read.continuation_token))
+                else format('invalid ReadRequest.ContinuationToken: value does not match regex pattern "^$|^[A-Za-z0-9-_]+={0,2}$", got %L', fga_read.continuation_token) end,
                 hint => 'Pass the continuation_token from the previous fga_read call unchanged, or '''' (or null) for the first page.');
         end if;
         begin
-            raw := convert_from(decode(translate(p_continuation_token, '-_', '+/'), 'base64'), 'UTF8');
+            raw := convert_from(decode(translate(fga_read.continuation_token, '-_', '+/'), 'base64'), 'UTF8');
         exception when others then
             raw := null;
         end;
         if raw is null or raw !~ '^[0-9]{1,18}\|$' then
-            perform permissions._fga_error(2007, format('Invalid continuation token: %L', p_continuation_token),
+            perform permissions._fga_error(2007, format('Invalid continuation token: %L', fga_read.continuation_token),
                 hint => 'Pass the continuation_token from the previous fga_read call unchanged, or '''' (or null) for the first page.');
         end if;
         from_seq := left(raw, -1)::bigint;
@@ -3841,17 +3852,19 @@ begin
                               else '{}' end,
                'timestamp', r.inserted_at) order by r.seq) filter (where r.i <= n), '[]'),
            max(r.seq) filter (where r.i > n)
-    into tuples, nxt
+    into fga_read.tuples, nxt
     from (select t.*, row_number() over (order by t.seq) as i
           from (select t.* from permissions.fga_tuples t
                 where t.seq >= from_seq
-                  and (p_object is null or t.object_type = split_part(p_object, ':', 1))
-                  and (p_object is null or split_part(p_object, ':', 2) = '' or t.object_id = substr(p_object, strpos(p_object, ':') + 1))
-                  and (p_relation is null or t.relation = p_relation)
-                  and (p_user is null or permissions._fga_user_string(t.user_type, t.user_id, t.user_relation) = p_user)
+                  and (fga_read.object is null or t.object_type = split_part(fga_read.object, ':', 1))
+                  and (fga_read.object is null or split_part(fga_read.object, ':', 2) = ''
+                       or t.object_id = substr(fga_read.object, strpos(fga_read.object, ':') + 1))
+                  and (fga_read.relation is null or t.relation = fga_read.relation)
+                  and (fga_read.subject is null
+                       or permissions._fga_user_string(t.user_type, t.user_id, t.user_relation) = fga_read.subject)
                 order by t.seq
                 limit n + 1) t) r;
-    continuation_token := coalesce(translate(encode(convert_to(nxt || '|', 'UTF8'), 'base64'), '+/', '-_'), '');
+    fga_read.continuation_token := coalesce(translate(encode(convert_to(nxt || '|', 'UTF8'), 'base64'), '+/', '-_'), '');
 end;
 $$;
 
@@ -5504,15 +5517,16 @@ $$;
 -- functions: a client could ask what any user can access)
 -- ----------------------------------------------------------------------------
 
--- Check. user: 'type:id', 'type:*' or 'type:id#relation'; object: 'type:id'.
+-- Check. subject (OpenFGA's user field; `user` is reserved in SQL): 'type:id',
+-- 'type:*' or 'type:id#relation'; object: 'type:id'.
 -- context: OpenFGA's request context, the condition parameters as a JSON
 -- object. Invalid input raises openfga:2000, an invalid contextual tuple 2027,
 -- too deep a resolution 2002, a condition that can't be evaluated 2000
 -- (OpenFGA's rule: when no path of true edges exists and the search met an
 -- edge whose condition errors, designs/d-conditions.md section 3).
-create function permissions.fga_check("user" text, relation text, object text,
+create function permissions.fga_check(subject text, relation text, object text,
                                       contextual_tuples jsonb default null,
-                                      authorization_model_id text default null,
+                                      model_id text default null,
                                       context jsonb default null)
 returns boolean
 language plpgsql stable security definer
@@ -5521,11 +5535,11 @@ set plan_cache_mode = force_generic_plan
 as $$
 declare
     req jsonb := permissions._fga_req_context(context);
-    m text := permissions._fga_model_id(authorization_model_id);
+    m text := permissions._fga_model_id(fga_check.model_id);
     u record;
     o record;
 begin
-    select * into u from permissions._fga_parse_user(m, "user", 2000);
+    select * into u from permissions._fga_parse_user(m, subject, 2000);
     select * into o from permissions._fga_parse_object(m, object, relation, 2000);
     return permissions._fga_check_impl(m, o.object_type, o.object_id, relation,
                                        u.user_type, u.user_id, u.user_relation,
@@ -5540,9 +5554,9 @@ $$;
 -- condition that errors on an edge the walk takes 2000 (context: the request's
 -- condition parameters). The RLS helpers (fga_list_objects_current,
 -- fga_list_object_ids_current) call the uncapped _fga_list_object_ids.
-create function permissions.fga_list_objects("user" text, type text, relation text,
+create function permissions.fga_list_objects(subject text, type text, relation text,
                                              contextual_tuples jsonb default null,
-                                             authorization_model_id text default null,
+                                             model_id text default null,
                                              context jsonb default null)
 returns setof text
 language plpgsql stable security definer
@@ -5552,7 +5566,7 @@ rows 100
 as $$
 declare
     req jsonb := permissions._fga_req_context(context);
-    m text := permissions._fga_model_id(authorization_model_id);
+    m text := permissions._fga_model_id(fga_list_objects.model_id);
     ctx permissions.fga_tuple[] := permissions._fga_ctx(m, contextual_tuples, 2000);
     u record;
 begin
@@ -5565,7 +5579,7 @@ begin
         perform permissions._fga_error(2022, format('relation ''%s#%s'' not found', fga_list_objects.type, fga_list_objects.relation),
             hint => permissions._fga_relation_hint(m, fga_list_objects.type, fga_list_objects.relation));
     end if;
-    select * into u from permissions._fga_parse_user(m, "user", 2000);
+    select * into u from permissions._fga_parse_user(m, subject, 2000);
     return query
     select fga_list_objects.type || ':' || x
     from permissions._fga_list_object_ids(m, fga_list_objects.type, fga_list_objects.relation,
@@ -5700,7 +5714,7 @@ $$;
 -- dropped silently, as OpenFGA does, and which ones survive is unspecified).
 create function permissions.fga_list_users(object text, relation text, user_filters text[],
                                            contextual_tuples jsonb default null,
-                                           authorization_model_id text default null,
+                                           model_id text default null,
                                            context jsonb default null)
 returns setof text
 language sql stable security definer
@@ -5809,7 +5823,7 @@ $$;
 
 -- Forget a subject everywhere: its role assignments (user subjects) and every
 -- FGA tuple naming it as user (any userset of it too) or as object.
-create function permissions.delete_subject(p_subject_type text, p_subject_id text)
+create function permissions.delete_subject(subject_type text, subject_id text)
 returns bigint
 language plpgsql security definer
 set search_path = ''
@@ -5818,11 +5832,12 @@ declare
     n bigint;
     k bigint;
 begin
-    delete from permissions.rbac_assignments where p_subject_type = 'user' and user_id = p_subject_id;
+    delete from permissions.rbac_assignments a
+    where delete_subject.subject_type = 'user' and a.user_id = delete_subject.subject_id;
     get diagnostics n = row_count;
-    delete from permissions.fga_tuples
-    where (user_type = p_subject_type and user_id = p_subject_id)
-       or (object_type = p_subject_type and object_id = p_subject_id);
+    delete from permissions.fga_tuples t
+    where (t.user_type = delete_subject.subject_type and t.user_id = delete_subject.subject_id)
+       or (t.object_type = delete_subject.subject_type and t.object_id = delete_subject.subject_id);
     get diagnostics k = row_count;
     return n + k;
 end;
@@ -5841,9 +5856,9 @@ grant execute on function
     permissions.current_subject_id(),
     permissions.current_subject_type(),
     permissions._unfolded_null(),
-    permissions.has_permission(text, text),
-    permissions.has_role(text, text),
-    permissions.scopes_with_permission(text, boolean),
+    permissions.rbac_has_permission(text, text),
+    permissions.rbac_has_role(text, text),
+    permissions.rbac_scopes_with_permission(text, boolean),
     permissions.fga_check_current(text, text),
     permissions.fga_list_objects_current(text, text),
     permissions.fga_list_object_ids_current(text, text)

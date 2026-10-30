@@ -203,7 +203,7 @@ select tap.is(permissions.fga_check('user:ann', 'member_view', 'doc:1'), false,
               'a stored tuple with a condition the new model does not allow is ignored on the unconditioned path');
 select tap.is(array(select permissions.fga_list_objects('user:ann', 'doc', 'member_view')), '{}'::text[], '... by ListObjects too');
 select tap.is(array(select permissions.fga_list_users('doc:1', 'member_view', '{user}')), '{}'::text[], '... and ListUsers');
-select tap.is(permissions.fga_check('user:ann', 'plain_viewer', 'doc:1', authorization_model_id => :'m'), true,
+select tap.is(permissions.fga_check('user:ann', 'plain_viewer', 'doc:1', model_id => :'m'), true,
               'an unconditioned relation of the first model answers as before');
 
 select * from tap.finish();

@@ -16,8 +16,8 @@
 \ir ../../fixtures/ids.sql
 \ir ../../fixtures/fga_suite.sql
 
-select permissions.create_role('viewer', '{documents.read}');
-select permissions.create_role('editor', '{documents.edit}', '{viewer}');
+select permissions.rbac_create_role('viewer', '{documents.read}');
+select permissions.rbac_create_role('editor', '{documents.edit}', '{viewer}');
 
 -- a model with a condition (the first model; v1 below is the latest)
 select permissions.fga_write_authorization_model($m${
@@ -28,7 +28,7 @@ select permissions.fga_write_authorization_model($m${
      "metadata": {"relations": {"viewer": {"directly_related_user_types": [{"type": "user", "condition": "cx"}]}}}}],
   "conditions": {"cx": {"name": "cx", "expression": "x < 100", "parameters": {"x": {"type_name": "TYPE_NAME_INT"}}}}}$m$::jsonb) as vc \gset
 select permissions.fga_write('[{"user": "user:jon", "relation": "viewer", "object": "doc:1", "condition": {"name": "cx"}}]',
-                             authorization_model_id => :'vc');
+                             model_id => :'vc');
 
 select permissions.fga_write_authorization_model($m${
   "schema_version": "1.1",
@@ -62,20 +62,20 @@ select permissions.fga_write_tuple('user:deep', 'member', 'team:t30');
 create temp table sites (n serial, site text, stmt text, st text, detail text, msg text, hint text);
 insert into sites (site, stmt, st, detail, msg, hint) values
 -- rbac_*
-('create_role: exists', $$ select permissions.create_role('viewer', '{x.read}') $$,
- '23505', null, '^role ''viewer'' already exists$', 'drop_role\(''viewer''\)'),
-('create_role: overlap', $$ select permissions.create_role('documents.read', '{a.read}') $$,
- '22023', null, '^role and permission names must not overlap: ''documents.read'' is already a permission$', null),
-('create_role: unknown inherits', $$ select permissions.create_role('auditor', '{audit.read}', '{viewr}') $$,
+('rbac_create_role: exists', $$ select permissions.rbac_create_role('viewer', '{x.read}') $$,
+ '23505', null, '^role ''viewer'' already exists$', 'rbac_drop_role\(role => ''viewer''\)'),
+('rbac_create_role: overlap', $$ select permissions.rbac_create_role('documents.read', '{a.read}') $$,
+ '22023', null, '^role and permission names must not overlap: ''documents.read'' is already a permission$', '^rbac_has_role and rbac_has_permission share one namespace'),
+('rbac_create_role: unknown inherits', $$ select permissions.rbac_create_role('auditor', '{audit.read}', '{viewr}') $$,
  '22023', null, '^unknown role ''viewr'' in inherits of role ''auditor''$', '^Did you mean ''viewer''\? Existing roles: editor, viewer\.$'),
-('drop_role: unknown', $$ select permissions.drop_role('editr') $$,
+('rbac_drop_role: unknown', $$ select permissions.rbac_drop_role('editr') $$,
  '22023', null, '^unknown role ''editr''$', '^Did you mean ''editor''\?'),
-('drop_role: inherited', $$ select permissions.drop_role('viewer') $$,
- '2BP01', null, '^role ''viewer'' is inherited by ''editor''$', 'drop_role\(''editor''\)'),
-('assign_role: unknown', $$ select permissions.assign_role('u1', 'admn') $$,
+('rbac_drop_role: inherited', $$ select permissions.rbac_drop_role('viewer') $$,
+ '2BP01', null, '^role ''viewer'' is inherited by ''editor''$', 'rbac_drop_role\(role => ''editor''\)'),
+('rbac_assign_role: unknown', $$ select permissions.rbac_assign_role('u1', 'admn') $$,
  '22023', null, '^unknown role ''admn''$', '^Existing roles: editor, viewer\.$'),
-('assign_role: null user', $$ select permissions.assign_role(null, 'viewer') $$,
- '22004', null, '^user_id is required to assign role ''viewer''$', null),
+('rbac_assign_role: null user', $$ select permissions.rbac_assign_role(null, 'viewer') $$,
+ '22004', null, '^user_id is required to assign role ''viewer''$', 'rbac_assign_role\(user_id => id::text, role => ''viewer'', scope => org_id::text\)'),
 -- users and objects (validation.ValidateUser / ValidateObject)
 ('parse_user: malformed', $$ select permissions.fga_check('anne', 'viewer', 'document:1') $$,
  '22023', 'openfga:2000 validation_error', '^invalid ''user'' value: anne: ', '''user:anne'''),
@@ -102,9 +102,9 @@ insert into sites (site, stmt, st, detail, msg, hint) values
 -- conditions (designs/d-conditions.md)
 ('context: not an object', $$ select permissions.fga_check('user:anne', 'viewer', 'document:1', context => '[1]') $$,
  '22023', 'openfga:2000 validation_error', '^invalid context: must be a JSON object of condition parameters, got a JSON array$', 'context =>'),
-('condition: evaluation error', $$ select permissions.fga_check('user:jon', 'viewer', 'doc:1', authorization_model_id => (select m.id from permissions.fga_models m order by m.seq limit 1)) $$,
+('condition: evaluation error', $$ select permissions.fga_check('user:jon', 'viewer', 'doc:1', model_id => (select m.id from permissions.fga_models m order by m.seq limit 1)) $$,
  '22023', 'openfga:2000 validation_error', '^failed to evaluate relationship condition: ''cx'' - context is missing parameters ''\[x\]''$', '^Pass every parameter the condition declares'),
-('write: another condition, on_duplicate ignore', $$ select permissions.fga_write('{"tuple_keys": [{"user": "user:jon", "relation": "viewer", "object": "doc:1", "condition": {"name": "cx", "context": {"x": 1}}}], "on_duplicate": "ignore"}', authorization_model_id => (select m.id from permissions.fga_models m order by m.seq limit 1)) $$,
+('write: another condition, on_duplicate ignore', $$ select permissions.fga_write('{"tuple_keys": [{"user": "user:jon", "relation": "viewer", "object": "doc:1", "condition": {"name": "cx", "context": {"x": 1}}}], "on_duplicate": "ignore"}', model_id => (select m.id from permissions.fga_models m order by m.seq limit 1)) $$,
  '22023', 'openfga:2017 write_failed_due_to_invalid_input', '^attempted to write a tuple which already exists with a different condition: doc:1#viewer@user:jon \(stored: condition cx \{\}, written: condition cx \{"x": 1\}\)$', 'delete it, then write it again'),
 ('tuple_for_write: invalid user or object', $$ select permissions.fga_write('[{"user": "usr:x", "relation": "editor", "object": "document:9"}]') $$,
  '22023', 'openfga:2027 invalid_tuple', '^Invalid tuple ''document:9#editor@usr:x''\. Reason: invalid ''user'' value: usr:x: type ''usr'' not found$', '^Did you mean ''user''\?'),
@@ -118,9 +118,9 @@ insert into sites (site, stmt, st, detail, msg, hint) values
  '22023', 'openfga:2000 validation_error', '^contextual_tuples must be an array of tuple keys, got a JSON string$', 'tuple_keys'),
 -- models
 ('model id: none written', $$ do $d$ begin perform permissions.fga_delete_store(); perform permissions.fga_check('user:anne', 'viewer', 'document:1'); end $d$ $$,
- '22023', 'openfga:2020 latest_authorization_model_not_found', '^No authorization models found for store$', 'fga_write_authorization_model\('),
+ '22023', 'openfga:2020 latest_authorization_model_not_found', '^No authorization models found for store$', 'fga_write_authorization_model\(model => '),
 ('model id: unknown', $$ select permissions.fga_check('user:anne', 'viewer', 'document:1', null, '01ARZ3NDEKTSV4RRFFQ69G5FAV') $$,
- '22023', 'openfga:2001 authorization_model_not_found', '^Authorization Model ''01ARZ3NDEKTSV4RRFFQ69G5FAV'' not found$', '^Model ids, newest first: ' || :'v1' || ', ' || :'vc' || '\.'),
+ '22023', 'openfga:2001 authorization_model_not_found', '^Authorization Model ''01ARZ3NDEKTSV4RRFFQ69G5FAV'' not found$', '^Model ids, newest first: ' || :'v1' || ', ' || :'vc' || '\. Omit model_id to use the latest\.$'),
 ('model: not an object', $$ select permissions.fga_write_authorization_model('[]') $$,
  '22023', 'openfga:2056 invalid_authorization_model', '^the authorization model must be a JSON object, got a JSON array$', 'schema_version'),
 ('model: schema version', $$ select permissions.fga_write_authorization_model('{"schema_version": "1.0", "type_definitions": [{"type": "user"}]}') $$,
@@ -171,7 +171,7 @@ insert into sites (site, stmt, st, detail, msg, hint) values
 ('write: empty list', $$ select permissions.fga_write('[{"user": "user:x", "relation": "editor", "object": "document:9"}]', '[]') $$,
  '22023', 'openfga:2000 validation_error', '^deletes must contain at least 1 tuple key, got an empty list$', 'deletes'),
 ('write: nothing', $$ select permissions.fga_write() $$,
- '22023', 'openfga:2003 invalid_write_input', '^Invalid input\. Make sure you provide at least one write, or at least one delete$', 'fga_write\('),
+ '22023', 'openfga:2003 invalid_write_input', '^Invalid input\. Make sure you provide at least one write, or at least one delete$', 'fga_write\(writes => '),
 ('write: malformed delete', $$ select permissions.fga_write(deletes => '[{"user": "anne", "relation": "editor", "object": "document:1"}]') $$,
  '22023', 'openfga:2000 validation_error', '^Invalid tuple ''document:1#editor@anne'' in deletes: malformed$', null),
 ('write: duplicate', $$ select permissions.fga_write('[{"user": "user:x", "relation": "editor", "object": "document:9"}, {"user": "user:x", "relation": "editor", "object": "document:9"}]') $$,
@@ -183,11 +183,11 @@ insert into sites (site, stmt, st, detail, msg, hint) values
 ('write: exists', $$ select permissions.fga_write('[{"user": "user:anne", "relation": "editor", "object": "document:1"}]') $$,
  '22023', 'openfga:2017 write_failed_due_to_invalid_input', '^cannot write a tuple which already exists: document:1#editor@user:anne$', '"on_duplicate": "ignore"'),
 -- Read
-('read: page_size', $$ select permissions.fga_read(p_page_size => 0) $$,
+('read: page_size', $$ select permissions.fga_read(page_size => 0) $$,
  '22023', 'openfga:2000 validation_error', '^invalid ReadRequest\.PageSize: value must be inside range \[1, 100\], got 0$', 'default of 50'),
-('read: token format', $$ select permissions.fga_read(p_continuation_token => 'a b') $$,
+('read: token format', $$ select permissions.fga_read(continuation_token => 'a b') $$,
  '22023', 'openfga:2000 validation_error', '^invalid ReadRequest\.ContinuationToken: value does not match regex pattern', 'continuation_token'),
-('read: token decode', $$ select permissions.fga_read(p_continuation_token => 'AAAA') $$,
+('read: token decode', $$ select permissions.fga_read(continuation_token => 'AAAA') $$,
  '22023', 'openfga:2007 invalid_continuation_token', '^Invalid continuation token: ''AAAA''$', 'continuation_token'),
 -- depth
 ('too complex', $$ select permissions.fga_check('user:deep', 'member', 'team:t0') $$,

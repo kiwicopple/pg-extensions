@@ -11,12 +11,12 @@ The two meet in RLS policies, where permissive policies OR together and restrict
 
 | Page | Covers | Tested by |
 | --- | --- | --- |
-| This page | install, identity, privileges, the `rbac` preset, RLS rules | [`test/spec/90_usage_rbac.sql`](../test/spec/90_usage_rbac.sql) |
+| This page | install, identity, privileges, the `rbac` preset, RLS rules | [`test/spec/d/90_usage_rbac.sql`](../test/spec/d/90_usage_rbac.sql) |
 | [The OpenFGA model](fga.md) | writing a model, tuples, Check, ListObjects, ListUsers, Read, contextual tuples, errors and limits, privileges | [`test/spec/d/90_usage_fga.sql`](../test/spec/d/90_usage_fga.sql) |
 | [OpenFGA conditions](conditions.md) | conditions (CEL) on tuples: a model with conditions, expiring access, IP ranges, request and stored context, errors | [`test/spec/d/90_usage_conditions.sql`](../test/spec/d/90_usage_conditions.sql) |
 | [RLS with both models](rls.md) | the current-subject functions, combining both models in policies, denies, plan-time evaluation, row attributes, conditions in policies, cleanup | [`test/spec/d/90_usage_rls.sql`](../test/spec/d/90_usage_rls.sql) |
 
-Every SQL example on these pages runs as written in the spec next to it. This page's examples also run against the prototypes A, B and C, which share the `rbac` preset ([Prototypes](#prototypes-a-b-and-c-history)).
+Every SQL example on these pages runs as written in the spec next to it. The examples pass arguments by name (`role => 'editor'`), which reads well and costs nothing at run time; positional calls work too, in the order the function reference lists. Model-specific functions carry their model's prefix (`rbac_`, `fga_`); the functions with no prefix (`current_subject_id`, `current_subject_type`, `delete_subject`) are shared by both models.
 
 Examples use psql variables for IDs. `:'alice'` is Alice's user ID, and so on:
 
@@ -51,7 +51,7 @@ On Supabase, paste the file into the SQL editor, or run it with `psql` as the `p
 
 ### Non-superuser install
 
-The installing role needs no superuser rights. It needs `CREATE` on the database (the file creates the schema `permissions`); owning the database is not required. Everything it creates is owned by that role, and that role is the "admin" in this page. [`03_tle_install.sql`](../test/spec/03_tle_install.sql) checks this on the extension and on every prototype: a non-superuser that owns the database installs it, every object ends up owned by that role, and no function is written in C.
+The installing role needs no superuser rights. It needs `CREATE` on the database (the file creates the schema `permissions`); owning the database is not required. Everything it creates is owned by that role, and that role is the "admin" in this page. [`03_tle_install.sql`](../test/spec/d/03_tle_install.sql) checks this on the extension (and its [prototype copy](../test/spec/03_tle_install.sql) on every prototype): a non-superuser that owns the database installs it, every object ends up owned by that role, and no function is written in C.
 
 ### pg_tle
 
@@ -104,9 +104,9 @@ The ID comes from the first of these that is present:
 3. Otherwise null, and then every check is false.
 
 ```sql
-select permissions.current_subject_id();    -- null: no JWT, no setting
-select permissions.current_subject_type();  -- 'user'
-select permissions.has_permission('documents.read');  -- false: no subject, no access
+select permissions.current_subject_id();                                 -- null: no JWT, no setting
+select permissions.current_subject_type();                               -- 'user'
+select permissions.rbac_has_permission(permission => 'documents.read');  -- false: no subject, no access
 ```
 
 ### Plain Postgres
@@ -181,18 +181,18 @@ The extension has two kinds of functions.
 
 | Kind | Functions | Who can call them |
 | --- | --- | --- |
-| Client-facing: answer for the current subject only | `current_subject_id`, `current_subject_type`, `has_permission`, `has_role`, `scopes_with_permission`, `fga_check_current`, `fga_list_objects_current`, `fga_list_object_ids_current` | Everyone (granted to `PUBLIC`), so `anon` and `authenticated` too |
-| Admin-only: change data, or take a subject as an argument | `create_role`, `drop_role`, `assign_role`, `unassign_role`, `user_permissions`, `users_with_role`, `delete_subject`, and every other `fga_*` function (`fga_write`, `fga_check`, `fga_list_objects`, ...) | The installing role. Anyone else needs an explicit `grant execute` |
+| Client-facing: answer for the current subject only | `current_subject_id`, `current_subject_type`, `rbac_has_permission`, `rbac_has_role`, `rbac_scopes_with_permission`, `fga_check_current`, `fga_list_objects_current`, `fga_list_object_ids_current` | Everyone (granted to `PUBLIC`), so `anon` and `authenticated` too |
+| Admin-only: change data, or take a subject as an argument | `rbac_create_role`, `rbac_drop_role`, `rbac_assign_role`, `rbac_unassign_role`, `rbac_user_permissions`, `rbac_users_with_role`, `delete_subject`, and every other `fga_*` function (`fga_write`, `fga_check`, `fga_list_objects`, ...) | The installing role. Anyone else needs an explicit `grant execute` |
 
-The tables are closed to clients: no role but the owner has any privilege on them ([`02_security.sql`](../test/spec/02_security.sql) checks every table in the schema). Functions that read them are `security definer`, with a pinned `search_path`.
+The tables are closed to clients: no role but the owner has any privilege on them ([`02_security.sql`](../test/spec/d/02_security.sql) checks every table in the schema). Functions that read them are `security definer`, with a pinned `search_path`.
 
-Why the functions that take a subject are admin-only: `user_permissions(user_id)` and `users_with_role(role)` would let any signed-in user ask what anyone else can do. The client-facing checks have no subject argument, so a client can only ask about itself. The same goes for `assign_role` and its siblings: a client that could call them could make itself an admin.
+Why the functions that take a subject are admin-only: `rbac_user_permissions(user_id)` and `rbac_users_with_role(role)` would let any signed-in user ask what anyone else can do. The client-facing checks have no subject argument, so a client can only ask about itself. The same goes for `rbac_assign_role` and its siblings: a client that could call them could make itself an admin.
 
 ```sql
 set role authenticated;
-select permissions.has_permission('documents.read');   -- fine
-select permissions.assign_role(:'bob', 'admin');       -- ERROR:  permission denied for function assign_role
-select permissions.user_permissions(:'alice');         -- ERROR:  permission denied for function user_permissions
+select permissions.rbac_has_permission(permission => 'documents.read');   -- fine
+select permissions.rbac_assign_role(user_id => :'bob', role => 'admin');  -- ERROR:  permission denied for function rbac_assign_role
+select permissions.rbac_user_permissions(user_id => :'alice');            -- ERROR:  permission denied for function rbac_user_permissions
 reset role;
 ```
 
@@ -200,12 +200,12 @@ A trusted backend role such as `service_role` gets the admin functions with an e
 
 ```sql
 grant execute on function
-    permissions.create_role(text, text[], text[]),
-    permissions.drop_role(text),
-    permissions.assign_role(text, text, text),
-    permissions.unassign_role(text, text, text),
-    permissions.user_permissions(text, text),
-    permissions.users_with_role(text, text)
+    permissions.rbac_create_role(text, text[], text[]),
+    permissions.rbac_drop_role(text),
+    permissions.rbac_assign_role(text, text, text),
+    permissions.rbac_unassign_role(text, text, text),
+    permissions.rbac_user_permissions(text, text),
+    permissions.rbac_users_with_role(text, text)
 to service_role;
 ```
 
@@ -220,13 +220,13 @@ Roles grant permissions, roles can inherit other roles, and users hold roles, ei
 Define the roles once, as the admin, and assign them. This is the scenario from [PLAN.md](../PLAN.md) §6. `editor` inherits `viewer`, `admin` inherits `editor`:
 
 ```sql
-select permissions.create_role('viewer', '{documents.read}');
-select permissions.create_role('editor', '{documents.edit}', '{viewer}');
-select permissions.create_role('admin',  '{documents.delete,users.manage}', '{editor}');
+select permissions.rbac_create_role(role => 'viewer', permissions => '{documents.read}');
+select permissions.rbac_create_role(role => 'editor', permissions => '{documents.edit}', inherits => '{viewer}');
+select permissions.rbac_create_role(role => 'admin',  permissions => '{documents.delete,users.manage}', inherits => '{editor}');
 
-select permissions.assign_role(:'alice', 'admin');
-select permissions.assign_role(:'bob',   'editor');
-select permissions.assign_role(:'carol', 'viewer');
+select permissions.rbac_assign_role(user_id => :'alice', role => 'admin');
+select permissions.rbac_assign_role(user_id => :'bob',   role => 'editor');
+select permissions.rbac_assign_role(user_id => :'carol', role => 'viewer');
 ```
 
 Permission names are free-form strings (`documents.read`). A role is defined once and works both app-wide and in any scope.
@@ -235,125 +235,125 @@ Permission names are free-form strings (`documents.read`). A role is defined onc
 
 | Function | Returns | Who | What it does |
 | --- | --- | --- | --- |
-| `create_role(role text, permissions text[], inherits text[] default '{}')` | `void` | admin | Defines a role, the permissions it grants and the roles it inherits |
-| `drop_role(role text)` | `void` | admin | Removes a role and its assignments |
-| `assign_role(user_id text, role text, scope text default null)` | `void` | admin | Gives a user a role, app-wide (`scope` null) or in a scope |
-| `unassign_role(user_id text, role text, scope text default null)` | `void` | admin | Takes it away |
-| `has_permission(permission text, scope text default null)` | `boolean` | everyone | Does the current subject hold the permission? |
-| `has_role(role text, scope text default null)` | `boolean` | everyone | Does the current subject hold the role? |
-| `scopes_with_permission(permission text)` | `text[]` | everyone | Scopes where the current subject holds the permission. The RLS fast path |
-| `user_permissions(user_id text, scope text default null)` | `text[]` | admin | Everything a given user can do |
-| `users_with_role(role text, scope text default null)` | `setof text` | admin | Everyone who holds a role |
+| `rbac_create_role(role text, permissions text[], inherits text[] default '{}')` | `void` | admin | Defines a role, the permissions it grants and the roles it inherits |
+| `rbac_drop_role(role text)` | `void` | admin | Removes a role and its assignments |
+| `rbac_assign_role(user_id text, role text, scope text default null)` | `void` | admin | Gives a user a role, app-wide (`scope` null) or in a scope |
+| `rbac_unassign_role(user_id text, role text, scope text default null)` | `void` | admin | Takes it away |
+| `rbac_has_permission(permission text, scope text default null)` | `boolean` | everyone | Does the current subject hold the permission? |
+| `rbac_has_role(role text, scope text default null)` | `boolean` | everyone | Does the current subject hold the role? |
+| `rbac_scopes_with_permission(permission text)` | `text[]` | everyone | Scopes where the current subject holds the permission. The RLS fast path |
+| `rbac_user_permissions(user_id text, scope text default null)` | `text[]` | admin | Everything a given user can do |
+| `rbac_users_with_role(role text, scope text default null)` | `setof text` | admin | Everyone who holds a role |
 
-Behaviour, including the error codes (checked in the spec, on the extension and on the prototypes):
+Behaviour, including the error codes (checked in the spec; the prototypes pass the same checks under their unprefixed names):
 
-- **Scopes are separate.** `has_permission(p)` looks only at app-wide roles and `has_permission(p, scope)` only at that scope. There is no hidden inheritance between them. An app that wants "app-wide admins can do anything in any tenant" writes both checks ([below](#app-wide-or-scoped-two-checks)).
-- **Unknown names return false.** An unknown permission or role in `has_permission` or `has_role` is false, never an error, so a policy that names a dropped permission denies instead of breaking every query. The flip side: a typo in a policy denies silently.
-- **No subject returns false.** And `scopes_with_permission` returns an empty array, not null.
-- **Inheritance counts.** `has_role` is true for a role held directly or through inheritance. An editor has viewer. An admin is not implied by an editor.
+- **Scopes are separate.** `rbac_has_permission(p)` looks only at app-wide roles and `rbac_has_permission(p, scope)` only at that scope. There is no hidden inheritance between them. An app that wants "app-wide admins can do anything in any tenant" writes both checks ([below](#app-wide-or-scoped-two-checks)).
+- **Unknown names return false.** An unknown permission or role in `rbac_has_permission` or `rbac_has_role` is false, never an error, so a policy that names a dropped permission denies instead of breaking every query. The flip side: a typo in a policy denies silently.
+- **No subject returns false.** And `rbac_scopes_with_permission` returns an empty array, not null.
+- **Inheritance counts.** `rbac_has_role` is true for a role held directly or through inheritance. An editor has viewer. An admin is not implied by an editor.
 - **Role names and permission names can't overlap.** A role can't be named like an existing permission and a permission can't be named like an existing role.
 
-#### `create_role`
+#### `rbac_create_role`
 
 ```sql
-select permissions.create_role('viewer', '{documents.read}');
+select permissions.rbac_create_role(role => 'viewer', permissions => '{documents.read}');
 -- ERROR (23505): the role already exists
-select permissions.create_role('auditor', '{audit.read}', '{nonexistent}');
+select permissions.rbac_create_role(role => 'auditor', permissions => '{audit.read}', inherits => '{nonexistent}');
 -- ERROR (22023): unknown role in inherits
-select permissions.create_role('documents.read', '{x.y}');
+select permissions.rbac_create_role(role => 'documents.read', permissions => '{x.y}');
 -- ERROR (22023): a role named like a permission
-select permissions.create_role('moderator', '{viewer}');
+select permissions.rbac_create_role(role => 'moderator', permissions => '{viewer}');
 -- ERROR (22023): a permission named like a role
 ```
 
 Inheritance is transitive: `admin` has what `editor` grants, and what `viewer` grants through `editor`.
 
 ```sql
-select permissions.user_permissions(:'alice');
+select permissions.rbac_user_permissions(user_id => :'alice');
 -- {documents.read,documents.edit,documents.delete,users.manage}  (order not guaranteed)
 ```
 
-#### `assign_role` and `unassign_role`
+#### `rbac_assign_role` and `rbac_unassign_role`
 
 Assigning twice is harmless. An unknown role raises. Unassigning a role the user doesn't hold, or a role that doesn't exist, does nothing.
 
 ```sql
-select permissions.assign_role(:'bob', 'editor');             -- already held: no change
-select permissions.assign_role(:'bob', 'nonexistent');        -- ERROR (22023): unknown role
-select permissions.unassign_role(:'dave', 'editor');          -- Dave doesn't hold it: no-op
-select permissions.unassign_role(:'dave', 'nonexistent');     -- no-op
+select permissions.rbac_assign_role(user_id => :'bob', role => 'editor');          -- already held: no change
+select permissions.rbac_assign_role(user_id => :'bob', role => 'nonexistent');     -- ERROR (22023): unknown role
+select permissions.rbac_unassign_role(user_id => :'dave', role => 'editor');       -- Dave doesn't hold it: no-op
+select permissions.rbac_unassign_role(user_id => :'dave', role => 'nonexistent');  -- no-op
 ```
 
-With a scope, the role applies inside that scope only. A scope is any ID you choose, normally the ID of an organization row. `unassign_role` with the same scope removes it, and removing an app-wide assignment leaves the same role in other scopes alone.
+With a scope, the role applies inside that scope only. A scope is any ID you choose, normally the ID of an organization row. `rbac_unassign_role` with the same scope removes it, and removing an app-wide assignment leaves the same role in other scopes alone.
 
-#### `has_permission` and `has_role`
+#### `rbac_has_permission` and `rbac_has_role`
 
 Both answer for the current subject. As Carol, a viewer (`set_config('permissions.subject_id', :'carol', true)` in a transaction):
 
 ```sql
-select permissions.has_permission('documents.read');         -- true
-select permissions.has_permission('documents.edit');         -- false
-select permissions.has_permission('documents.nonexistent');  -- false, not an error
-select permissions.has_role('viewer');                       -- true
-select permissions.has_role('documents.read');               -- false: a permission name is not a role
-select permissions.has_role('nonexistent');                  -- false
+select permissions.rbac_has_permission(permission => 'documents.read');         -- true
+select permissions.rbac_has_permission(permission => 'documents.edit');         -- false
+select permissions.rbac_has_permission(permission => 'documents.nonexistent');  -- false, not an error
+select permissions.rbac_has_role(role => 'viewer');                             -- true
+select permissions.rbac_has_role(role => 'documents.read');                     -- false: a permission name is not a role
+select permissions.rbac_has_role(role => 'nonexistent');                        -- false
 ```
 
 As Bob, an editor:
 
 ```sql
-select permissions.has_role('viewer');   -- true: inherited through editor
-select permissions.has_role('admin');    -- false
+select permissions.rbac_has_role(role => 'viewer');  -- true: inherited through editor
+select permissions.rbac_has_role(role => 'admin');   -- false
 ```
 
 As Alice, an app-wide admin, a scope sees nothing of her app-wide role:
 
 ```sql
-select permissions.has_permission('documents.read', :'acme');   -- false
+select permissions.rbac_has_permission(permission => 'documents.read', scope => :'acme');   -- false
 ```
 
 Both functions look at the subject whose type is `current_subject_type()`. Roles are held by `user` subjects, so with another subject type they are false.
 
-#### `scopes_with_permission`
+#### `rbac_scopes_with_permission`
 
 Returns the IDs of the scopes where the current subject holds the permission, as `text[]`. App-wide assignments don't appear. This is the function RLS policies use for tenant tables ([below](#writing-rls-policies)). Call it with the permission only:
 
 ```sql
-select permissions.scopes_with_permission('documents.read');
+select permissions.rbac_scopes_with_permission(permission => 'documents.read');
 -- {} for a user who holds nothing in any scope
 ```
 
 There is a second, hidden parameter, which you must not pass ([Gotchas](#gotchas)).
 
-#### `user_permissions` and `users_with_role`
+#### `rbac_user_permissions` and `rbac_users_with_role`
 
 For admin screens and debugging:
 
 ```sql
-select permissions.user_permissions(:'bob');            -- {documents.read,documents.edit}
-select permissions.user_permissions(:'dave');           -- {}: no roles
-select * from permissions.users_with_role('editor');    -- alice (through admin) and bob
+select permissions.rbac_user_permissions(user_id => :'bob');       -- {documents.read,documents.edit}
+select permissions.rbac_user_permissions(user_id => :'dave');      -- {}: no roles
+select * from permissions.rbac_users_with_role(role => 'editor');  -- alice (through admin) and bob
 ```
 
-`users_with_role` includes users who hold the role through a role that inherits it, and it lists user IDs only.
+`rbac_users_with_role` includes users who hold the role through a role that inherits it, and it lists user IDs only.
 
-#### `drop_role`
+#### `rbac_drop_role`
 
 A role that another role inherits can't be dropped. Dropping a role deletes its assignments.
 
 ```sql
-select permissions.create_role('auditor', '{audit.read}', '{viewer}');
-select permissions.assign_role(:'dave', 'auditor');
-select permissions.user_permissions(:'dave');    -- {audit.read,documents.read}
+select permissions.rbac_create_role(role => 'auditor', permissions => '{audit.read}', inherits => '{viewer}');
+select permissions.rbac_assign_role(user_id => :'dave', role => 'auditor');
+select permissions.rbac_user_permissions(user_id => :'dave');    -- {audit.read,documents.read}
 
-select permissions.drop_role('viewer');          -- ERROR (2BP01): viewer is inherited by another role
-select permissions.drop_role('nonexistent');     -- ERROR (22023): unknown role
+select permissions.rbac_drop_role(role => 'viewer');       -- ERROR (2BP01): viewer is inherited by another role
+select permissions.rbac_drop_role(role => 'nonexistent');  -- ERROR (22023): unknown role
 
-select permissions.drop_role('auditor');
-select permissions.user_permissions(:'dave');    -- {}: the assignment went with the role
+select permissions.rbac_drop_role(role => 'auditor');
+select permissions.rbac_user_permissions(user_id => :'dave');    -- {}: the assignment went with the role
 ```
 
-The name of a dropped role can be reused straight away. Treat role definitions as admin-time work, like a migration. There is no call that changes an existing role's permissions or inherited roles: drop it and create it again, and assign it again, since `drop_role` removes its assignments.
+The name of a dropped role can be reused straight away. Treat role definitions as admin-time work, like a migration. There is no call that changes an existing role's permissions or inherited roles: drop it and create it again, and assign it again, since `rbac_drop_role` removes its assignments.
 
 ### Scenario 1: app-wide roles
 
@@ -370,11 +370,11 @@ alter table public.documents enable row level security;
 grant select, update, delete on public.documents to authenticated;
 
 create policy documents_select on public.documents for select to authenticated
-    using ((select permissions.has_permission('documents.read')));
+    using ((select permissions.rbac_has_permission(permission => 'documents.read')));
 create policy documents_update on public.documents for update to authenticated
-    using ((select permissions.has_permission('documents.edit')));
+    using ((select permissions.rbac_has_permission(permission => 'documents.edit')));
 create policy documents_delete on public.documents for delete to authenticated
-    using ((select permissions.has_permission('documents.delete')));
+    using ((select permissions.rbac_has_permission(permission => 'documents.delete')));
 ```
 
 The check doesn't depend on the row, so it is wrapped in `(select ...)`. Postgres runs it once per query, as an InitPlan, not once per row. `EXPLAIN` shows an `InitPlan` and no `SubPlan`.
@@ -385,9 +385,9 @@ What each user sees (every block starts with the same two lines):
 begin;
 set local role authenticated;
 select set_config('permissions.subject_id', :'carol', true);
-select count(*) from public.documents;                        -- 3: viewers read everything
-update public.documents set title = upper(title);             -- 0 rows: Carol can't edit
-select permissions.has_permission('documents.edit');          -- false: can Carol edit documents? No
+select count(*) from public.documents;                                   -- 3: viewers read everything
+update public.documents set title = upper(title);                        -- 0 rows: Carol can't edit
+select permissions.rbac_has_permission(permission => 'documents.edit');  -- false: can Carol edit documents? No
 commit;
 
 begin;
@@ -419,9 +419,9 @@ In production the `set_config` line is your request setup ([Identity](#identity)
 Same roles, assigned per organization. Alice is an admin of `acme`, Bob is an editor of `acme` and a viewer of `globex`. The table has an `org_id`, and the policies use it:
 
 ```sql
-select permissions.assign_role(:'alice', 'admin',  :'acme');
-select permissions.assign_role(:'bob',   'editor', :'acme');
-select permissions.assign_role(:'bob',   'viewer', :'globex');
+select permissions.rbac_assign_role(user_id => :'alice', role => 'admin',  scope => :'acme');
+select permissions.rbac_assign_role(user_id => :'bob',   role => 'editor', scope => :'acme');
+select permissions.rbac_assign_role(user_id => :'bob',   role => 'viewer', scope => :'globex');
 
 create table public.org_documents (
     id     uuid primary key default gen_random_uuid(),
@@ -438,11 +438,11 @@ alter table public.org_documents enable row level security;
 grant select, insert, update on public.org_documents to authenticated;
 
 create policy org_documents_select on public.org_documents for select to authenticated
-    using (org_id = any (array(select unnest(permissions.scopes_with_permission('documents.read'))::uuid)));
+    using (org_id = any (array(select unnest(permissions.rbac_scopes_with_permission(permission => 'documents.read'))::uuid)));
 create policy org_documents_update on public.org_documents for update to authenticated
-    using (permissions.has_permission('documents.edit', org_id::text));
+    using (permissions.rbac_has_permission(permission => 'documents.edit', scope => org_id::text));
 create policy org_documents_insert on public.org_documents for insert to authenticated
-    with check (permissions.has_permission('documents.edit', org_id::text));
+    with check (permissions.rbac_has_permission(permission => 'documents.edit', scope => org_id::text));
 ```
 
 SELECT uses the fast path, which lists the user's scopes once per query. UPDATE and INSERT check the one row being written. [Writing RLS policies](#writing-rls-policies) explains the two shapes.
@@ -450,18 +450,18 @@ SELECT uses the fast path, which lists the user's scopes once per query. UPDATE 
 The questions from the scenario, as Bob:
 
 ```sql
-select permissions.has_permission('documents.edit', :'acme');     -- true
-select permissions.has_permission('documents.edit', :'globex');   -- false
-select permissions.has_permission('documents.read', :'globex');   -- true
-select permissions.scopes_with_permission('documents.read');      -- {acme, globex}, as IDs
-select permissions.scopes_with_permission('documents.edit');      -- {acme}
+select permissions.rbac_has_permission(permission => 'documents.edit', scope => :'acme');    -- true
+select permissions.rbac_has_permission(permission => 'documents.edit', scope => :'globex');  -- false
+select permissions.rbac_has_permission(permission => 'documents.read', scope => :'globex');  -- true
+select permissions.rbac_scopes_with_permission(permission => 'documents.read');              -- {acme, globex}, as IDs
+select permissions.rbac_scopes_with_permission(permission => 'documents.edit');              -- {acme}
 ```
 
-And as Carol, who holds a role app-wide only, `scopes_with_permission('documents.read')` is `{}`. Admin queries, as the admin:
+And as Carol, who holds a role app-wide only, `rbac_scopes_with_permission(permission => 'documents.read')` is `{}`. Admin queries, as the admin:
 
 ```sql
-select permissions.user_permissions(:'bob', :'globex');       -- {documents.read}: what can Bob do in globex?
-select * from permissions.users_with_role('admin', :'acme');  -- alice: who are the admins of acme?
+select permissions.rbac_user_permissions(user_id => :'bob', scope => :'globex');    -- {documents.read}: what can Bob do in globex?
+select * from permissions.rbac_users_with_role(role => 'admin', scope => :'acme');  -- alice: who are the admins of acme?
 ```
 
 And through the policies, as Bob:
@@ -494,7 +494,7 @@ These are the rules from [PLAN.md](../PLAN.md) §4, as practical advice. The mea
 Use this form, exactly:
 
 ```sql
-org_id = any (array(select unnest(permissions.scopes_with_permission('documents.read'))::uuid))
+org_id = any (array(select unnest(permissions.rbac_scopes_with_permission(permission => 'documents.read'))::uuid))
 ```
 
 Postgres computes the list of the user's scopes once per query (an InitPlan) and then uses the index on `org_id`. In the spec `EXPLAIN` shows an InitPlan and no per-row SubPlan.
@@ -503,14 +503,14 @@ Three other ways of writing it look right. None is as good:
 
 ```sql
 -- 1. Doesn't work
-org_id = any ((select permissions.scopes_with_permission('documents.read')))
+org_id = any ((select permissions.rbac_scopes_with_permission(permission => 'documents.read')))
 -- ERROR:  operator does not exist: uuid = text[]
 
 -- 2. Works, but slower on a big table
-org_id = any ((select permissions.scopes_with_permission('documents.read'))::uuid[])
+org_id = any ((select permissions.rbac_scopes_with_permission(permission => 'documents.read'))::uuid[])
 
 -- 3. Works, but the table's index stops being used
-org_id in (select unnest(permissions.scopes_with_permission('documents.read'))::uuid)
+org_id in (select unnest(permissions.rbac_scopes_with_permission(permission => 'documents.read'))::uuid)
 ```
 
 1. Postgres reads `any ((select ...))` as a subquery comparison, and fails even with the double parentheses. The original Zanzibar RFC has this bug.
@@ -524,8 +524,8 @@ Forms 2 and 3 return the same rows as the fast path (the spec checks that); they
 For UPDATE, DELETE and INSERT, check the single row being written, with the per-row form:
 
 ```sql
-using (permissions.has_permission('documents.edit', org_id::text))      -- update, delete
-with check (permissions.has_permission('documents.edit', org_id::text))  -- insert
+using (permissions.rbac_has_permission(permission => 'documents.edit', scope => org_id::text))       -- update, delete
+with check (permissions.rbac_has_permission(permission => 'documents.edit', scope => org_id::text))  -- insert
 ```
 
 A write touches a few rows, so a call per row is cheap and the policy reads like the rule. The fast path would build the user's whole list of scopes for every statement. For UPDATE, `with check` defaults to the `using` expression.
@@ -534,7 +534,7 @@ Pass the scope as text with `org_id::text`: scopes are text.
 
 ### App-wide or scoped: two checks
 
-`has_permission(p)` never looks at scopes and `has_permission(p, scope)` never looks at app-wide roles. If app-wide roles should also work on a tenant table, a policy needs both:
+`rbac_has_permission(p)` never looks at scopes and `rbac_has_permission(p, scope)` never looks at app-wide roles. If app-wide roles should also work on a tenant table, a policy needs both:
 
 ```sql
 create table public.projects (
@@ -550,28 +550,28 @@ grant select, update on public.projects to authenticated;
 
 create policy projects_select on public.projects for select to authenticated
     using (
-        (select permissions.has_permission('documents.read'))
-        or org_id = any (array(select unnest(permissions.scopes_with_permission('documents.read'))::uuid))
+        (select permissions.rbac_has_permission(permission => 'documents.read'))
+        or org_id = any (array(select unnest(permissions.rbac_scopes_with_permission(permission => 'documents.read'))::uuid))
     );
 create policy projects_update on public.projects for update to authenticated
     using (
-        (select permissions.has_permission('documents.edit'))
-        or permissions.has_permission('documents.edit', org_id::text)
+        (select permissions.rbac_has_permission(permission => 'documents.edit'))
+        or permissions.rbac_has_permission(permission => 'documents.edit', scope => org_id::text)
     );
 ```
 
 The app-wide check is wrapped in `(select ...)`: it doesn't depend on the row, so it runs once. Here the users from before behave like this:
 
 ```sql
-select permissions.assign_role(:'dave', 'editor', :'acme');
-select permissions.assign_role(:'dave', 'viewer', :'globex');
-select permissions.assign_role(:'erin', 'viewer', :'globex');
+select permissions.rbac_assign_role(user_id => :'dave', role => 'editor', scope => :'acme');
+select permissions.rbac_assign_role(user_id => :'dave', role => 'viewer', scope => :'globex');
+select permissions.rbac_assign_role(user_id => :'erin', role => 'viewer', scope => :'globex');
 ```
 
 | User | Roles | `projects` |
 | --- | --- | --- |
 | Carol | app-wide viewer | reads both |
-| Erin | viewer of `globex` only | reads `gemini` (and `has_permission('documents.read')` is false for her, true with `:'globex'`) |
+| Erin | viewer of `globex` only | reads `gemini` (and `rbac_has_permission(permission => 'documents.read')` is false for her, true with `:'globex'`) |
 | Frank | none | reads nothing |
 | Dave | editor of `acme`, viewer of `globex` | reads both, updates `apollo` only |
 | Alice | app-wide admin | updates both |
@@ -580,13 +580,13 @@ The cost: with `or`, Postgres can't use the `org_id` index for the scoped arm. O
 
 ### Other rules
 
-- **Don't fix plan-time evaluation yourself.** `scopes_with_permission` is STABLE and has a trailing parameter that keeps the planner from running the whole call while planning. Don't pass that argument, and don't mark your own wrapper functions VOLATILE: under read committed a volatile function reads grants at a later instant than the rows being filtered. [PLAN.md](../PLAN.md) §4 has the measurements.
+- **Don't fix plan-time evaluation yourself.** `rbac_scopes_with_permission` is STABLE and has a trailing parameter that keeps the planner from running the whole call while planning. Don't pass that argument, and don't mark your own wrapper functions VOLATILE: under read committed a volatile function reads grants at a later instant than the rows being filtered. [PLAN.md](../PLAN.md) §4 has the measurements.
 - **Policies need a role to apply to.** `to authenticated` (or your own request role) and `alter table ... enable row level security`. A superuser, or an owner without `force row level security`, bypasses every policy.
 - **Clients never write permission data.** They have no privileges on the tables, and the functions that write are admin-only.
 
 ## Cleaning up when a user is deleted
 
-The extension doesn't know about your users table, so deleting a user doesn't remove their role assignments. Orphans are harmless while IDs are never reused, but they pile up. `permissions.delete_subject('user', id)` removes a user's role assignments, scoped ones included, and every OpenFGA tuple that names them, in one call (for Frank, who holds `viewer`, `user_permissions` goes from `{documents.read}` to `{}`; the spec checks that). Call it from a trigger on your users table: [RLS with both models](rls.md#cleaning-up-when-a-user-is-deleted) has the trigger.
+The extension doesn't know about your users table, so deleting a user doesn't remove their role assignments. Orphans are harmless while IDs are never reused, but they pile up. `permissions.delete_subject(subject_type => 'user', subject_id => id)` removes a user's role assignments, scoped ones included, and every OpenFGA tuple that names them, in one call (for Frank, who holds `viewer`, `rbac_user_permissions` goes from `{documents.read}` to `{}`; the spec checks that). Call it from a trigger on your users table: [RLS with both models](rls.md#cleaning-up-when-a-user-is-deleted) has the trigger.
 
 ## Graduating from RBAC to per-object sharing
 
@@ -594,14 +594,14 @@ An app that starts on roles often needs "Dave can edit this one document". That 
 
 ```sql
 create policy documents_select_fga on public.documents for select to authenticated
-    using (id = any (array(select permissions.fga_list_object_ids_current('document', 'viewer')::uuid)));
+    using (id = any (array(select permissions.fga_list_object_ids_current(type => 'document', relation => 'viewer')::uuid)));
 ```
 
 [RLS with both models](rls.md) builds this table and its policies step by step, with a deny that overrides a role. Keep the shared arm as a separate policy (or a second `or` branch), not a replacement for the role arm: the single-branch form is much slower on large tables ([DECISION.md](../DECISION.md), "Hybrids worth considering").
 
 ## Gotchas
 
-- **Don't pass the second argument of `scopes_with_permission`.** The signature is `(text, boolean)`. The extra parameter exists so the planner can't evaluate the call at plan time; passing a constant folds the call again, and every query runs the list twice. Call it with the permission name only. It also means `grant` and `drop function` statements need the full signature.
+- **Don't pass the second argument of `rbac_scopes_with_permission`.** The signature is `(permission text, plan_time_guard boolean)`. The extra parameter exists so the planner can't evaluate the call at plan time; passing a constant folds the call again, and every query runs the list twice. Call it with the permission name only. It also means `grant` and `drop function` statements need the full signature.
 - **A typo in a permission name denies, silently.** Unknown names are false in the `rbac` preset, by design. Keep permission names in one place in your code. The OpenFGA functions are the other way round: an unknown type or relation raises ([RLS with both models](rls.md#typos-raise)).
 - **Superusers and owners skip RLS.** Test policies as the role your clients use (`set role authenticated`), not as `postgres`.
 - **Set the subject per transaction.** `set_config(..., true)`, never a session-level setting behind a pooler.
@@ -615,13 +615,13 @@ create policy documents_select_fga on public.documents for select to authenticat
 - [The OpenFGA model](fga.md) and [RLS with both models](rls.md).
 - [`designs/d-per-model.md`](../designs/d-per-model.md): how the extension works, its error codes, its limits, and where it differs from OpenFGA.
 - [`PLAN.md`](../PLAN.md): the goals, the `rbac` preset API and the RLS requirements these examples come from.
-- [`test/spec/90_usage_rbac.sql`](../test/spec/90_usage_rbac.sql): the tested version of every example here. Run it with `./test/run.sh 90_usage_rbac` (the extension), or add `--impl prototypes/<engine>.sql` for a prototype.
+- [`test/spec/d/90_usage_rbac.sql`](../test/spec/d/90_usage_rbac.sql): the tested version of every example here. Run it with `./test/run.sh 90_usage_rbac`.
 
 ## Prototypes A, B and C (history)
 
 Before the extension was design D, three engines were built as prototypes and compared ([`DECISION.md`](../DECISION.md)). They stay in [`prototypes/`](../prototypes/) as measured history, and their usage guides are kept as they were: they describe those prototypes, not the extension.
 
-All three have this page's `rbac` preset, and `test/spec/90_usage_rbac.sql` still runs against each. Where they differ from the extension:
+All three have this page's `rbac` preset under the names it had before the extension added the `rbac_` prefix (`create_role`, `has_permission`, `scopes_with_permission`, ...; [`DECISION.md`](../DECISION.md), "API naming (session 5)"), and [`test/spec/90_usage_rbac.sql`](../test/spec/90_usage_rbac.sql), this page's spec with those names and positional arguments, still runs against each. Where else they differ from the extension:
 
 - `current_subject_id()` is `uuid` on C, and a non-UUID `sub` means no subject there. C raises `22P02` in `assign_role` for a non-UUID user or scope, and has `uuid` overloads of `has_permission` and `has_role`.
 - `scopes_with_permission` is `(text, jsonb)` on B.

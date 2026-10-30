@@ -30,7 +30,10 @@
 # of the non-empty tables;
 # the report records seed time, size and row count of every table in schema
 # `permissions`, and a checksum of the documents that sample users see:
-#   1. rbac     bench/seed_rbac.sql (preset API, any engine); rbac_* and write_assign_role
+#   1. rbac     bench/seed_rbac.sql (the prototypes' preset API: A, B, C), or
+#               designs/<design>/seed_rbac.sql when the design has one (d: the
+#               same data through rbac_create_role and rbac_assign_role);
+#               rbac_* and write_assign_role
 #   2. sharing  designs/<design>/seed_sharing.sql (native API); share_* and write_share
 #   3. parents_proj  designs/<design>/seed_parents.sql (folders; documents linked
 #               only by the app column documents.folder_id; two-arm policy
@@ -316,8 +319,9 @@ SQL
 run_workload() {
     local name=$1
     selected "$name" || return 0
-    local wfile="$HERE/workloads/$name.sql"
-    [ -f "$wfile" ] || wfile="$DESIGN_DIR/workloads/$name.sql"
+    # the design's own copy wins (d's rbac_check and write_assign_role use the rbac_* names)
+    local wfile="$DESIGN_DIR/workloads/$name.sql"
+    [ -f "$wfile" ] || wfile="$HERE/workloads/$name.sql"
     if [ ! -f "$wfile" ]; then
         printf '  %-22s skipped (no workload file for design %s)\n' "$name" "$DESIGN"
         RESULTS+=("| $name | skipped | | | | | |")
@@ -360,7 +364,9 @@ echo
 psql_db -f "$HERE/seed_shape.sql" >/dev/null
 
 # ---- 1. rbac
-seed rbac "$HERE/seed_rbac.sql" || { echo "error: the RBAC seed must load" >&2; exit 1; }
+RBAC_SEED="$DESIGN_DIR/seed_rbac.sql"
+[ -f "$RBAC_SEED" ] || RBAC_SEED="$HERE/seed_rbac.sql"
+seed rbac "$RBAC_SEED" || { echo "error: the RBAC seed must load" >&2; exit 1; }
 checksums rbac
 explain_as_user "rbac_select_page (RBAC policy, user 1)"
 for w in $PHASE1; do run_workload "$w"; done

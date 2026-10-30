@@ -6,7 +6,7 @@
 
 There is no generic API. The `permissions` schema holds one set of tables per model, and each set follows an existing spec as closely as it can:
 
-- `rbac_*`: roles, permissions and scoped assignments. The blessed path, as first-class tables. The functions are the `rbac` API every earlier design had (`create_role`, `assign_role`, `has_permission`, ...), with the same signatures, so the shared specs run unchanged.
+- `rbac_*`: roles, permissions and scoped assignments. The blessed path, as first-class tables. The functions are the `rbac` API every earlier design had, with the same signatures and behaviour, under the `rbac_` prefix since session 5 (`rbac_create_role`, `rbac_assign_role`, `rbac_has_permission`, ...; section 3); the extension runs its own copies of the shared specs with those names.
 - `fga_*`: [OpenFGA](https://openfga.dev). Authorization models are OpenFGA's schema 1.1 JSON, tuples are OpenFGA tuple keys, and the functions mirror OpenFGA's API (Check, ListObjects, ListUsers, Read, Write, WriteAuthorizationModel) with its semantics and its error codes. OpenFGA's test suite is the oracle.
 
 The two models share only a small toolkit: subject identity (`current_subject_id()`, G1), the plan-time guard (`_unfolded_null()`, PLAN §4), `collate "C"` on ids, and the grants. They compose in RLS: permissive policies OR, restrictive policies AND (section 6). Graduating from RBAC to fine-grained sharing means adding FGA policies next to the RBAC ones, not migrating.
@@ -24,10 +24,10 @@ All ids, types and relations are `text collate "C"`.
 | `rbac_roles` | one per role |
 | `rbac_role_permissions` | (role, permission) |
 | `rbac_role_inherits` | (role, inherited role); the inherited role can't be dropped while referenced |
-| `rbac_role_closure` | (role, every role it includes, itself too); written by `create_role`. Roles are immutable and can only inherit roles that exist, so a new role's closure is its parents' closures plus itself and no other row changes. |
+| `rbac_role_closure` | (role, every role it includes, itself too); written by `rbac_create_role`. Roles are immutable and can only inherit roles that exist, so a new role's closure is its parents' closures plus itself and no other row changes. |
 | `rbac_assignments` | (user_id, role, scope); scope null is app-wide. `unique nulls not distinct (user_id, scope, role)` (Postgres 15+). |
 
-`has_permission(p, scope)` is one statement: `rbac_assignments` (by user and scope) → `rbac_role_closure` → `rbac_role_permissions`. App-wide and scoped lookups are separate statements so each probes the unique index directly. Roles are held by `user` subjects only: another `permissions.subject_type` has none.
+`rbac_has_permission(permission, scope)` is one statement: `rbac_assignments` (by user and scope) → `rbac_role_closure` → `rbac_role_permissions`. App-wide and scoped lookups are separate statements so each probes the unique index directly. Roles are held by `user` subjects only: another `permissions.subject_type` has none.
 
 ### OpenFGA
 
@@ -49,22 +49,24 @@ Everything but `fga_tuples` is written once by `fga_write_authorization_model`, 
 
 ## 3. RBAC API
 
-Unchanged from PLAN.md §6 and design A: `create_role`, `drop_role`, `assign_role`, `unassign_role` (admin only); `has_permission`, `has_role`, `scopes_with_permission(permission, p_unfold boolean default _unfolded_null())` (clients and RLS); `user_permissions`, `users_with_role` (admin). Same error codes as A (23505, 22023, 2BP01). `delete_subject(type, id)` removes a subject from both models (its assignments and every tuple naming it as user or object), with A's signature so `90_usage_rbac`'s cleanup step finds it.
+PLAN.md §6's preset and design A's behaviour, with the `rbac_` prefix (session 5, "API naming" below): `rbac_create_role(role, permissions text[], inherits text[] default '{}')`, `rbac_drop_role(role)`, `rbac_assign_role(user_id, role, scope default null)`, `rbac_unassign_role(user_id, role, scope default null)` (admin only); `rbac_has_permission(permission, scope default null)`, `rbac_has_role(role, scope default null)`, `rbac_scopes_with_permission(permission, plan_time_guard boolean default _unfolded_null())` (clients and RLS; `plan_time_guard` is ignored and never passed, PLAN.md §4); `rbac_user_permissions(user_id, scope default null)`, `rbac_users_with_role(role, scope default null)` (admin). Same error codes as A (23505, 22023, 2BP01). `delete_subject(subject_type, subject_id)` removes a subject from both models (its assignments and every tuple naming it as user or object).
+
+**API naming** (DECISION.md, "API naming (session 5)"; pinned by `d/04_api_naming`). A prefix means model-specific (`rbac_*`, `fga_*`); no prefix means shared by both models (`current_subject_id`, `current_subject_type`, `delete_subject`); a leading `_` is internal. Parameters have one vocabulary across both models (`role`, `permission`, `scope`, `user_id`, `subject`, `object`, `relation`, `type`, `model_id`, `context`, ...), no `p_` prefix, and no name that needs quoting in named notation, so every call can be written `f(name => value)`; the usage pages do. `user` is a reserved word in SQL, so OpenFGA's `user` field is the parameter `subject` (the JSON tuple keys keep `"user"`). Bodies whose parameters share a name with a column qualify the parameter with the function's name (`rbac_has_role.role`) and the column with its table alias; PL/pgSQL's default `variable_conflict = error` turns any clash that slips through into an error rather than a wrong answer, and the two SQL-language functions (`rbac_user_permissions`, `rbac_users_with_role`), where a column would silently win, qualify every reference.
 
 ## 4. OpenFGA API
 
-Strings use OpenFGA's forms: objects `type:id`, users `type:id`, `type:*` or `type:id#relation`. Tuple keys are OpenFGA's JSON `{"user", "relation", "object"}`. Every function takes an optional `authorization_model_id`; without it the latest model is used.
+Strings use OpenFGA's forms: objects `type:id`, users `type:id`, `type:*` or `type:id#relation`. The parameter for OpenFGA's user is `subject` (`user` is reserved in SQL). Tuple keys are OpenFGA's JSON `{"user", "relation", "object"}`. Every function takes an optional `model_id` (OpenFGA's `authorization_model_id`); without it the latest model is used.
 
 | OpenFGA endpoint | SQL | Notes |
 | --- | --- | --- |
 | WriteAuthorizationModel | `fga_write_authorization_model(model jsonb) returns text` | The body of the request: `{schema_version: "1.1", type_definitions, conditions}` as `fga model transform --output-format json` prints it. Returns the new ULID; it becomes the latest. |
-| ReadAuthorizationModel(s) | `fga_read_authorization_model(id default null) returns jsonb`, `fga_read_authorization_models() returns table(id, created_at)` | |
-| Write | `fga_write(writes jsonb, deletes jsonb, authorization_model_id)` | Each side an array of tuple keys, or `{"tuple_keys": [...], "on_duplicate": "ignore"}` / `{"tuple_keys": [...], "on_missing": "ignore"}`. One transaction. At most 100 tuple keys, writes and deletes together (Limits below). A written key may carry `"condition": {"name", "context"}`, validated against the model (2000); deletes ignore it; a key that exists with another condition is 2017, with `on_duplicate: ignore` too (OpenFGA: HTTP 409). |
-| (convenience) | `fga_write_tuple(user, relation, object)`, `fga_delete_tuple(user, relation, object)` | Idempotent: `on_duplicate`/`on_missing` ignore. Typed (phase 5 of session 5): a key an unconditioned type restriction allows is written without building JSON for `fga_write` (one lookup, `_fga_write_key_ok`); anything else goes through `fga_write`, so the errors are its own (`d/42_fga_write_paths`). `fga_write` itself accepts a key without a condition with that lookup instead of six. |
-| Read | `fga_read(p_object, p_relation, p_user, p_page_size int, p_continuation_token text) returns (tuples jsonb, continuation_token text)` | One page, OpenFGA's ReadResponse as one row: `tuples` is `[{"key": {"user", "relation", "object"[, "condition": {"name", "context"}]}, "timestamp"}, ...]` in insertion order, `continuation_token` is `''` on the last page. `p_object` may be `type:` for every object of a type. |
-| Check | `fga_check(user, relation, object, contextual_tuples jsonb, authorization_model_id, context jsonb) returns boolean` | `context`: OpenFGA's request context, the condition parameters as a JSON object (last, so positional calls without it keep working). |
-| ListObjects | `fga_list_objects(user, type, relation, contextual_tuples, authorization_model_id, context) returns setof text` | `type:id` strings, unordered, at most 1,000. |
-| ListUsers | `fga_list_users(object, relation, user_filters text[], contextual_tuples, authorization_model_id, context) returns setof text` | Filters `'user'` or `'group#member'`. Returns `type:id`, `type:*`, `type:id#relation`, at most 1,000. |
+| ReadAuthorizationModel(s) | `fga_read_authorization_model(model_id default null) returns jsonb`, `fga_read_authorization_models() returns table(id, created_at)` | |
+| Write | `fga_write(writes jsonb, deletes jsonb, model_id)` | Each side an array of tuple keys, or `{"tuple_keys": [...], "on_duplicate": "ignore"}` / `{"tuple_keys": [...], "on_missing": "ignore"}`. One transaction. At most 100 tuple keys, writes and deletes together (Limits below). A written key may carry `"condition": {"name", "context"}`, validated against the model (2000); deletes ignore it; a key that exists with another condition is 2017, with `on_duplicate: ignore` too (OpenFGA: HTTP 409). |
+| (convenience) | `fga_write_tuple(subject, relation, object)`, `fga_delete_tuple(subject, relation, object)` | Idempotent: `on_duplicate`/`on_missing` ignore. Typed (phase 5 of session 5): a key an unconditioned type restriction allows is written without building JSON for `fga_write` (one lookup, `_fga_write_key_ok`); anything else goes through `fga_write`, so the errors are its own (`d/42_fga_write_paths`). `fga_write` itself accepts a key without a condition with that lookup instead of six. |
+| Read | `fga_read(object, relation, subject, page_size int, continuation_token text) returns (tuples jsonb, continuation_token text)` | One page, OpenFGA's ReadResponse as one row: `tuples` is `[{"key": {"user", "relation", "object"[, "condition": {"name", "context"}]}, "timestamp"}, ...]` in insertion order, `continuation_token` is `''` on the last page. `object` may be `type:` for every object of a type. `continuation_token` is an `inout` parameter: the input and the output column share OpenFGA's name, and PL/pgSQL allows one variable per name, so the signature lists it after `out tuples`; positional order and output columns are as written here. |
+| Check | `fga_check(subject, relation, object, contextual_tuples jsonb, model_id, context jsonb) returns boolean` | `context`: OpenFGA's request context, the condition parameters as a JSON object (last, so positional calls without it keep working). |
+| ListObjects | `fga_list_objects(subject, type, relation, contextual_tuples, model_id, context) returns setof text` | `type:id` strings, unordered, at most 1,000. |
+| ListUsers | `fga_list_users(object, relation, user_filters text[], contextual_tuples, model_id, context) returns setof text` | Filters `'user'` or `'group#member'`. Returns `type:id`, `type:*`, `type:id#relation`, at most 1,000. |
 | DeleteStore | `fga_delete_store()` | Every model and tuple of the one store. |
 | (current subject) | `fga_check_current(relation, object)`, `fga_list_objects_current(type, relation)`, `fga_list_object_ids_current(type, relation)` | Clients and RLS. The user is `current_subject_type():current_subject_id()`. The lists are uncapped. |
 
@@ -82,10 +84,10 @@ The API functions follow OpenFGA v1.22.1's default limits and what it does when 
 | ListUsers results | at most 1,000 unique users, dropped silently (`config.go:31`, `commands/listusers/list_users_rpc.go:245-257`) | the same: `fga_list_users` returns at most 1,000. |
 | ListObjects and ListUsers deadline | 3 s, after which the results so far are returned and the error swallowed (`list_objects.go:645-646`, `list_users_rpc.go:286-289`) | none (deviation 4): set `statement_timeout`, which raises instead of returning a partial list. |
 | Write size | at most 100 tuple keys, writes and deletes together (`config.go:19`), counted after the duplicate check (2004): over it is 2053 `exceeded_entity_limit`, `The number of write operations exceeds the allowed limit of 100` (`commands/write.go:195-212`). A `writes` or `deletes` given with no tuple keys is 2000 (proto `min_items: 1`). | the same codes and order. The message adds the count: `... allowed limit of 100: got 101 tuple keys (101 writes, 0 deletes)`; the hint says to split into batches of at most 100, which can share one transaction. An empty array (or `{"tuple_keys": []}`) given for either side is 2000; neither given is 2003. |
-| Read page size | 50 when absent (`pkg/storage/storage.go:29`), else 1 to 100 or 2000 (`openfga/v1/openfga_service.proto:1174-1180`) | the same: `p_page_size` null is 50, outside 1..100 is 2000. |
+| Read page size | 50 when absent (`pkg/storage/storage.go:29`), else 1 to 100 or 2000 (`openfga/v1/openfga_service.proto:1174-1180`) | the same: `page_size` null is 50, outside 1..100 is 2000. |
 | Read continuation token | base64url (padded) of `<ulid>\|`, the ULID of the first tuple of the next page, found by reading `page_size + 1` (`token_serializer.go:25-35`, `read.go:118`); `''` on the last page, also when it is exactly full. Proto: at most 5,120 bytes and `^$\|^[A-Za-z0-9-_]+={0,2}$`, else 2000. Matching that but not decoding to the shape is 2007 `invalid_continuation_token` (`read.go:79-88`). A well-formed token for a ULID that doesn't exist seeks past it. Pages are in ULID order (insertion order). | the same, with `fga_tuples.seq` for the ULID: the token is base64url of `<seq>\|`, pages are in `seq` order, the next page starts at `seq >= token`. Treat the token as opaque. |
 
-Read's return shape changed in phase 2 of session 5, an API break: it was `table(object, relation, user, inserted_at)`, every match unpaginated. It is now one row of `(tuples jsonb, continuation_token text)`, mirroring OpenFGA's ReadResponse; a tuple's `key` is the tuple key `fga_write` takes, so a page can be fed back as deletes. For rows: `select t #>> '{key,object}' from permissions.fga_read('document:1') r, jsonb_array_elements(r.tuples) t`.
+Read's return shape changed in phase 2 of session 5, an API break: it was `table(object, relation, user, inserted_at)`, every match unpaginated. It is now one row of `(tuples jsonb, continuation_token text)`, mirroring OpenFGA's ReadResponse; a tuple's `key` is the tuple key `fga_write` takes, so a page can be fed back as deletes. For rows: `select t #>> '{key,object}' from permissions.fga_read(object => 'document:1') r, jsonb_array_elements(r.tuples) t`.
 
 `seq` is assigned at insert, so a transaction that commits after a reader has paged past its `seq` is missed by that walk. OpenFGA's ULID, assigned at write time, has the same property.
 
@@ -115,22 +117,22 @@ A relation is **monotone** when neither it nor anything it depends on (computed 
 ```sql
 -- permissive: OR
 create policy documents_select_rbac on documents for select to authenticated
-    using (org_id = any (array(select unnest(permissions.scopes_with_permission('documents.read'))::uuid)));
+    using (org_id = any (array(select unnest(permissions.rbac_scopes_with_permission(permission => 'documents.read'))::uuid)));
 create policy documents_select_fga on documents for select to authenticated
-    using (id = any (array(select permissions.fga_list_object_ids_current('document', 'viewer')::uuid)));
+    using (id = any (array(select permissions.fga_list_object_ids_current(type => 'document', relation => 'viewer')::uuid)));
 -- restrictive: AND
 create policy documents_not_banned on documents as restrictive for select to authenticated
-    using (org_id <> all (array(select permissions.fga_list_object_ids_current('org', 'banned')::uuid)));
+    using (org_id <> all (array(select permissions.fga_list_object_ids_current(type => 'org', relation => 'banned')::uuid)));
 -- per-row checks for single-row writes
 create policy documents_update_rbac on documents for update to authenticated
-    using (permissions.has_permission('documents.edit', org_id::text));
+    using (permissions.rbac_has_permission(permission => 'documents.edit', scope => org_id::text));
 create policy documents_update_fga on documents for update to authenticated
-    using (permissions.fga_check_current('editor', 'document:' || id));
+    using (permissions.fga_check_current(relation => 'editor', object => 'document:' || id));
 ```
 
 Each list policy is one InitPlan per query. The spec checks the exact rows five users see: RBAC only, FGA only, both, an RBAC role overridden by an FGA ban, and nothing.
 
-**The FGA list functions return `setof text`, not `text[]`, and need no `_unfolded_null()` argument.** PLAN §4's plan-time problem comes from `unnest(f())`: to estimate the unnest's row count the planner evaluates a STABLE `f` with constant arguments. A set-returning function is never evaluated at plan time; its estimate comes from `rows` (100 here). `test/spec/d/41_no_plan_time_eval.sql` pins it with the call-count probe of `22_no_plan_time_eval`: EXPLAIN doesn't run `fga_list_object_ids_current`, and a query runs it once. The RLS form is `id = any (array(select f(...)::uuid))`. `scopes_with_permission` keeps its `text[]` form and dummy argument because the shared specs pin both.
+**The FGA list functions return `setof text`, not `text[]`, and need no `_unfolded_null()` argument.** PLAN §4's plan-time problem comes from `unnest(f())`: to estimate the unnest's row count the planner evaluates a STABLE `f` with constant arguments. A set-returning function is never evaluated at plan time; its estimate comes from `rows` (100 here). `test/spec/d/41_no_plan_time_eval.sql` pins it with the call-count probe of `22_no_plan_time_eval`: EXPLAIN doesn't run `fga_list_object_ids_current`, and a query runs it once. The RLS form is `id = any (array(select f(...)::uuid))`. `rbac_scopes_with_permission` keeps its `text[]` form and its ignored trailing argument, `plan_time_guard` (`d/22_no_plan_time_eval` pins both, as the shared spec does for the prototypes).
 
 ## 7. Errors
 
@@ -152,7 +154,7 @@ Invalid input raises where OpenFGA returns an error, with OpenFGA's numeric code
 | `22023` | `openfga:2056 invalid_authorization_model` | model: a condition that doesn't compile (syntax, an undeclared name, no matching overload, not a bool, an unknown parameter type or a missing generic, a key that differs from the name), a restriction naming an undefined condition, and what pg_permissions' CEL leaves out (bytes, `type()`, `dyn()`) |
 | `22023` | `openfga:2000 validation_error` | model: a condition name, expression size (512 bytes) or parameter count (25) outside the request's limits, an inline `$expression` condition; Write: a tuple's condition undefined, not allowed for its facet, missing where only conditioned restrictions exist, or a context key or value that doesn't fit; Check, ListObjects, ListUsers: a `context` that is not a JSON object, a condition that can't be evaluated (missing parameter, wrong type, evaluation error, cost limit) |
 
-The `rbac_*` functions raise with no DETAIL: `23505` a role that exists, `22023` an unknown role or a role name that is also a permission, `2BP01` dropping a role another role inherits, `22004` `assign_role` with a null user.
+The `rbac_*` functions raise with no DETAIL: `23505` a role that exists, `22023` an unknown role or a role name that is also a permission, `2BP01` dropping a role another role inherits, `22004` `rbac_assign_role` with a null user.
 
 The SQLSTATE says what kind of failure it is to any Postgres client; the DETAIL is the machine-checkable OpenFGA code (PostgREST returns it as `details`). The order of validation follows OpenFGA's, so the same request gets the same code: Check validates user, object, relation, then contextual tuples; ListObjects contextual tuples, then type and relation, then user; ListUsers contextual tuples, filters, then the target; Write the options, the lists, the model, each tuple, duplicates, then the size.
 
@@ -163,7 +165,7 @@ The SQLSTATE says what kind of failure it is to any Postgres client; the DETAIL 
 | an unknown type, relation or role | the nearest existing name, if one is within a third of the input's length (1 to 3 edits), then the list (at most 20): `Did you mean 'viewer'? Relations on type 'document': editor, parent, viewer.` |
 | a tuple whose user type the relation doesn't allow (2027) | the allowed user types: `'document#editor' allows users of type: user.` |
 | an unknown model id (2001) | the valid ids, newest first (at most 10) |
-| no model yet (2020), no roles yet | the call to make first: `fga_write_authorization_model(...)`, `create_role(...)` |
+| no model yet (2020), no roles yet | the call to make first: `fga_write_authorization_model(model => ...)`, `rbac_create_role(role => ..., permissions => ...)` |
 | 2017, 2053, 2003, Read's token and page size | the option or call that fixes it: `on_duplicate`/`on_missing` `ignore`, batches of at most 100, the default page size, pass the token back unchanged |
 | a malformed user, object or tuple key | the expected form, with an example |
 
@@ -188,7 +190,7 @@ Simplifications that could differ from OpenFGA in corner cases, none of them hit
 8. **Model validation follows OpenFGA v1.22.1's `typesystem.NewAndValidate`** (since phase 3 of session 5), with the server's error codes (section 7): names and duplicate types, unknown types and relations in rewrites and restrictions, tupleset relations (direct, plain types only, the computed relation defined on at least one of them), `this` iff type restrictions, every relation has an entrypoint (`hasEntrypoints`, computed here as a least fixpoint over the rewrite nodes: `this` needs a plain type, a wildcard or a userset whose relation has one; a union needs one child, an intersection and a difference every child), and no cycle of computed relations on a type, through any operator, even when each has a type restriction (`HasCycle`). openfga/language's validation cases are the oracle (section 9). Known differences, none of which the DSL transformer produces: a union or intersection with one child (OpenFGA rejects it when its entrypoint search reaches that node; D accepts it), a type restriction with an empty relation (`{"type": "user", "relation": ""}`: OpenFGA 2056, D reads it as `user`), an empty `type_definitions` (OpenFGA 2045 `type_definitions_too_few_items`, D 2056), and OpenFGA's model size and type-count limits (deviation 4). Before phase 3 a type defined twice was 2005 and a schema version other than 1.1 was 2057; OpenFGA's WriteAuthorizationModel returns neither (`pkg/server/commands/write_authzmodel.go:84-86` maps every validation error to 2056).
 9. **Depth on false answers**: a Check on a monotone relation that is false is false, even where OpenFGA's top-down search would have hit depth 25 on some irrelevant branch and returned 2002. This now includes a monotone relation under a subtract. When the true answer needs 25 levels or more the result matches (2002). In `_fga_bidi` the depth of the first meeting point is used; a shorter path found later would not change a 2002 back to true.
 10. **Malformed delete keys** raise 2000 for any field (OpenFGA checks only the user's format). Until phase 2 of session 5 a malformed user or object in a delete gave 2017 instead (the check counted the rows of a function that always returns one); `d/35_error_hints` found it.
-13. **Read's filter** is any combination of `p_object` (`type:id` or `type:`), `p_relation` and `p_user`, or none. OpenFGA requires the object type and either the object id or the user when a tuple key is given (2000 otherwise).
+13. **Read's filter** is any combination of `object` (`type:id` or `type:`), `relation` and `subject`, or none. OpenFGA requires the object type and either the object id or the user when a tuple key is given (2000 otherwise).
 11. Not implemented: Expand, BatchCheck, StreamedListObjects, ReadChanges, assertions, the modular-model (`fga.mod`) format and its schema version 1.2 (2057).
 12. **A cycle inside a monotone subtract** contributes nobody (least fixpoint), in Check, ListObjects and ListUsers alike. OpenFGA v1.22.1 answers true in Check and ListObjects when its recursive resolver applies, false when an unused path in the model rules that resolver out, and nothing in ListUsers. Recursion through negation keeps OpenFGA's cycle rule. Section 5.
 

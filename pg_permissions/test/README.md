@@ -1,6 +1,6 @@
 # pg_permissions test suite
 
-Tests are the spec. Each file in `spec/` is one goal from [`../GOALS.md`](../GOALS.md), written against the public API in [`../PLAN.md`](../PLAN.md), not against any one engine. The same files run against the extension or any prototype. Files in `spec/<design>/` use that design's native API: `a/`, `b/` and `c/` cover the Zanzibar-level goals, one copy of the same scenario per prototype with the same assertions, and `d/` is the extension's own spec directory (the extension is design D).
+Tests are the spec. Each file in `spec/` is one goal from [`../GOALS.md`](../GOALS.md), written against the `rbac` preset API in [`../PLAN.md`](../PLAN.md) §6 that the prototypes share (unprefixed `create_role`, `has_permission`, ...); they run against every prototype. Files in `spec/<design>/` use that design's native API: `a/`, `b/` and `c/` cover the Zanzibar-level goals, one copy of the same scenario per prototype with the same assertions, and `d/` is the extension's own spec directory (the extension is design D). The extension renamed the preset (`rbac_create_role`, `rbac_has_permission`, ...; [`../DECISION.md`](../DECISION.md), "API naming (session 5)"), so `d/` holds its own copies of the shared files, with the same names and assertions and the new function names, and the runner skips `spec/*.sql` for design `d`. `d/04_api_naming` pins the naming rules.
 
 No dependencies beyond Postgres binaries (`initdb`, `pg_ctl`, `psql`; `pgbench` for benchmarks). Postgres.app is detected automatically; otherwise set `PGBIN`.
 
@@ -18,7 +18,7 @@ From `pg_permissions/`:
 
 Or from the repo root: `make test.pg_permissions` (and `IMPL=prototypes/a-tuple-core.sql make test.pg_permissions` for a prototype).
 
-`--design` picks which `spec/<design>/` directory runs on top of the shared files. By default it comes from the `--impl` file name: the letter before the first dash (`a-tuple-core.sql` is `a`, `b-policy-first.sql` is `b`, `c-compiled-model.sql` is `c`), and it is `d` for the extension file (`pg_permissions--*.sql`). Anything else is `none`, which runs only the shared files. Files from both directories are sorted by file name, the name filter applies to both, and design files are listed with their directory (`a/30_zanzibar_reference`).
+`--design` picks which `spec/<design>/` directory runs: on top of the shared files for `a`, `b`, `c` and `none`, instead of them for `d`. By default it comes from the `--impl` file name: the letter before the first dash (`a-tuple-core.sql` is `a`, `b-policy-first.sql` is `b`, `c-compiled-model.sql` is `c`), and it is `d` for the extension file (`pg_permissions--*.sql`). Anything else is `none`, which runs only the shared files. Files from both directories are sorted by file name, the name filter applies to both, and design files are listed with their directory (`a/30_zanzibar_reference`).
 
 By default the runner starts a throwaway Postgres in a temp directory. It listens on a Unix socket only, so it never conflicts with a server you have running, and it's deleted when the run ends. Each spec file gets a fresh database cloned from a template with the implementation installed. To use an existing server instead, pass `--external` and set `PGHOST`, `PGPORT`, `PGUSER` (the user must be able to create databases and roles).
 
@@ -34,9 +34,11 @@ test/
   lib/tap.sql        assertions (pgTAP-compatible names), installed in schema `tap`
   lib/cluster.sh     throwaway cluster helpers, shared with bench/run.sh
   fixtures/ids.sql   fixed UUIDs for the PLAN.md scenarios (psql variables :alice, :acme, ...)
-  fixtures/rbac_roles.sql  the viewer/editor/admin roles from PLAN.md §6
-  spec/              engine-independent files, one per goal
-  spec/a/ b/ c/ d/   per-design files: same scenarios, each design's native API (d/ is the extension)
+  fixtures/rbac_roles.sql  the viewer/editor/admin roles from PLAN.md §6 (the prototypes' API)
+  fixtures/d/rbac_roles.sql  the same roles through the extension's rbac_create_role
+  spec/              shared files, one per goal, in the prototypes' rbac API (not run for d)
+  spec/a/ b/ c/ d/   per-design files: same scenarios, each design's native API (d/ is the extension,
+                     with its own copies of the shared files)
   fga/               OpenFGA's consolidated suite: vendor.sh, generate.py -> spec/d/6[01]_fga_oracle_*
   fga_lang/          openfga/language's model validation cases: vendor.sh, generate.py -> spec/d/62_fga_lang_oracle
   fga_abac/          OpenFGA's ABAC (conditions) suite: vendor.sh, generate.py --suite -> spec/d/6[34]_fga_abac_*
@@ -45,9 +47,9 @@ test/
 
 | Prefix | Area | Where |
 | --- | --- | --- |
-| `0x_` | Identity, security, install | `spec/` (shared) |
-| `1x_` | `rbac` preset | `spec/` (shared) |
-| `2x_` | RLS | `spec/` (shared) |
+| `0x_` | Identity, security, install, API naming (`d/04`) | `spec/` (shared) and `spec/d/` |
+| `1x_` | `rbac` preset | `spec/` (shared) and `spec/d/` |
+| `2x_` | RLS | `spec/` (shared) and `spec/d/` |
 | `3x_`, `4x_`, `5x_` | Zanzibar-level API, graduation, v0.0.2 scenarios (PLAN.md §10) | `spec/<design>/` (per design) |
 
 ## Writing a test
@@ -56,21 +58,23 @@ A spec file is a psql script. Set up data as the superuser, declare a plan, asse
 
 ```sql
 -- Goal: one line saying what this file proves (PLAN.md §n)
-\ir ../fixtures/ids.sql
-\ir ../fixtures/rbac_roles.sql
-select permissions.assign_role(:'bob', 'editor');
+\ir ../../fixtures/ids.sql
+\ir ../../fixtures/d/rbac_roles.sql
+select permissions.rbac_assign_role(user_id => :'bob', role => 'editor');
 
 select tap.plan(2);
 
 select set_config('permissions.subject_id', :'bob', false);
-select tap.is(permissions.has_permission('documents.edit'), true, 'editors can edit');
+select tap.is(permissions.rbac_has_permission(permission => 'documents.edit'), true, 'editors can edit');
 
 set role authenticated;           -- test as a client
-select tap.throws_ok($$ select permissions.assign_role('x', 'admin') $$, '42501', 'clients cannot assign roles');
+select tap.throws_ok($$ select permissions.rbac_assign_role(user_id => 'x', role => 'admin') $$, '42501', 'clients cannot assign roles');
 reset role;
 
 select * from tap.finish();
 ```
+
+(That is a file in `spec/d/`; a shared file for the prototypes uses `\ir ../fixtures/...` and the unprefixed names.)
 
 Assertions (all in schema `tap`, same names as pgTAP):
 
@@ -85,7 +89,7 @@ Assertions (all in schema `tap`, same names as pgTAP):
 | `pass(desc)` / `fail(desc)` | always / never |
 | `finish()` | Prints a diagnostic if the plan and the count differ. |
 
-Rules that keep shared tests engine-independent (per-design files in `spec/<design>/` use `\ir ../../fixtures/...` and their design's own API):
+Rules that keep shared tests engine-independent (per-design files in `spec/<design>/` use `\ir ../../fixtures/...` and their design's own API; the extension's copies of the shared files follow the same rules):
 
 - Use only the public API from PLAN.md. Don't touch tables in the `permissions` schema; check privileges through the catalog instead (see `02_security.sql`).
 - Use the fixture UUIDs as untyped literals (`:'alice'`), so they work with `text` and `uuid` implementations.
@@ -124,7 +128,7 @@ A run has five phases. Each loads a seed, times it, runs `VACUUM FULL ANALYZE` o
 
 | Phase | Seed | Workloads |
 | --- | --- | --- |
-| rbac | `seed_rbac.sql`: tenant-scoped roles through the preset API (any engine) | `rbac_*`, `write_assign_role` |
+| rbac | `seed_rbac.sql`: tenant-scoped roles through the prototypes' preset API, or `designs/<design>/seed_rbac.sql` when the design has one (d: the same statements with the `rbac_` names) | `rbac_*`, `write_assign_role` |
 | sharing | `designs/<design>/seed_sharing.sql`: per-document sharing with nested teams, native API | `share_list_objects`, `share_select_page`, `write_share` |
 | parents_proj | `designs/<design>/seed_parents.sql`: about 10 folders per org, org roles inherited by folders, every 5th user a folder viewer. Documents point at folders only through the app column `documents.folder_id`. Two-arm projection policy: `id = any(<documents shared with me>) or folder_id = any(<folders I can view>)` | `parents_proj_select_page`, `parents_proj_select_count` |
 | parents | `designs/<design>/seed_parent_docs.sql`: a parent link per document in the engine's tables. Single-branch policy: one engine call returns every visible document id | `parents_select_page`, `parents_select_count` |
@@ -132,7 +136,7 @@ A run has five phases. Each loads a seed, times it, runs `VACUUM FULL ANALYZE` o
 
 Both parents policies have no `org_id` branch, and they see the same documents. The projection shape measures the engine on a few folder ids; the single-branch shape measures it on every visible document, and the per-document link it needs is counted in the parents seed time and storage.
 
-The design is inferred from the `--impl` file name like in `test/run.sh`, or set with `--design a|b|c|d|none` (the extension file is design `d`). Phases 2 to 5 are skipped when the design has no files for them. Workloads in `bench/workloads/` are shared; the rest are in the design's `workloads/`. Each runs with pgbench as `authenticated` under RLS. Writes roll back, so a faster engine doesn't end up with more rows in later phases.
+The design is inferred from the `--impl` file name like in `test/run.sh`, or set with `--design a|b|c|d|none` (the extension file is design `d`). Phases 2 to 5 are skipped when the design has no files for them. Workloads in `bench/workloads/` are shared, and a file of the same name in the design's `workloads/` replaces one (d has its own `rbac_check` and `write_assign_role`, with the `rbac_` names); the rest are in the design's `workloads/`. Each runs with pgbench as `authenticated` under RLS. Writes roll back, so a faster engine doesn't end up with more rows in later phases.
 
 **Same data for every engine.** `bench/seed_shape.sql` generates the teams, memberships, shares, folders and folder viewers as integer tables in schema `bench`. Each design's seed reads them and writes the same facts through its own API. `--shape` changes them: `default` (one team per user, 5 shares per team, 4-ary team tree), `deep` (teams in chains 9 deep, users in the leaf teams, so `write_nest_team` reaches depth 10, the most B and C accept), `wide` (4x the teams, each user in 50, 50 shares per team).
 

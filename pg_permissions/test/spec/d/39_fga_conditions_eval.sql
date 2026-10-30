@@ -205,6 +205,6 @@ select permissions.fga_write_authorization_model(jsonb_set(permissions.fga_read_
                                                            '{conditions,cx}', '{"name": "cx", "expression": "y < 100", "parameters": {"y": {"type_name": "TYPE_NAME_INT"}}}'));
 select tap.is(permissions.fga_check('user:sam', 'viewer', 'doc:s', context => '{"y": 1}'), false,
               'a stored context key that is no longer a parameter: ignored (P30)');
-select tap.is(permissions.fga_check('user:sam', 'viewer', 'doc:s', authorization_model_id => :'m'), true, 'the first model still answers true');
+select tap.is(permissions.fga_check('user:sam', 'viewer', 'doc:s', model_id => :'m'), true, 'the first model still answers true');
 
 select * from tap.finish();
