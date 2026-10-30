@@ -920,3 +920,36 @@ Orchestrator choices: fixed constant caps (OpenFGA makes them configurable; here
   - A condition with no parameters and any non-empty context is an error.
 - **API change:** `fga_check`, `fga_list_objects` and `fga_list_users` take `context jsonb` as their sixth parameter.
 - **Left for phase 5:** inside the recursive CTE term, conditions are evaluated per row, not once per distinct context, because a recursive term can't aggregate.
+
+### 7. Phase 5: performance pass 2 (commits 0bd650b, 482aab4, 01b9fc2, 8fe8fcf)
+
+- **Method:**
+  - PG 18 in Docker, each configuration run as a back-to-back pair: `opt3-before` (re-measured on HEAD, not opt2) then `opt3`.
+  - Both builds are installed from frozen copies of the extension file.
+  - Phase 2's `seq` column had already moved large storage from 285 to 323.5 MB.
+  - Same-day A/B/C reruns came out 3–24% slower than their session 3 numbers: the machine drifts, so only paired runs are compared.
+- **Check:** a partial index on userset tuples and skipping the meet test. `nest_check` 0.41→0.39 ms large, 0.47→0.40 wide; in-server 229→178 µs. The idea carried over from opt2, folding the user probe into the step, made it slower (229→390 µs) and was reverted.
+- **Writes:** a typed path without the JSON round trip. `write_share` and `write_nest_team` 0.25→0.16 ms; the large parents seed 33.1→15.3 s.
+- **Non-monotone ListObjects:** a set-based evaluator over the rewrite tree. Wide `but not (blocked or muted)` 5,246→7.6 ms, wide `editor and viewer` 621→6.1 ms.
+- **Rejected with numbers:**
+  - Dropping one tuplestore saves ≤0.3 ms.
+  - `distinct` instead of the min-level `group by` is invisible through pgbench.
+  - Cyclic userset data is 3.3x slower on a 2-cycle at every inner team, and no exact alternative was found.
+- **Conditions:**
+  - The flagged suspect (per-row evaluation in the recursive term) was real but small: 205→2 evaluations per wide ListObjects.
+  - The big win was a quadratic correlated `IS NOT DISTINCT FROM` match in the leaves and steps: in-server ListObjects with one context per tuple 3,203→167 ms, ListUsers 29–37 s→0.6–1.0 s.
+  - Through pgbench, wide conditioned ListObjects costs 10.6 ms against 5.0 for its plain twin.
+- **Covering index (`include (object_id, condition_name)`): measured, left for the user.**
+  - It costs +120 MB at large (323.7→444.1) and gives no gain through pgbench (4.90 vs 4.85 ms), -7% in-server.
+  - It flips a plan that turns large `plain_list_users` from 0.35 to 12.95 ms.
+  - Recommendation: don't adopt.
+- **Mishaps:**
+  - The first "before" batch was contaminated by editing the extension file mid-run: a wide intersection showed 8.6 ms against a true 630. Every run since uses a frozen copy.
+  - A cold cache after a server restart looked like a 2x regression.
+  - A noisy run an hour before its pair showed fake regressions, hence the paired runs.
+- **Safety:**
+  - Checksums are identical to A, B and C in every run.
+  - All 15 mutants are caught; 4 survived at first, and specs were added to catch them.
+  - 55 spec files and 3,604 assertions on PG 16, 17 and 18.
+  - The oracles are unchanged: consolidated suite 933/746, ABAC 302/271, fga_lang 70/70.
+  - Budgets are unchanged; the only miss is the large `parents_proj_select_count` (9.35 > 9 ms), which every engine shares.
