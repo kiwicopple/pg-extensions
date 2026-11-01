@@ -140,4 +140,26 @@ describe('umbrella: createServerClient + createClient', () => {
     expect(ok(await browser('bob').fga.check({ relation: 'viewer', object: 'document:2' }))).toBe(true)
     expect(ok(await server.as({ id: 'bob' }).rbac.hasRole({ role: 'viewer', scope: 'acme' }))).toBe(true)
   })
+
+  it('currentSubjectId and currentSubjectType: the browser client, per token', async () => {
+    const alice = browser('alice')
+    expect(ok(await alice.currentSubjectId())).toBe('alice')
+    expect(ok(await alice.currentSubjectType())).toBe('user')
+    const anon = createClient<Names>(REST_URL, anonToken(), { restUrl: REST_URL })
+    expect(ok(await anon.currentSubjectId())).toBeNull()
+    expect(ok(await anon.currentSubjectType())).toBe('user')
+  })
+
+  it('currentSubjectId and currentSubjectType: the server client and as()', async () => {
+    expect(ok(await server.currentSubjectId())).toBeNull()
+    expect(ok(await server.currentSubjectType())).toBe('user')
+    for (const role of [undefined, 'authenticated']) {
+      const alice = server.as({ id: 'alice', role })
+      expect(ok(await alice.currentSubjectId())).toBe('alice')
+      expect(ok(await alice.currentSubjectType())).toBe('user')
+      const team = server.as({ id: 'alice', type: 'team', role })
+      expect(ok(await team.currentSubjectId())).toBe('alice')
+      expect(ok(await team.currentSubjectType())).toBe('team')
+    }
+  })
 })

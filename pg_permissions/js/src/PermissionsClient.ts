@@ -8,6 +8,19 @@ import { postgrestTransport } from './transport/postgrest'
 import { sqlTransport } from './transport/sql'
 import type { Queryable, SqlTransport } from './transport/sql'
 
+/** `current_subject_id`: a null from the driver or from PostgREST is `null`. */
+function subjectId(transport: Transport, throwOnError: boolean): Promise<Result<string | null>> {
+  return toResult(
+    transport.rpc<string | null | undefined>('current_subject_id', {}, 'scalar').then((id) => id ?? null),
+    throwOnError,
+  )
+}
+
+/** `current_subject_type`: `'user'` when the subject has no type. */
+function subjectType(transport: Transport, throwOnError: boolean): Promise<Result<string>> {
+  return toResult(transport.rpc<string>('current_subject_type', {}, 'scalar'), throwOnError)
+}
+
 /**
  * The client of {@link createClient}: the RBAC and FGA checks for the user of
  * the access token, over PostgREST. It has no `admin` namespaces: admin calls
@@ -18,12 +31,43 @@ export class PermissionsClient<N extends RbacNames = RbacNames> {
   readonly rbac: RbacClient<'postgrest', N>
   /** The FGA checks for the current user. */
   readonly fga: FgaClient<'postgrest'>
+  private readonly transport: Transport<'postgrest'>
+  private readonly throwOnError: boolean
 
   /** Use {@link createClient}. */
   constructor(transport: Transport<'postgrest'>, options: { throwOnError?: boolean } = {}) {
     const throwOnError = options.throwOnError ?? false
+    this.transport = transport
+    this.throwOnError = throwOnError
     this.rbac = new RbacClient<N>({ transport, throwOnError })
     this.fga = new FgaClient({ transport, throwOnError })
+  }
+
+  /**
+   * Returns the id of the current subject (`current_subject_id()`): the `sub`
+   * claim of the access token. The data is `null` when there is no subject, for
+   * example with the anon key.
+   *
+   * @example
+   * ```ts
+   * const { data: id } = await permissions.currentSubjectId() // 'alice', or null
+   * ```
+   */
+  currentSubjectId(): Promise<Result<string | null>> {
+    return subjectId(this.transport, this.throwOnError)
+  }
+
+  /**
+   * Returns the type of the current subject (`current_subject_type()`). The
+   * default is `'user'`.
+   *
+   * @example
+   * ```ts
+   * const { data: type } = await permissions.currentSubjectType() // 'user'
+   * ```
+   */
+  currentSubjectType(): Promise<Result<string>> {
+    return subjectType(this.transport, this.throwOnError)
   }
 }
 
@@ -114,6 +158,25 @@ export interface PermissionsSubjectClient<N extends RbacNames = RbacNames> {
   readonly rbac: RbacClient<'subject', N>
   /** The FGA checks for the subject. */
   readonly fga: FgaClient<'subject'>
+  /**
+   * Returns the id of the subject (`current_subject_id()`): `subject.id`.
+   *
+   * @example
+   * ```ts
+   * const { data: id } = await permissions.as({ id: 'alice' }).currentSubjectId() // 'alice'
+   * ```
+   */
+  currentSubjectId(): Promise<Result<string | null>>
+  /**
+   * Returns the type of the subject (`current_subject_type()`): `subject.type`,
+   * or `'user'`.
+   *
+   * @example
+   * ```ts
+   * const { data: type } = await permissions.as({ id: 'eng', type: 'team' }).currentSubjectType() // 'team'
+   * ```
+   */
+  currentSubjectType(): Promise<Result<string>>
 }
 
 /**
@@ -150,6 +213,34 @@ export class PermissionsServerClient<N extends RbacNames = RbacNames> {
   }
 
   /**
+   * Returns the id of the subject of the database connection
+   * (`current_subject_id()`). The data is `null` when the connection has no
+   * subject, which is the usual case: use {@link PermissionsServerClient.as}
+   * to set one.
+   *
+   * @example
+   * ```ts
+   * const { data: id } = await permissions.currentSubjectId() // null
+   * ```
+   */
+  currentSubjectId(): Promise<Result<string | null>> {
+    return subjectId(this.transport, this.throwOnError)
+  }
+
+  /**
+   * Returns the type of the subject of the database connection
+   * (`current_subject_type()`). The default is `'user'`.
+   *
+   * @example
+   * ```ts
+   * const { data: type } = await permissions.currentSubjectType() // 'user'
+   * ```
+   */
+  currentSubjectType(): Promise<Result<string>> {
+    return subjectType(this.transport, this.throwOnError)
+  }
+
+  /**
    * Returns clients that answer for `subject`. Each call runs in its own
    * transaction with `permissions.subject_id` set to `subject.id` (and
    * `set local role <subject.role>` when `role` is set). The clients have only
@@ -169,6 +260,8 @@ export class PermissionsServerClient<N extends RbacNames = RbacNames> {
     return {
       rbac: new RbacClient<N>({ transport, throwOnError: this.throwOnError }),
       fga: new FgaClient({ transport, throwOnError: this.throwOnError }),
+      currentSubjectId: () => subjectId(transport, this.throwOnError),
+      currentSubjectType: () => subjectType(transport, this.throwOnError),
     }
   }
 }

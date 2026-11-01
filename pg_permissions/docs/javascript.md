@@ -47,7 +47,22 @@ const permissions = createClient('https://your-project.supabase.co', 'your-anon-
 const { data: canEdit } = await permissions.rbac.hasPermission({ permission: 'documents.edit', scope: 'acme' })
 ```
 
-Before you use `createClient`, add `permissions` to **Exposed schemas** in the Supabase API settings. For plain PostgREST, add `permissions` to `db-schemas`, and pass the option `restUrl`.
+Before you use `createClient`, add `permissions` to **Exposed schemas** in the Supabase API settings.
+
+For plain PostgREST, add `permissions` to `db-schemas`, and pass the option `restUrl`. The client then sends requests to `<restUrl>/rpc/<function>`. It does not add `/rest/v1`.
+
+```ts
+import { createClient } from 'permissions'
+
+const POSTGREST_URL = 'http://localhost:3000'
+const USER_JWT = 'eyJ...'
+
+const permissions = createClient(POSTGREST_URL, USER_JWT, {
+  restUrl: POSTGREST_URL,
+  accessToken: () => USER_JWT,
+})
+const { data } = await permissions.rbac.hasPermission({ permission: 'documents.read' })
+```
 
 ## Methods
 
@@ -57,6 +72,8 @@ Each method returns a `Promise` of `{ data, error }`. The tables show the type o
 
 These methods answer for the current subject. They exist on both entry points. On a server, `as({ id })` sets the subject.
 
+`currentSubjectId()` and `currentSubjectType()` are methods of the client itself. They are not in the `rbac` namespace or the `fga` namespace.
+
 | Method | SQL function | `data` |
 | --- | --- | --- |
 | `rbac.hasPermission({ permission, scope? })` | `rbac_has_permission` | `boolean` |
@@ -65,10 +82,12 @@ These methods answer for the current subject. They exist on both entry points. O
 | `fga.check({ relation, object })` | `fga_check_current` | `boolean` |
 | `fga.listObjects({ type, relation })` | `fga_list_objects_current` | `string[]`, as `type:id` |
 | `fga.listObjects({ type, relation, idsOnly: true })` | `fga_list_object_ids_current` | `string[]`, as `id` |
+| `currentSubjectId()` | `current_subject_id` | `string`, or `null` when there is no subject |
+| `currentSubjectType()` | `current_subject_type` | `string`. The default is `'user'`. |
 
 ### Subject methods
 
-`permissions.as(subject)` returns a client that has `rbac` and `fga` with the client methods only. It has no `admin`.
+`permissions.as(subject)` returns a client that has `rbac` and `fga` with the client methods only. It also has `currentSubjectId()` and `currentSubjectType()`. It has no `admin`.
 
 | Call | What it does |
 | --- | --- |
@@ -82,6 +101,32 @@ const permissions = createServerClient(new pg.Pool({ connectionString: process.e
 
 const alice = permissions.as({ id: 'alice', role: 'authenticated' })
 const { data: canView } = await alice.fga.check({ relation: 'viewer', object: 'document:1' })
+```
+
+To read the subject back, call `currentSubjectId()` and `currentSubjectType()`. `as({ id: 'eng', type: 'team' })` gives `'eng'` and `'team'`. A server client without `as()` has no subject, and `currentSubjectId()` returns `null`.
+
+```ts
+import pg from 'pg'
+import { createServerClient } from 'permissions'
+
+const permissions = createServerClient(new pg.Pool({ connectionString: process.env.DATABASE_URL }))
+
+const team = permissions.as({ id: 'eng', type: 'team' })
+const { data: id } = await team.currentSubjectId() // 'eng'
+const { data: type } = await team.currentSubjectType() // 'team'
+```
+
+On a browser client, the subject is the user of the access token. With the anon key, `currentSubjectId()` returns `null`.
+
+```ts
+import { createClient } from 'permissions'
+
+const permissions = createClient('https://your-project.supabase.co', 'your-anon-key', {
+  accessToken: async () => 'the-jwt-of-the-signed-in-user',
+})
+
+const { data: id } = await permissions.currentSubjectId() // 'alice', or null
+const { data: type } = await permissions.currentSubjectType() // 'user'
 ```
 
 ### Admin methods
@@ -177,6 +222,20 @@ await rbac.admin.assignRole({ userId: 'alice', role: 'editor', scope: 'acme' })
 ```
 
 To catch a wrong name at build time, pass a type argument, for example `createServerClient<{ roles: 'viewer' | 'editor' }>(pool)`.
+
+## Use from a CDN
+
+The package has a UMD bundle for a `<script>` tag. It sets the global `permissions`.
+
+```html
+<script src="https://cdn.jsdelivr.net/npm/permissions@0.2/dist/umd/permissions.js"></script>
+<script>
+  const client = permissions.createClient('https://your-project.supabase.co', 'your-anon-key')
+  client.rbac.hasPermission({ permission: 'documents.read' }).then(({ data, error }) => {
+    console.log(data, error)
+  })
+</script>
+```
 
 ## Compatibility
 

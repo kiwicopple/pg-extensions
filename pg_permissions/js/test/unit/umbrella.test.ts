@@ -253,3 +253,108 @@ describe('createServerClient', () => {
     expect(() => createServerClient({} as never)).toThrow(/query/)
   })
 })
+
+describe('currentSubjectId and currentSubjectType', () => {
+  it('createClient: POST /rpc/current_subject_id and /rpc/current_subject_type, with no arguments', async () => {
+    const { seen, fetch } = recordingFetch(() => new Response('"alice"'))
+    const permissions = createClient('https://p.supabase.co', 'anon', { global: { fetch } })
+    expect(await permissions.currentSubjectId()).toEqual({ data: 'alice', error: null })
+    expect(await permissions.currentSubjectType()).toEqual({ data: 'alice', error: null })
+    expect(seen.map((r) => r.url)).toEqual([
+      'https://p.supabase.co/rest/v1/rpc/current_subject_id',
+      'https://p.supabase.co/rest/v1/rpc/current_subject_type',
+    ])
+    expect(seen.map((r) => r.body)).toEqual([{}, {}])
+    expectTypeOf(permissions.currentSubjectId).returns.resolves.toHaveProperty('data').toEqualTypeOf<string | null>()
+    expectTypeOf(permissions.currentSubjectType).returns.resolves.toHaveProperty('data').toEqualTypeOf<string | null>()
+  })
+
+  it('createClient: a null, an empty body and a type of user', async () => {
+    for (const body of ['null', '']) {
+      const permissions = createClient('https://p', 'k', { global: { fetch: recordingFetch(() => new Response(body)).fetch } })
+      expect(await permissions.currentSubjectId()).toEqual({ data: null, error: null })
+    }
+    const permissions = createClient('https://p', 'k', { global: { fetch: recordingFetch(() => new Response('"user"')).fetch } })
+    expect(await permissions.currentSubjectType()).toEqual({ data: 'user', error: null })
+  })
+
+  it('createClient: returns errors in { data, error }, or throws them with throwOnError', async () => {
+    const body = () => new Response(JSON.stringify({ code: '42501', message: 'denied', details: null, hint: null }), { status: 403 })
+    const soft = createClient('https://p', 'k', { global: { fetch: recordingFetch(body).fetch } })
+    for (const result of [await soft.currentSubjectId(), await soft.currentSubjectType()]) {
+      expect(result.data).toBeNull()
+      expect(result.error).toBeInstanceOf(PermissionsError)
+    }
+    const strict = createClient('https://p', 'k', { global: { fetch: recordingFetch(body).fetch }, throwOnError: true })
+    await expect(strict.currentSubjectId()).rejects.toBeInstanceOf(PermissionsError)
+    await expect(strict.currentSubjectType()).rejects.toBeInstanceOf(PermissionsError)
+  })
+
+  it('createServerClient: select permissions.current_subject_*() as value', async () => {
+    const { log, db } = fakeDb(() => ({ rows: [{ value: null }] }))
+    const permissions = createServerClient(db)
+    expect(await permissions.currentSubjectId()).toEqual({ data: null, error: null })
+    expect(await permissions.currentSubjectType()).toEqual({ data: null, error: null })
+    expect(log).toEqual([
+      { text: 'select "permissions".current_subject_id() as value', values: [] },
+      { text: 'select "permissions".current_subject_type() as value', values: [] },
+    ])
+    expect(await createServerClient(fakeDb(() => ({ rows: [{ value: 'user' }] })).db).currentSubjectType()).toEqual({
+      data: 'user',
+      error: null,
+    })
+    expect(await createServerClient(fakeDb(() => ({ rows: [] })).db).currentSubjectId()).toEqual({ data: null, error: null })
+    expectTypeOf(permissions.currentSubjectId).returns.resolves.toHaveProperty('data').toEqualTypeOf<string | null>()
+  })
+
+  it('createServerClient: uses the schema option, and returns or throws errors', async () => {
+    const { log, db } = fakeDb()
+    await createServerClient(db, { schema: 'perms' }).currentSubjectId()
+    expect(log[0]!.text).toContain('"perms".current_subject_id(')
+    const pgError = Object.assign(new Error('boom'), { code: '57014', severity: 'ERROR' })
+    const failing: Queryable = {
+      query: async () => {
+        throw pgError
+      },
+    }
+    expect((await createServerClient(failing).currentSubjectType()).error?.code).toBe('57014')
+    await expect(createServerClient(failing, { throwOnError: true }).currentSubjectId()).rejects.toBeInstanceOf(PermissionsError)
+    await expect(createServerClient(failing, { throwOnError: true }).currentSubjectType()).rejects.toBeInstanceOf(PermissionsError)
+  })
+
+  it('as(): runs in a transaction with the subject set, and returns the answer', async () => {
+    const { log, db } = fakeDb((text) => (text.includes('as value') ? { rows: [{ value: 'team' }] } : { rows: [] }))
+    const eng = createServerClient(db).as({ id: 'eng', type: 'team', role: 'authenticated' })
+    expect(await eng.currentSubjectType()).toEqual({ data: 'team', error: null })
+    expect(await eng.currentSubjectId()).toEqual({ data: 'team', error: null })
+    expect(log.map((q) => q.text.split('(')[0])).toEqual([
+      'begin',
+      'set local role "authenticated"',
+      'select set_config',
+      'select "permissions".current_subject_type',
+      'commit',
+      'begin',
+      'set local role "authenticated"',
+      'select set_config',
+      'select "permissions".current_subject_id',
+      'commit',
+    ])
+    expect(log[2]!.values).toEqual(['eng', 'team'])
+    expectTypeOf(eng.currentSubjectId).returns.resolves.toHaveProperty('data').toEqualTypeOf<string | null>()
+  })
+
+  it('as(): keeps throwOnError', async () => {
+    const pgError = Object.assign(new Error('boom'), { code: '57014', severity: 'ERROR' })
+    const db: Queryable = {
+      query: async (text: string) => {
+        if (text.includes('current_subject_id')) throw pgError
+        return { rows: [] }
+      },
+    }
+    const soft = createServerClient(db).as({ id: 'a' })
+    expect((await soft.currentSubjectId()).error?.code).toBe('57014')
+    await expect(createServerClient(db, { throwOnError: true }).as({ id: 'a' }).currentSubjectId()).rejects.toBeInstanceOf(
+      PermissionsError,
+    )
+  })
+})

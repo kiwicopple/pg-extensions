@@ -23,7 +23,7 @@ The package has two entry points. Each entry point has a different trust level.
 
 Admin calls never go over HTTP. A browser never needs a service key.
 
-The browser client has five methods. They call six functions of the extension that Postgres grants to every role.
+The browser client has seven methods. They call eight functions of the extension that Postgres grants to every role.
 
 | Method | Result |
 | --- | --- |
@@ -32,6 +32,8 @@ The browser client has five methods. They call six functions of the extension th
 | `rbac.scopesWithPermission({ permission })` | `string[]` |
 | `fga.check({ relation, object })` | `boolean` |
 | `fga.listObjects({ type, relation, idsOnly })` | `string[]` |
+| `currentSubjectId()` | `string`, or `null` when there is no subject |
+| `currentSubjectType()` | `string`. The default is `'user'`. |
 
 ## Quick start: Node with pg
 
@@ -159,6 +161,38 @@ const { data: canView } = await alice.fga.check({ relation: 'viewer', object: 'd
 Each call runs in its own transaction. The transaction sets `permissions.subject_id` to the id. When you set `role`, it also runs `set local role`.
 
 The subject is `{ id, type?, role? }`. The default `type` is `'user'`. The clients that `as()` returns have no `admin` namespace.
+
+## Get the current subject
+
+`currentSubjectId()` returns the id of the current subject. It calls `permissions.current_subject_id()`. The data is `null` when there is no subject, for example with the anon key.
+
+`currentSubjectType()` returns the type of the current subject. It calls `permissions.current_subject_type()`. The default is `'user'`.
+
+The methods exist on `createClient`, on `createServerClient` and on the client that `as()` returns.
+
+```ts
+import { createClient } from 'permissions'
+
+const permissions = createClient('https://your-project.supabase.co', 'your-anon-key', {
+  accessToken: async () => 'the-jwt-of-the-signed-in-user',
+})
+
+const { data: id } = await permissions.currentSubjectId() // 'alice', or null
+const { data: type } = await permissions.currentSubjectType() // 'user'
+```
+
+On a server, the connection has no subject, so `currentSubjectId()` returns `null`. Use `as()` to set the subject.
+
+```ts
+import pg from 'pg'
+import { createServerClient } from 'permissions'
+
+const permissions = createServerClient(new pg.Pool({ connectionString: process.env.DATABASE_URL }))
+
+const team = permissions.as({ id: 'eng', type: 'team' })
+const { data: id } = await team.currentSubjectId() // 'eng'
+const { data: type } = await team.currentSubjectType() // 'team'
+```
 
 ## Results and errors
 
