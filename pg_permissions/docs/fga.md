@@ -8,7 +8,30 @@ This page covers the API without conditions. [OpenFGA conditions](conditions.md)
 
 The test suite of OpenFGA runs against these functions (see [`test/fga/`](../test/fga/)).
 
-The examples on this page run in order. Each section uses the model and the tuples that the sections before it wrote.
+The examples on this page run in order.
+
+## Use from JavaScript
+
+An example that has a JavaScript equivalent shows it next to the SQL. The JavaScript examples use [the JavaScript client](javascript.md). Install the client first.
+
+The admin calls use the server client:
+
+```ts
+import pg from 'pg'
+import { createServerClient } from 'permissions'
+
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+})
+const permissions = createServerClient(pool)
+```
+
+The other JavaScript examples on this page use `permissions`. Some things differ from SQL:
+
+- Each method returns `{ data, error }`. It does not throw for a database error.
+- The model, the tuples and the context are JavaScript objects. You do not write JSON strings.
+- The argument `subject` is `user`. The names that have an underscore are in camel case: `authorizationModelId` for `model_id`, `userFilters` for `user_filters`.
+- A check for a user runs through `as({ id })`. It sets the current subject for each call. Each section uses the model and the tuples that the sections before it wrote.
 
 ## How the functions map to OpenFGA
 
@@ -117,20 +140,32 @@ Each type becomes an object. Its `relations` key holds the rewrite. Its `metadat
 }
 ```
 
-Write the model as the admin. In psql, read the JSON from the file `model.json`:
+Write the model as the admin. Read the JSON from the file `model.json`:
 
-```sql
+```sql tab="SQL"
 \set model `cat model.json`
 select permissions.fga_write_authorization_model(
   model => :'model'
 ) as model_id \gset
 ```
 
-The function returns the id of the new model. The id is a ULID, for example `01JB...`. The new model becomes the latest model.
+```ts tab="JavaScript"
+import { readFileSync } from 'node:fs'
+
+const json = readFileSync('model.json', 'utf8')
+const model = JSON.parse(json)
+
+const written =
+  await permissions.fga.admin.writeAuthorizationModel(model)
+if (written.error) throw written.error
+const modelId = written.data.authorizationModelId
+```
+
+The function returns the id of the new model. In JavaScript, the id is `data.authorizationModelId`. The id is a ULID, for example `01JB...`. The new model becomes the latest model.
 
 Every function on this page uses the latest model. To use an older model, pass `model_id`. `fga_read_authorization_models()` lists the models, newest first. `fga_read_authorization_model()` returns one model, with its `id`. Without an argument, it returns the latest model.
 
-```sql
+```sql tab="SQL"
 select count(*)
 from permissions.fga_read_authorization_models();
 -- 1
@@ -140,9 +175,18 @@ select permissions.fga_read_authorization_model(
 -- true
 ```
 
+```ts tab="JavaScript"
+const all = await permissions.fga.admin.readAuthorizationModels()
+// all.data.length: 1
+const one = await permissions.fga.admin.readAuthorizationModel({
+  authorizationModelId: modelId,
+})
+// one.data.id === modelId: true
+```
+
 The extension checks the model as the OpenFGA server does. It raises the same error codes. This example has a typo in a relation name:
 
-```sql
+```sql tab="SQL"
 select permissions.fga_write_authorization_model(
   model => '{
     "schema_version": "1.1",
@@ -170,6 +214,36 @@ select permissions.fga_write_authorization_model(
 -- HINT:  Did you mean 'editor'? Relations on type 'document': editor, viewer.
 ```
 
+```ts tab="JavaScript"
+const typo = {
+  schema_version: '1.1',
+  type_definitions: [
+    { type: 'user' },
+    {
+      type: 'document',
+      relations: {
+        editor: { this: {} },
+        viewer: { computedUserset: { relation: 'editr' } },
+      },
+      metadata: {
+        relations: {
+          editor: {
+            directly_related_user_types: [{ type: 'user' }],
+          },
+        },
+      },
+    },
+  ],
+}
+const refused =
+  await permissions.fga.admin.writeAuthorizationModel(typo)
+// refused.error.message:
+//   document#viewer: computed relation 'editr' is not defined ...
+// refused.error.details:
+//   openfga:2056 invalid_authorization_model
+// refused.error.hint: Did you mean 'editor'? ...
+```
+
 The extension also refuses a relation that no tuple can satisfy. For example, `define viewer: reader` and `define reader: viewer` refer only to each other. This fails with `no entrypoints defined`. Computed relations that refer to each other in a cycle also fail, even when each relation has a type restriction. A refused model does not become the latest model. The tests in [`test/fga_lang/`](../test/fga_lang/) run the OpenFGA validation cases against this function.
 
 ## Write tuples
@@ -178,7 +252,7 @@ A tuple says that a subject has a relation to an object. This is a tuple key in 
 
 Write tuples with `fga_write`:
 
-```sql
+```sql tab="SQL"
 select permissions.fga_write(
   writes => '[
     {
@@ -235,6 +309,62 @@ select permissions.fga_write(
 );
 ```
 
+```ts tab="JavaScript"
+const writes = [
+  {
+    user: 'user:bob',
+    relation: 'member',
+    object: 'team:eng',
+  },
+  {
+    user: 'team:design#member',
+    relation: 'member',
+    object: 'team:eng',
+  },
+  {
+    user: 'user:carl',
+    relation: 'member',
+    object: 'team:design',
+  },
+  {
+    user: 'user:anne',
+    relation: 'owner',
+    object: 'folder:projects',
+  },
+  {
+    user: 'team:eng#member',
+    relation: 'viewer',
+    object: 'folder:projects',
+  },
+  {
+    user: 'folder:projects',
+    relation: 'parent',
+    object: 'folder:roadmaps',
+  },
+  {
+    user: 'folder:roadmaps',
+    relation: 'parent',
+    object: 'document:roadmap',
+  },
+  {
+    user: 'user:dana',
+    relation: 'editor',
+    object: 'document:roadmap',
+  },
+  {
+    user: 'user:carl',
+    relation: 'blocked',
+    object: 'document:roadmap',
+  },
+  {
+    user: 'user:*',
+    relation: 'viewer',
+    object: 'document:handbook',
+  },
+]
+await permissions.fga.admin.write({ writes })
+```
+
 These tuples state these facts:
 
 - Bob is in team `eng`. Everyone in team `design` is also in team `eng`. Carl is in team `design`.
@@ -245,7 +375,7 @@ These tuples state these facts:
 
 To write or delete one tuple, use `fga_write_tuple` or `fga_delete_tuple`. These functions do not fail when the tuple is already there or already gone:
 
-```sql
+```sql tab="SQL"
 select permissions.fga_write_tuple(
   subject => 'user:erin',
   relation => 'owner',
@@ -264,9 +394,21 @@ select permissions.fga_delete_tuple(
 );
 ```
 
-`fga_write` takes writes and deletes together, in one transaction. Each side is an array of tuple keys. Each side can also be an object `{"tuple_keys": [...]}` with an option. The option `"on_duplicate": "ignore"` applies to writes. The option `"on_missing": "ignore"` applies to deletes:
+```ts tab="JavaScript"
+const tuple = {
+  user: 'user:erin',
+  relation: 'owner',
+  object: 'document:notes',
+}
+await permissions.fga.admin.writeTuple(tuple)
+await permissions.fga.admin.writeTuple(tuple)
+// no error: already there
+await permissions.fga.admin.deleteTuple(tuple)
+```
 
-```sql
+`fga_write` takes writes and deletes together, in one transaction. Each side is an array of tuple keys. Each side can also be an object `{"tuple_keys": [...]}` with an option. The option `"on_duplicate": "ignore"` applies to writes. The option `"on_missing": "ignore"` applies to deletes. In JavaScript, pass `onDuplicate` and `onMissing` in the request:
+
+```sql tab="SQL"
 select permissions.fga_write(
   writes => '[
     {
@@ -288,9 +430,31 @@ select permissions.fga_write(
 );
 ```
 
+```ts tab="JavaScript"
+const writes = [
+  {
+    user: 'user:erin',
+    relation: 'editor',
+    object: 'document:notes',
+  },
+]
+const deletes = [
+  {
+    user: 'user:zed',
+    relation: 'editor',
+    object: 'document:notes',
+  },
+]
+await permissions.fga.admin.write({
+  writes,
+  deletes,
+  onMissing: 'ignore',
+})
+```
+
 Without an option, `fga_write` raises an error when you write a tuple that exists. It also raises an error when you delete a tuple that does not exist. This is the OpenFGA behavior.
 
-```sql
+```sql tab="SQL"
 select permissions.fga_write(
   writes => '[
     {
@@ -305,9 +469,25 @@ select permissions.fga_write(
 -- HINT:  Pass writes as {"tuple_keys": [...], "on_duplicate": "ignore"} to skip tuples that already exist.
 ```
 
+```ts tab="JavaScript"
+const writes = [
+  {
+    user: 'user:erin',
+    relation: 'editor',
+    object: 'document:notes',
+  },
+]
+const duplicate = await permissions.fga.admin.write({ writes })
+// duplicate.error.message:
+//   cannot write a tuple which already exists: ...
+// duplicate.error.details:
+//   openfga:2017 write_failed_due_to_invalid_input
+// To skip the duplicate, pass onDuplicate: 'ignore'.
+```
+
 The extension checks each tuple against the type restrictions of the model. The relation `editor` is `[user, team#member]`, so a wildcard is not valid:
 
-```sql
+```sql tab="SQL"
 select permissions.fga_write(
   writes => '[
     {
@@ -322,13 +502,29 @@ select permissions.fga_write(
 -- HINT:  'document#editor' allows users of type: team#member, user.
 ```
 
+```ts tab="JavaScript"
+const writes = [
+  {
+    user: 'user:*',
+    relation: 'editor',
+    object: 'document:notes',
+  },
+]
+const invalid = await permissions.fga.admin.write({ writes })
+// invalid.error.message:
+//   Invalid tuple 'document:notes#editor@user:*'. Reason: ...
+// invalid.error.details: openfga:2027 invalid_tuple
+// invalid.error.hint:
+//   'document#editor' allows users of type: team#member, user.
+```
+
 `fga_write` accepts at most 100 tuple keys in each call. See [Errors and limits](errors-and-limits.md#limits).
 
 ## Check
 
 `fga_check` is the OpenFGA Check. It answers one question: does the subject have the relation to the object? The result is `true` or `false`. Each example names every argument:
 
-```sql
+```sql tab="SQL"
 select permissions.fga_check(
   subject => 'user:anne',
   relation => 'viewer',
@@ -373,11 +569,56 @@ select permissions.fga_check(
 -- true: user:*
 ```
 
+```ts tab="JavaScript"
+const { data: anne } = await permissions.fga.admin.check({
+  user: 'user:anne',
+  relation: 'viewer',
+  object: 'document:roadmap',
+})
+// true: owns folder:projects, two parents up
+const { data: bob } = await permissions.fga.admin.check({
+  user: 'user:bob',
+  relation: 'viewer',
+  object: 'document:roadmap',
+})
+// true: team:eng views folder:projects
+const { data: carl } = await permissions.fga.admin.check({
+  user: 'user:carl',
+  relation: 'viewer',
+  object: 'document:roadmap',
+})
+// true: team:design is in team:eng
+const { data: carlCan } = await permissions.fga.admin.check({
+  user: 'user:carl',
+  relation: 'can_view',
+  object: 'document:roadmap',
+})
+// false: carl is blocked
+const { data: dana } = await permissions.fga.admin.check({
+  user: 'user:dana',
+  relation: 'viewer',
+  object: 'document:roadmap',
+})
+// true: editors view
+const { data: erin } = await permissions.fga.admin.check({
+  user: 'user:erin',
+  relation: 'viewer',
+  object: 'document:roadmap',
+})
+// false
+const { data: handbook } = await permissions.fga.admin.check({
+  user: 'user:erin',
+  relation: 'viewer',
+  object: 'document:handbook',
+})
+// true: user:*
+```
+
 Put a deny in the model, with `but not`. In the model above, `can_view` is `viewer but not blocked`. Check `can_view` to ask "can this subject see the document". Use `viewer` to ask "did someone give access to this subject".
 
 A misspelled relation is always an error. It is never a silent `false`:
 
-```sql
+```sql tab="SQL"
 select permissions.fga_check(
   subject => 'user:anne',
   relation => 'viewr',
@@ -388,11 +629,23 @@ select permissions.fga_check(
 -- HINT:  Did you mean 'viewer'? Relations on type 'document': blocked, can_view, editor, owner, parent, viewer.
 ```
 
+```ts tab="JavaScript"
+const misspelled = await permissions.fga.admin.check({
+  user: 'user:anne',
+  relation: 'viewr',
+  object: 'document:roadmap',
+})
+// misspelled.error.message:
+//   relation 'document#viewr' not found
+// misspelled.error.details: openfga:2000 validation_error
+// misspelled.error.hint: Did you mean 'viewer'? ...
+```
+
 ## ListObjects
 
 `fga_list_objects` returns the objects of one type that the subject has the relation to. Each result is a `type:id` string. The order is not defined:
 
-```sql
+```sql tab="SQL"
 select permissions.fga_list_objects(
   subject => 'user:bob',
   type => 'document',
@@ -413,6 +666,27 @@ select permissions.fga_list_objects(
 -- folder:projects, folder:roadmaps
 ```
 
+```ts tab="JavaScript"
+const { data: bobDocs } = await permissions.fga.admin.listObjects({
+  user: 'user:bob',
+  type: 'document',
+  relation: 'viewer',
+})
+// ['document:roadmap', 'document:handbook']
+const { data: carlDocs } = await permissions.fga.admin.listObjects({
+  user: 'user:carl',
+  type: 'document',
+  relation: 'can_view',
+})
+// ['document:handbook']
+const { data: anneFolders } = await permissions.fga.admin.listObjects({
+  user: 'user:anne',
+  type: 'folder',
+  relation: 'viewer',
+})
+// ['folder:projects', 'folder:roadmaps']
+```
+
 The function returns at most 1,000 objects, as OpenFGA does. It drops the other objects without an error. For RLS, use `fga_list_object_ids_current`. It has no cap. See [Functions for RLS](#functions-for-rls).
 
 An unknown type is error `openfga:2021`. An unknown relation is error `openfga:2022`.
@@ -421,7 +695,7 @@ An unknown type is error `openfga:2021`. An unknown relation is error `openfga:2
 
 `fga_list_users` returns the subjects that have the relation to the object. The argument `user_filters` says which kind of subject you want. Use a type (`user`) or a userset (`team#member`):
 
-```sql
+```sql tab="SQL"
 select permissions.fga_list_users(
   object => 'document:roadmap',
   relation => 'viewer',
@@ -448,6 +722,33 @@ select permissions.fga_list_users(
 -- user:*
 ```
 
+```ts tab="JavaScript"
+const { data: viewers } = await permissions.fga.admin.listUsers({
+  object: 'document:roadmap',
+  relation: 'viewer',
+  userFilters: ['user'],
+})
+// ['user:anne', 'user:bob', 'user:carl', 'user:dana']
+const { data: canView } = await permissions.fga.admin.listUsers({
+  object: 'document:roadmap',
+  relation: 'can_view',
+  userFilters: ['user'],
+})
+// ['user:anne', 'user:bob', 'user:dana']
+const { data: teams } = await permissions.fga.admin.listUsers({
+  object: 'document:roadmap',
+  relation: 'viewer',
+  userFilters: ['team#member'],
+})
+// ['team:eng#member', 'team:design#member']
+const { data: everyone } = await permissions.fga.admin.listUsers({
+  object: 'document:handbook',
+  relation: 'viewer',
+  userFilters: ['user'],
+})
+// ['user:*']
+```
+
 A wildcard comes back as `user:*`. It means every subject of that type. Like ListObjects, ListUsers returns at most 1,000 results.
 
 ## Read
@@ -456,7 +757,7 @@ A wildcard comes back as `user:*`. It means every subject of that type. Like Lis
 
 Filter the tuples with `object`, `relation` and `subject`, in any combination. The value of `object` is `type:id`, or `type:` for every object of a type.
 
-```sql
+```sql tab="SQL"
 select tuples, continuation_token
 from permissions.fga_read(object => 'document:roadmap');
 -- tuples: [{"key": {"user": "folder:roadmaps", "relation": "parent", "object": "document:roadmap"}, "timestamp": "..."}, ...] (3 tuples)
@@ -468,9 +769,23 @@ from permissions.fga_read(object => 'document:roadmap') r,
   jsonb_array_elements(r.tuples) t;
 ```
 
+```ts tab="JavaScript"
+const { data, error } = await permissions.fga.admin.read({
+  object: 'document:roadmap',
+})
+if (error) throw error
+// data.tuples: 3 tuples
+// data.continuationToken: '' (the last page)
+
+// one line for each tuple
+for (const { key } of data.tuples) {
+  console.log(key.relation, key.user)
+}
+```
+
 A page holds 50 tuples. To change this, pass `page_size` (1 to 100). The tuples come in the order of the writes. When more tuples exist, `continuation_token` is not empty. Pass the token back without change to get the next page. A token with the value `''` means that this is the last page.
 
-```sql
+```sql tab="SQL"
 select tuples, continuation_token as token
 from permissions.fga_read(
   object => 'folder:',
@@ -491,9 +806,26 @@ from permissions.fga_read(
 -- three pages of one tuple each; the third token is ''
 ```
 
+```ts tab="JavaScript"
+let token = ''
+let pages = 0
+do {
+  const request = {
+    object: 'folder:',
+    pageSize: 1,
+    continuationToken: token,
+  }
+  const { data, error } = await permissions.fga.admin.read(request)
+  if (error) throw error
+  pages += 1
+  token = data.continuationToken
+} while (token !== '')
+// pages: 3; the last token is ''
+```
+
 To read every page in one query, use a recursive query:
 
-```sql
+```sql tab="SQL"
 with recursive pages(tuples, token, n) as (
     select r.tuples, r.continuation_token, 1
     from permissions.fga_read(page_size => 4) r
@@ -511,13 +843,26 @@ from pages;
 -- 11
 ```
 
+```ts tab="JavaScript"
+let total = 0
+let token = ''
+do {
+  const request = { pageSize: 4, continuationToken: token }
+  const { data, error } = await permissions.fga.admin.read(request)
+  if (error) throw error
+  total += data.tuples.length
+  token = data.continuationToken
+} while (token !== '')
+// total: 11
+```
+
 The `key` of a tuple in a page is a tuple key that `fga_write` accepts. You can pass a page back as `deletes`.
 
 ## Contextual tuples
 
 Check, ListObjects and ListUsers accept `contextual_tuples`. These are tuples that count for one call only. The extension never writes them. It checks them against the model, as it checks written tuples:
 
-```sql
+```sql tab="SQL"
 select permissions.fga_check(
   subject => 'user:erin',
   relation => 'viewer',
@@ -552,6 +897,36 @@ select permissions.fga_check(
 -- false: nothing was written
 ```
 
+```ts tab="JavaScript"
+const contextualTuples = [
+  {
+    user: 'user:erin',
+    relation: 'member',
+    object: 'team:eng',
+  },
+]
+const { data: allowed } = await permissions.fga.admin.check({
+  user: 'user:erin',
+  relation: 'viewer',
+  object: 'document:roadmap',
+  contextualTuples,
+})
+// true
+const { data: objects } = await permissions.fga.admin.listObjects({
+  user: 'user:erin',
+  type: 'document',
+  relation: 'viewer',
+  contextualTuples,
+})
+// ['document:roadmap', 'document:handbook', 'document:notes']
+const { data: plain } = await permissions.fga.admin.check({
+  user: 'user:erin',
+  relation: 'viewer',
+  object: 'document:roadmap',
+})
+// false: nothing was written
+```
+
 Use contextual tuples for facts that your application knows at the time of the request. An example is a group membership from the identity provider. Do not store these facts as tuples. The functions for RLS do not take contextual tuples, because a client could vouch for itself.
 
 ## Functions for RLS
@@ -564,9 +939,11 @@ Clients cannot call the functions above, because those functions take the subjec
 | `fga_list_objects_current(type, relation)` | The objects as `type:id` strings |
 | `fga_list_object_ids_current(type, relation)` | The ids of the objects, without the type |
 
+In JavaScript, `fga.check` calls `fga_check_current`. The method `fga.listObjects` calls `fga_list_objects_current`, and `idsOnly: true` calls `fga_list_object_ids_current`.
+
 The current subject is `current_subject_type()` and `current_subject_id()`, joined as `type:id`. The default type is `user`. [Function reference](reference.md#shared-functions) shows how the extension finds the current subject. This example sets the subject for the session:
 
-```sql
+```sql tab="SQL"
 select set_config('permissions.subject_id', 'bob', false);
 select permissions.fga_check_current(
   relation => 'viewer',
@@ -589,6 +966,34 @@ select permissions.fga_check_current(
   object => 'document:roadmap'
 );
 -- false: no subject, no access
+```
+
+```ts tab="JavaScript"
+const asBob = permissions.as({ id: 'bob' })
+
+const { data: canView } = await asBob.fga.check({
+  relation: 'viewer',
+  object: 'document:roadmap',
+})
+// true
+const { data: objects } = await asBob.fga.listObjects({
+  type: 'document',
+  relation: 'viewer',
+})
+// ['document:roadmap', 'document:handbook']
+const { data: ids } = await asBob.fga.listObjects({
+  type: 'document',
+  relation: 'viewer',
+  idsOnly: true,
+})
+// ['roadmap', 'handbook']
+
+// A client has no subject until you call as().
+const { data: nobody } = await permissions.fga.check({
+  relation: 'viewer',
+  object: 'document:roadmap',
+})
+// false: no subject, no access
 ```
 
 In three cases these functions return `false` or no rows. They raise no error. The cases are: there is no subject, there is no model, or the model does not define the subject type. An unknown object type or an unknown relation is still an error, as in OpenFGA.
@@ -617,7 +1022,7 @@ The extension never changes a model in place. Write a new model, and it becomes 
 
 Tuples do not belong to a model. When a new model does not accept a tuple, the extension keeps the tuple and ignores it in checks. You can still read and delete it. This example removes `blocked` and `can_view`:
 
-```sql
+```sql tab="SQL"
 select permissions.fga_write_authorization_model(
   model => jsonb_set(
     :'model'::jsonb,
@@ -650,6 +1055,37 @@ from permissions.fga_read(
   relation => 'blocked'
 );
 -- 1: the tuple is still there
+```
+
+```ts tab="JavaScript"
+const modelV2 = structuredClone(model)
+const documentType = modelV2.type_definitions[3]
+for (const name of ['blocked', 'can_view']) {
+  delete documentType.relations[name]
+  delete documentType.metadata.relations[name]
+}
+const v2 = await permissions.fga.admin.writeAuthorizationModel(modelV2)
+
+const gone = await permissions.fga.admin.check({
+  user: 'user:carl',
+  relation: 'can_view',
+  object: 'document:roadmap',
+})
+// gone.error.message:
+//   relation 'document#can_view' not found
+// gone.error.details: openfga:2000 validation_error
+const old = await permissions.fga.admin.check({
+  user: 'user:carl',
+  relation: 'can_view',
+  object: 'document:roadmap',
+  authorizationModelId: modelId,
+})
+// old.data: false: the old model
+const blocked = await permissions.fga.admin.read({
+  object: 'document:roadmap',
+  relation: 'blocked',
+})
+// blocked.data.tuples.length: 1: the tuple is still there
 ```
 
 In practice, edit `model.fga` and transform it again. To remove every model and every tuple, call `fga_delete_store()`.

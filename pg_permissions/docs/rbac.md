@@ -4,11 +4,33 @@ The `rbac_*` functions manage roles. A role grants permissions. A role can inher
 
 Use RBAC when access depends on what a user is, and not on one object. For access to single objects, use the [OpenFGA model](fga.md). The [function reference](reference.md) gives the full signature of each function.
 
+## Use from JavaScript
+
+An example that has a JavaScript equivalent shows it next to the SQL. The JavaScript examples use [the JavaScript client](javascript.md). Install the client first.
+
+The admin calls use the server client:
+
+```ts
+import pg from 'pg'
+import { createServerClient } from 'permissions'
+
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+})
+const permissions = createServerClient(pool)
+```
+
+The other JavaScript examples on this page use `permissions`. They also use the ID constants in [Before you start](#before-you-start). Three things differ from SQL:
+
+- Each method returns `{ data, error }`. It does not throw for a database error.
+- The argument `user_id` is `userId`.
+- A check for a user runs through `as({ id })`. It sets the subject for each call.
+
 ## Before you start
 
 [Install the extension](install.md) first. The examples use psql variables for IDs. For example, `:'alice'` is the ID of Alice:
 
-```sql
+```sql tab="SQL"
 \set alice  '11111111-1111-1111-1111-111111111111'
 \set bob    '22222222-2222-2222-2222-222222222222'
 \set carol  '33333333-3333-3333-3333-333333333333'
@@ -17,6 +39,17 @@ Use RBAC when access depends on what a user is, and not on one object. For acces
 \set frank  '66666666-6666-6666-6666-666666666666'
 \set acme   'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
 \set globex 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+```
+
+```ts tab="JavaScript"
+const alice = '11111111-1111-1111-1111-111111111111'
+const bob = '22222222-2222-2222-2222-222222222222'
+const carol = '33333333-3333-3333-3333-333333333333'
+const dave = '44444444-4444-4444-4444-444444444444'
+const erin = '55555555-5555-5555-5555-555555555555'
+const frank = '66666666-6666-6666-6666-666666666666'
+const acme = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+const globex = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
 ```
 
 In your application, these are arguments. The extension accepts any text as an ID. The examples use UUIDs because the example tables have `uuid` keys.
@@ -44,13 +77,24 @@ The ID comes from the first source that has a value:
 2. The configuration parameter `permissions.subject_id`. Plain Postgres uses this source.
 3. If neither source has a value, the ID is null. Then each check returns false.
 
-```sql
+```sql tab="SQL"
 select permissions.current_subject_id();
 -- null: no JWT, no parameter
 select permissions.current_subject_type();
 -- user
 select permissions.rbac_has_permission(permission => 'documents.read');
 -- false: no subject, no access
+```
+
+```ts tab="JavaScript"
+const { data: id } = await permissions.currentSubjectId()
+// null: no JWT, no parameter
+const { data: type } = await permissions.currentSubjectType()
+// 'user'
+const { data: canRead } = await permissions.rbac.hasPermission({
+  permission: 'documents.read',
+})
+// false: no subject, no access
 ```
 
 ### Plain Postgres
@@ -91,6 +135,8 @@ try {
   client.release();
 }
 ```
+
+The JavaScript client does these steps for you. The call `as({ id })` sets `permissions.subject_id` in a transaction for each call. See [Check as a subject](javascript.md#check-as-a-subject).
 
 Use `set_config` with a bound argument. The statement `SET LOCAL permissions.subject_id = ...` cannot take arguments. The `set local role` line is necessary. A superuser, or the owner of a table, bypasses row level security, and then no policy runs. See [Warnings and limits](#warnings-and-limits).
 
@@ -182,7 +228,7 @@ On Supabase, `service_role` bypasses RLS but not function privileges. This is wh
 
 Define each role once, as the admin. A role has a name, a list of permissions, and a list of roles that it inherits. Here `editor` inherits `viewer`, and `admin` inherits `editor`:
 
-```sql
+```sql tab="SQL"
 select permissions.rbac_create_role(
   role => 'viewer',
   permissions => '{documents.read}'
@@ -199,11 +245,28 @@ select permissions.rbac_create_role(
 );
 ```
 
+```ts tab="JavaScript"
+await permissions.rbac.admin.createRole({
+  role: 'viewer',
+  permissions: ['documents.read'],
+})
+await permissions.rbac.admin.createRole({
+  role: 'editor',
+  permissions: ['documents.edit'],
+  inherits: ['viewer'],
+})
+await permissions.rbac.admin.createRole({
+  role: 'admin',
+  permissions: ['documents.delete', 'users.manage'],
+  inherits: ['editor'],
+})
+```
+
 A permission name is a free-form string, for example `documents.read`. A role works both app-wide and in any scope. Inheritance is transitive: `admin` has the permissions of `editor`, and the permissions that `editor` inherits from `viewer`.
 
 Then assign the roles to users. These assignments are app-wide:
 
-```sql
+```sql tab="SQL"
 select permissions.rbac_assign_role(
   user_id => :'alice',
   role => 'admin'
@@ -218,13 +281,41 @@ select permissions.rbac_assign_role(
 );
 ```
 
+```ts tab="JavaScript"
+await permissions.rbac.admin.assignRole({
+  userId: alice,
+  role: 'admin',
+})
+await permissions.rbac.admin.assignRole({
+  userId: bob,
+  role: 'editor',
+})
+await permissions.rbac.admin.assignRole({
+  userId: carol,
+  role: 'viewer',
+})
+```
+
 Ask what a user can do. The result lists each permission that the user holds, directly or through inheritance. The order is not defined:
 
-```sql
+```sql tab="SQL"
 select permissions.rbac_user_permissions(user_id => :'alice');
 -- {documents.delete,documents.edit,documents.read,users.manage}
 select permissions.rbac_user_permissions(user_id => :'dave');
 -- {}: Dave has no role
+```
+
+```ts tab="JavaScript"
+const forAlice = await permissions.rbac.admin.userPermissions({
+  userId: alice,
+})
+// forAlice.data, in any order:
+// ['documents.delete', 'documents.edit',
+//  'documents.read', 'users.manage']
+const forDave = await permissions.rbac.admin.userPermissions({
+  userId: dave,
+})
+// forDave.data: []: Dave has no role
 ```
 
 ## Scenario 1: app-wide roles
@@ -324,9 +415,9 @@ In production, the `set_config` statement is part of your request setup (see [Id
 
 ## Scenario 2: roles scoped to a tenant
 
-This scenario uses the same roles, but assigns them for each organization. Alice is an admin of `acme`. Bob is an editor of `acme` and a viewer of `globex`. The table has an `org_id` column, and the policies use it:
+This scenario uses the same roles, but assigns them for each organization. Alice is an admin of `acme`. Bob is an editor of `acme` and a viewer of `globex`. Assign the roles with a scope:
 
-```sql
+```sql tab="SQL"
 select permissions.rbac_assign_role(
   user_id => :'alice',
   role => 'admin',
@@ -342,7 +433,29 @@ select permissions.rbac_assign_role(
   role => 'viewer',
   scope => :'globex'
 );
+```
 
+```ts tab="JavaScript"
+await permissions.rbac.admin.assignRole({
+  userId: alice,
+  role: 'admin',
+  scope: acme,
+})
+await permissions.rbac.admin.assignRole({
+  userId: bob,
+  role: 'editor',
+  scope: acme,
+})
+await permissions.rbac.admin.assignRole({
+  userId: bob,
+  role: 'viewer',
+  scope: globex,
+})
+```
+
+Then create a table that has an `org_id` column, and the policies that use it:
+
+```sql
 create table public.org_documents (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null,
@@ -401,7 +514,7 @@ A scope is any ID that you choose. Normally it is the ID of an organization row.
 
 Ask the questions of the scenario as Bob. Run each statement in a transaction that sets the subject:
 
-```sql
+```sql tab="SQL"
 begin;
 select set_config('permissions.subject_id', :'bob', true);
 select permissions.rbac_has_permission(
@@ -430,9 +543,37 @@ select permissions.rbac_scopes_with_permission(
 commit;
 ```
 
+```ts tab="JavaScript"
+const asBob = permissions.as({ id: bob })
+
+const { data: editAcme } = await asBob.rbac.hasPermission({
+  permission: 'documents.edit',
+  scope: acme,
+})
+// true
+const { data: editGlobex } = await asBob.rbac.hasPermission({
+  permission: 'documents.edit',
+  scope: globex,
+})
+// false
+const { data: readGlobex } = await asBob.rbac.hasPermission({
+  permission: 'documents.read',
+  scope: globex,
+})
+// true
+const { data: readScopes } = await asBob.rbac.scopesWithPermission({
+  permission: 'documents.read',
+})
+// [acme, globex], as IDs
+const { data: editScopes } = await asBob.rbac.scopesWithPermission({
+  permission: 'documents.edit',
+})
+// [acme]
+```
+
 For Carol, who holds a role app-wide only, `rbac_scopes_with_permission(permission => 'documents.read')` returns `{}`. The admin can ask about any user:
 
-```sql
+```sql tab="SQL"
 select permissions.rbac_user_permissions(
   user_id => :'bob',
   scope => :'globex'
@@ -443,6 +584,21 @@ select * from permissions.rbac_users_with_role(
   scope => :'acme'
 );
 -- Alice: who are the admins of acme?
+```
+
+```ts tab="JavaScript"
+const bobInGlobex = await permissions.rbac.admin.userPermissions({
+  userId: bob,
+  scope: globex,
+})
+// bobInGlobex.data: ['documents.read']
+// What can Bob do in globex?
+const admins = await permissions.rbac.admin.usersWithRole({
+  role: 'admin',
+  scope: acme,
+})
+// admins.data: [alice]
+// Who are the admins of acme?
 ```
 
 Now use the policies. As Bob:
@@ -482,7 +638,7 @@ Alice is an admin of `acme`, and also an app-wide admin from scenario 1. She see
 
 Examples of the answers, for Carol (a viewer) and Bob (an editor):
 
-```sql
+```sql tab="SQL"
 begin;
 select set_config('permissions.subject_id', :'carol', true);
 select permissions.rbac_has_permission(permission => 'documents.read');
@@ -510,13 +666,53 @@ select permissions.rbac_has_role(role => 'admin');
 commit;
 ```
 
+```ts tab="JavaScript"
+const asCarol = permissions.as({ id: carol })
+
+const { data: canRead } = await asCarol.rbac.hasPermission({
+  permission: 'documents.read',
+})
+// true
+const { data: canEdit } = await asCarol.rbac.hasPermission({
+  permission: 'documents.edit',
+})
+// false
+const { data: unknown } = await asCarol.rbac.hasPermission({
+  permission: 'documents.nonexistent',
+})
+// false, not an error
+const { data: isViewer } = await asCarol.rbac.hasRole({
+  role: 'viewer',
+})
+// true
+const { data: isPermission } = await asCarol.rbac.hasRole({
+  role: 'documents.read',
+})
+// false: a permission name is not a role
+const { data: isNone } = await asCarol.rbac.hasRole({
+  role: 'nonexistent',
+})
+// false
+
+const asBob = permissions.as({ id: bob })
+
+const { data: bobViewer } = await asBob.rbac.hasRole({
+  role: 'viewer',
+})
+// true: inherited through editor
+const { data: bobAdmin } = await asBob.rbac.hasRole({
+  role: 'admin',
+})
+// false
+```
+
 ## Change and remove roles
 
 A role cannot change after you create it. To change the permissions of a role, drop the role and create it again. Then assign it again, because `rbac_drop_role` removes the assignments of the role. Treat role definitions as work for the admin, like a migration.
 
 `rbac_assign_role` has no effect if the user already holds the role in that scope. `rbac_unassign_role` has no effect if the user does not hold the role. To remove a scoped assignment, pass the same `scope`. An app-wide unassignment does not remove the same role in a scope.
 
-```sql
+```sql tab="SQL"
 select permissions.rbac_assign_role(
   user_id => :'bob',
   role => 'editor'
@@ -534,9 +730,27 @@ select permissions.rbac_unassign_role(
 -- no change, no error
 ```
 
+```ts tab="JavaScript"
+await permissions.rbac.admin.assignRole({
+  userId: bob,
+  role: 'editor',
+})
+// already held: no change
+await permissions.rbac.admin.unassignRole({
+  userId: dave,
+  role: 'editor',
+})
+// Dave does not hold the role: no change
+await permissions.rbac.admin.unassignRole({
+  userId: dave,
+  role: 'nonexistent',
+})
+// no change, no error
+```
+
 You cannot drop a role that another role inherits. When you drop a role, the extension deletes its assignments. You can reuse the name of a dropped role at once.
 
-```sql
+```sql tab="SQL"
 select permissions.rbac_create_role(
   role => 'auditor',
   permissions => '{audit.read}',
@@ -557,11 +771,46 @@ select permissions.rbac_user_permissions(user_id => :'dave');
 -- {}: the assignment went with the role
 ```
 
+```ts tab="JavaScript"
+await permissions.rbac.admin.createRole({
+  role: 'auditor',
+  permissions: ['audit.read'],
+  inherits: ['viewer'],
+})
+await permissions.rbac.admin.assignRole({
+  userId: dave,
+  role: 'auditor',
+})
+const before = await permissions.rbac.admin.userPermissions({
+  userId: dave,
+})
+// before.data: ['audit.read', 'documents.read']
+
+const inUse = await permissions.rbac.admin.dropRole({
+  role: 'viewer',
+})
+// inUse.error.message:
+//   role 'viewer' is inherited by 'auditor', 'editor'
+
+await permissions.rbac.admin.dropRole({ role: 'auditor' })
+const after = await permissions.rbac.admin.userPermissions({
+  userId: dave,
+})
+// after.data: []: the assignment went with the role
+```
+
 `rbac_users_with_role` lists user IDs. It includes users who hold the role through a role that inherits it:
 
-```sql
+```sql tab="SQL"
 select * from permissions.rbac_users_with_role(role => 'editor');
 -- Alice (through admin) and Bob
+```
+
+```ts tab="JavaScript"
+const { data: editors } = await permissions.rbac.admin.usersWithRole({
+  role: 'editor',
+})
+// [alice, bob]: Alice (through admin) and Bob
 ```
 
 ## Errors
@@ -580,7 +829,7 @@ The RBAC functions raise these errors. Each error has a `DETAIL` code and a `HIN
 | `rbac_drop_role` | The role does not exist | `rbac:unknown_role` | `22023` |
 | `rbac_drop_role` | Another role inherits the role | `rbac:role_in_use` | `2BP01` |
 
-```sql
+```sql tab="SQL"
 select permissions.rbac_create_role(
   role => 'viewer',
   permissions => '{documents.read}'
@@ -617,13 +866,55 @@ select permissions.rbac_drop_role(role => 'nonexistent');
 -- DETAIL:  rbac:unknown_role role='nonexistent'
 ```
 
+```ts tab="JavaScript"
+const exists = await permissions.rbac.admin.createRole({
+  role: 'viewer',
+  permissions: ['documents.read'],
+})
+// exists.error.message: role 'viewer' already exists
+// exists.error.details: rbac:role_exists role='viewer'
+
+const unknownParent = await permissions.rbac.admin.createRole({
+  role: 'reviewer',
+  permissions: ['audit.read'],
+  inherits: ['nonexistent'],
+})
+// unknownParent.error.message:
+//   unknown role 'nonexistent' in inherits of role 'reviewer'
+// unknownParent.error.details:
+//   rbac:unknown_role role='nonexistent'
+
+const isPermission = await permissions.rbac.admin.createRole({
+  role: 'documents.read',
+  permissions: ['x.y'],
+})
+// isPermission.error.details: rbac:name_overlap
+
+const isRole = await permissions.rbac.admin.createRole({
+  role: 'moderator',
+  permissions: ['viewer'],
+})
+// isRole.error.details: rbac:name_overlap
+
+const noRole = await permissions.rbac.admin.assignRole({
+  userId: bob,
+  role: 'nonexistent',
+})
+// noRole.error.details: rbac:unknown_role role='nonexistent'
+
+const noDrop = await permissions.rbac.admin.dropRole({
+  role: 'nonexistent',
+})
+// noDrop.error.details: rbac:unknown_role role='nonexistent'
+```
+
 ## Clean up with `delete_subject`
 
 The extension does not know your users table. When you delete a user, the role assignments of the user stay. They do no harm while IDs are not reused, but they accumulate.
 
 `delete_subject` removes a subject from both models in one call. It removes the role assignments of the subject, scoped assignments too. It also removes each OpenFGA tuple that names the subject, as user, as userset or as object. It returns the number of rows that it removed.
 
-```sql
+```sql tab="SQL"
 select permissions.rbac_assign_role(
   user_id => :'frank',
   role => 'viewer'
@@ -640,6 +931,27 @@ select permissions.delete_subject(
 -- 2
 select permissions.rbac_user_permissions(user_id => :'frank');
 -- {}
+```
+
+```ts tab="JavaScript"
+await permissions.rbac.admin.assignRole({
+  userId: frank,
+  role: 'viewer',
+})
+await permissions.rbac.admin.assignRole({
+  userId: frank,
+  role: 'viewer',
+  scope: acme,
+})
+const { data: removed } = await permissions.admin.deleteSubject({
+  type: 'user',
+  id: frank,
+})
+// 2
+const { data: left } = await permissions.rbac.admin.userPermissions({
+  userId: frank,
+})
+// []
 ```
 
 Call `delete_subject` from a trigger on your users table. `delete_subject` is admin-only, so the trigger function is `security definer`:

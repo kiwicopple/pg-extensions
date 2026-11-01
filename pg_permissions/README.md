@@ -104,7 +104,7 @@ The example uses the role `authenticated` of Supabase. On plain Postgres, create
 | [RLS policies](docs/rls.md) | RLS policies for RBAC, and for both models together |
 | [Function reference](docs/reference.md) | The signature of each function |
 | [Errors and limits](docs/errors-and-limits.md) | Error codes and limits |
-| [JavaScript client](docs/javascript.md) | The npm package `permissions` |
+| [JavaScript client: setup](docs/javascript.md) | The npm package `permissions`: install, entry points and errors |
 
 ## JavaScript client
 
@@ -127,7 +127,7 @@ const { data: canEdit } = await permissions.rbac.hasPermission({
 })
 ```
 
-See [JavaScript client](docs/javascript.md) for the methods and the errors.
+See [JavaScript client: setup](docs/javascript.md) for the methods and the errors. The RBAC and OpenFGA pages show each call next to the SQL.
 
 ## Contributing
 

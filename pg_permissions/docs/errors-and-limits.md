@@ -2,6 +2,8 @@
 
 This page describes how `pg_permissions` reports an error. It lists every error that the extension raises, and the limits of the API functions. [Function reference](reference.md) lists the errors of each function.
 
+The JavaScript client returns each error in the field `error`. The field `reason` has the `DETAIL` code, parsed. See [Results and errors](javascript.md#results-and-errors).
+
 The examples run in order. This example writes a small model for them:
 
 ```sql

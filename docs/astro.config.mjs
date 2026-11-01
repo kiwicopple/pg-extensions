@@ -30,13 +30,13 @@ export default defineConfig({
 				{ label: 'Home', slug: 'index' },
 				{ label: 'Using pg_permissions', slug: 'guide' },
 				{ label: 'Install', slug: 'install' },
+				{ label: 'JavaScript setup', slug: 'javascript' },
 				{ label: 'RBAC', slug: 'rbac' },
 				{ label: 'FGA', slug: 'fga' },
 				{ label: 'Conditions', slug: 'conditions' },
 				{ label: 'RLS', slug: 'rls' },
 				{ label: 'Reference', slug: 'reference' },
 				{ label: 'Errors and limits', slug: 'errors-and-limits' },
-				{ label: 'JavaScript client', slug: 'javascript' },
 				{
 					label: 'Contributing',
 					items: [

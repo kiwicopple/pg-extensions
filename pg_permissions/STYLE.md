@@ -85,3 +85,5 @@ Exceptions: `research/journal.md` is the raw build record and keeps its original
 11. In `create policy`, put the name, `on`, `for`, `to`, `using (` and `with check (` each on its own line. Indent the expression.
 12. Do not change the text of a result or an error message. Put a comment that shows a result on the line after the statement.
 13. Break a long shell command with a `\` at the end of the line. Put one group of flags on each line.
+14. In JavaScript examples, do not build a value inside the arguments of a call. Put the value in a named `const`, and pass the name.
+15. Show a JavaScript equivalent of an SQL example as a tab. Write the two code blocks next to each other, with only blank lines between them. Give the SQL block the meta `tab="SQL"` and the JavaScript block the meta `tab="JavaScript"`, in this order. GitHub shows two code blocks. The docs site (`docs/scripts/sync.mjs`) turns them into tabs, and removes the meta. Do not use other labels.

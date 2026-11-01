@@ -1,8 +1,12 @@
-# JavaScript client
+# JavaScript client: setup
 
 This page describes `permissions`, the JavaScript client for `pg_permissions`. The client calls the functions of the extension from Node, from a browser, from Deno and from Bun. Each function of the client calls one SQL function.
 
+This page covers the setup: the install, the entry points, the subject, the errors and the list of methods. The examples of each call are next to the SQL examples. See [Use from JavaScript in RBAC](rbac.md#use-from-javascript) and [Use from JavaScript in the OpenFGA model](fga.md#use-from-javascript).
+
 The client needs `pg_permissions` 0.0.1 in the database. See [Install](install.md). The README of the npm package has more examples.
+
+## Install
 
 ```bash
 npm install permissions
@@ -21,8 +25,6 @@ The package has two entry points. Choose the entry point from the place where th
 
 Admin calls never go over HTTP. A browser does not need a service key. Do not send a service key to a browser.
 
-## Quick start
-
 On a server, create the client from a pool:
 
 ```ts
@@ -33,19 +35,9 @@ const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
 })
 const permissions = createServerClient(pool)
-
-await permissions.rbac.admin.createRole({
-  role: 'editor',
-  permissions: ['documents.edit'],
-})
-await permissions.rbac.admin.assignRole({
-  userId: 'alice',
-  role: 'editor',
-  scope: 'acme',
-})
 ```
 
-In a browser, create the client with the URL and the anon key of the Supabase project:
+In a browser, create the client with the URL and the anon key of the Supabase project. The option `accessToken` returns the JWT of the signed-in user:
 
 ```ts
 import { createClient } from 'permissions'
@@ -59,11 +51,6 @@ async function getAccessToken(): Promise<string> {
 
 const permissions = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   accessToken: getAccessToken,
-})
-
-const { data: canEdit } = await permissions.rbac.hasPermission({
-  permission: 'documents.edit',
-  scope: 'acme',
 })
 ```
 
@@ -81,40 +68,17 @@ const permissions = createClient(POSTGREST_URL, USER_JWT, {
   restUrl: POSTGREST_URL,
   accessToken: () => USER_JWT,
 })
-
-const { data } = await permissions.rbac.hasPermission({
-  permission: 'documents.read',
-})
 ```
 
-## Methods
+When `accessToken` returns `null`, the client sends the anon key. Then there is no subject, and each check is `false`.
 
-Each method returns a `Promise` of `{ data, error }`. The tables show the type of `data`.
+## Check as a subject
 
-### Client methods
-
-These methods answer for the current subject. They exist on both entry points. On a server, `as({ id })` sets the subject.
-
-`currentSubjectId()` and `currentSubjectType()` are methods of the client itself. They are not in the `rbac` namespace or the `fga` namespace.
-
-| Method | SQL function | `data` |
-| --- | --- | --- |
-| `rbac.hasPermission({ permission, scope? })` | `rbac_has_permission` | `boolean` |
-| `rbac.hasRole({ role, scope? })` | `rbac_has_role` | `boolean` |
-| `rbac.scopesWithPermission({ permission })` | `rbac_scopes_with_permission` | `string[]` |
-| `fga.check({ relation, object })` | `fga_check_current` | `boolean` |
-| `fga.listObjects({ type, relation })` | `fga_list_objects_current` | `string[]`, as `type:id` |
-| `fga.listObjects({ type, relation, idsOnly: true })` | `fga_list_object_ids_current` | `string[]`, as `id` |
-| `currentSubjectId()` | `current_subject_id` | `string`, or `null` when there is no subject |
-| `currentSubjectType()` | `current_subject_type` | `string`. The default is `'user'`. |
-
-### Subject methods
-
-`permissions.as(subject)` returns a client that has `rbac` and `fga` with the client methods only. It also has `currentSubjectId()` and `currentSubjectType()`. It has no `admin`.
+On a server, the connection has no subject. The call `as(subject)` returns a client that runs each call for one subject. It gives the same answers as the browser client gives for that user. The client that `as()` returns has `rbac` and `fga` with the client methods only. It has no `admin`.
 
 | Call | What it does |
 | --- | --- |
-| `as({ id, type?, role? })` | Runs each call in a transaction. The transaction sets `permissions.subject_id` to `id`. With `role`, it also runs `set local role`. |
+| `as({ id, type?, role? })` | Runs each call in a transaction. The transaction sets `permissions.subject_id` to `id`, and `permissions.subject_type` to `type`. It clears `request.jwt.claims`. With `role`, it also runs `set local role`. |
 
 ```ts
 import pg from 'pg'
@@ -125,15 +89,19 @@ const pool = new pg.Pool({
 })
 const permissions = createServerClient(pool)
 
+// Run each call with the privileges of a signed-in user.
 const alice = permissions.as({ id: 'alice', role: 'authenticated' })
-
-const { data: canView } = await alice.fga.check({
-  relation: 'viewer',
-  object: 'document:1',
-})
 ```
 
-To read the subject back, call `currentSubjectId()` and `currentSubjectType()`. `as({ id: 'eng', type: 'team' })` gives `'eng'` and `'team'`. A server client without `as()` has no subject, and `currentSubjectId()` returns `null`.
+The default `type` is `'user'`. The RBAC functions use the type `user` only. See [RBAC](rbac.md#subject-type).
+
+A browser client has no `as()`. The subject is the user of the access token.
+
+## Get the current subject
+
+`currentSubjectId()` calls `permissions.current_subject_id()`. `currentSubjectType()` calls `permissions.current_subject_type()`. These methods are methods of the client itself. They are not in the `rbac` namespace or the `fga` namespace.
+
+They exist on `createClient`, on `createServerClient` and on the client that `as()` returns. `currentSubjectId()` returns `null` when there is no subject. A server client without `as()` has no subject. A browser client with the anon key has no subject.
 
 ```ts
 import pg from 'pg'
@@ -150,28 +118,77 @@ const { data: id } = await team.currentSubjectId() // 'eng'
 const { data: type } = await team.currentSubjectType() // 'team'
 ```
 
-On a browser client, the subject is the user of the access token. With the anon key, `currentSubjectId()` returns `null`.
+## Results and errors
+
+Each method returns a `Promise` of `{ data, error }`. Exactly one of the two is `null`. A method does not throw for a database error. It returns the error in `error`.
+
+To throw the error, pass `throwOnError: true` in the options of `createClient` or `createServerClient`:
 
 ```ts
-import { createClient } from 'permissions'
+import pg from 'pg'
+import { createServerClient } from 'permissions'
+
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+})
+const permissions = createServerClient(pool, {
+  throwOnError: true,
+})
+```
+
+`PermissionsError` extends `Error`. It has the fields `message`, `details`, `hint` and `code`, as the `PostgrestError` of supabase-js has. It also has `reason`, which is the `DETAIL` code, parsed.
+
+| Cause | Error class | `reason` |
+| --- | --- | --- |
+| An RBAC error of the extension, such as `rbac:unknown_role role='admn'` | `PermissionsError` | `{ model: 'rbac', code: 'unknown_role', context: { role: 'admn' } }` |
+| An OpenFGA error of the extension, such as `openfga:2001 authorization_model_not_found` | `PermissionsError` | `{ model: 'openfga', code: 2001, name: 'authorization_model_not_found' }` |
+| An error from Postgres, such as `42501` or `57014` | `PermissionsError` | `null` |
+| The request did not reach the server, or the database connection failed | `PermissionsFetchError` | `null` |
+| An error status from PostgREST, with no PostgREST error body | `PermissionsHttpError`, with `status` and `body` | `null` |
+| A wrong function name or argument name | A plain `Error`. The client always throws it. | Not applicable |
+
+[Errors and limits](errors-and-limits.md) lists each `DETAIL` code.
+
+Use the type guards `isPermissionsError`, `isRbacError` and `isFgaError` to test an error. `isRbacError` takes an optional code. `isFgaError` takes an optional number or name.
+
+```ts
+import { createClient, isFgaError, isRbacError } from 'permissions'
 
 const SUPABASE_URL = 'https://your-project.supabase.co'
 const SUPABASE_ANON_KEY = 'your-anon-key'
 
-async function getAccessToken(): Promise<string> {
-  return 'the-jwt-of-the-signed-in-user'
-}
+const permissions = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 
-const permissions = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  accessToken: getAccessToken,
+const { error } = await permissions.fga.check({
+  relation: 'viewr',
+  object: 'document:1',
 })
 
-// The id of the subject: 'alice', or null.
-const { data: id } = await permissions.currentSubjectId()
-
-// The type of the subject: 'user'.
-const { data: type } = await permissions.currentSubjectType()
+if (isFgaError(error, 2000)) {
+  console.log(error.hint) // Did you mean 'viewer'? ...
+} else if (isRbacError(error, 'unknown_role')) {
+  console.log(error.reason.context.role)
+}
 ```
+
+## Methods
+
+The tables show the SQL function that each method calls, and the type of `data`. For an example of each method, see [RBAC](rbac.md) and [The OpenFGA model](fga.md).
+
+### Client methods
+
+These methods answer for the current subject. They exist on both entry points. On a server, `as({ id })` sets the subject.
+
+| Method | SQL function | `data` |
+| --- | --- | --- |
+| `rbac.hasPermission({ permission, scope? })` | `rbac_has_permission` | `boolean` |
+| `rbac.hasRole({ role, scope? })` | `rbac_has_role` | `boolean` |
+| `rbac.scopesWithPermission({ permission })` | `rbac_scopes_with_permission` | `string[]` |
+| `fga.check({ relation, object })` | `fga_check_current` | `boolean` |
+| `fga.listObjects({ type, relation })` | `fga_list_objects_current` | `string[]`, as `type:id` |
+| `fga.listObjects({ type, relation, idsOnly: true })` | `fga_list_object_ids_current` | `string[]`, as `id` |
+| `currentSubjectId()` | `current_subject_id` | `string`, or `null` when there is no subject |
+| `currentSubjectType()` | `current_subject_type` | `string`. The default is `'user'`. |
 
 ### Admin methods
 
@@ -217,46 +234,7 @@ The FGA methods use the names of the OpenFGA SDK, in camel case. The client maps
 | `userId` | `user_id` |
 | `onDuplicate`, `onMissing` | `on_duplicate` and `on_missing` in the `writes` and `deletes` arguments |
 
-A scope of `null` or `undefined` means app-wide.
-
-## Errors
-
-A method does not throw for a database error. It returns the error in `error`. To throw the error, pass `throwOnError: true` in the options.
-
-`PermissionsError` extends `Error`. It has the fields `message`, `details`, `hint` and `code`, as the `PostgrestError` of supabase-js has. It also has `reason`, which is the `DETAIL` code, parsed.
-
-| Cause | Error class | `reason` |
-| --- | --- | --- |
-| An RBAC error of the extension, such as `rbac:unknown_role role='admn'` | `PermissionsError` | `{ model: 'rbac', code: 'unknown_role', context: { role: 'admn' } }` |
-| An OpenFGA error of the extension, such as `openfga:2001 authorization_model_not_found` | `PermissionsError` | `{ model: 'openfga', code: 2001, name: 'authorization_model_not_found' }` |
-| An error from Postgres, such as `42501` or `57014` | `PermissionsError` | `null` |
-| The request did not reach the server, or the database connection failed | `PermissionsFetchError` | `null` |
-| An error status from PostgREST, with no PostgREST error body | `PermissionsHttpError`, with `status` and `body` | `null` |
-| A wrong function name or argument name | A plain `Error`. The client always throws it. | Not applicable |
-
-[Errors and limits](errors-and-limits.md) lists each `DETAIL` code.
-
-Use the type guards `isPermissionsError`, `isRbacError` and `isFgaError` to test an error. `isRbacError` takes an optional code. `isFgaError` takes an optional number or name.
-
-```ts
-import { createClient, isFgaError, isRbacError } from 'permissions'
-
-const SUPABASE_URL = 'https://your-project.supabase.co'
-const SUPABASE_ANON_KEY = 'your-anon-key'
-
-const permissions = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-
-const { error } = await permissions.fga.check({
-  relation: 'viewr',
-  object: 'document:1',
-})
-
-if (isFgaError(error, 2000)) {
-  console.log(error.hint) // Did you mean 'viewer'? ...
-} else if (isRbacError(error, 'unknown_role')) {
-  console.log(error.reason.context.role)
-}
-```
+A scope of `null` or `undefined` means app-wide. The client does not change the keys inside `context`, in a tuple condition, or in a model.
 
 ## Other imports
 
@@ -272,12 +250,6 @@ const pool = new pg.Pool({
 })
 const transport = sqlTransport(pool)
 const rbac = new RbacClient({ transport })
-
-await rbac.admin.assignRole({
-  userId: 'alice',
-  role: 'editor',
-  scope: 'acme',
-})
 ```
 
 To catch a wrong name at build time, pass a type argument, for example `createServerClient<{ roles: 'viewer' | 'editor' }>(pool)`.

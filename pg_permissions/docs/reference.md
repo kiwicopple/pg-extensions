@@ -6,6 +6,8 @@ Call each function with named arguments, as in the examples. The names in this p
 
 For an explanation of the models, read [RBAC](rbac.md) and [The OpenFGA model](fga.md). For the errors, read [Errors and limits](errors-and-limits.md).
 
+Each function has a line that names the method of the [JavaScript client](javascript.md) that calls it. The `...` in a method stands for the options `contextualTuples`, `context` and `authorizationModelId`.
+
 The examples run in order. Each example uses the data that the examples before it wrote. Use a test database for them.
 
 ## Groups
@@ -69,6 +71,8 @@ Returns the id of the current subject, or `null` when there is none. The id come
 
 Errors: none.
 
+JavaScript: `currentSubjectId()`.
+
 ```sql
 select permissions.current_subject_id();
 -- null: no JWT, no setting
@@ -90,6 +94,8 @@ Returns the type of the current subject. The value is `user`, unless the setting
 
 Errors: none.
 
+JavaScript: `currentSubjectType()`.
+
 ```sql
 select permissions.current_subject_type();   -- user
 ```
@@ -106,6 +112,8 @@ permissions.delete_subject(
 Removes a subject from every model. For the type `user`, it deletes the RBAC assignments of the subject. For every type, it deletes each tuple that names the subject as the subject, as a userset of the subject, or as the object. It returns the number of rows that it deleted. Admin only.
 
 Errors: none.
+
+JavaScript: `admin.deleteSubject({ type, id })`.
 
 ```sql
 select permissions.rbac_create_role(
@@ -141,6 +149,8 @@ Creates a role with the permissions that it grants and the roles that it inherit
 
 Errors: `rbac:role_exists` (`23505`) when the role exists. `rbac:name_overlap` (`22023`) when a name is both a role and a permission. `rbac:unknown_role` (`22023`) when `inherits` names an unknown role. `rbac:null_argument` (`22004`) when `role`, `permissions` or `inherits` is `null`. An empty array, `'{}'`, is valid for `permissions` and `inherits`.
 
+JavaScript: `rbac.admin.createRole({ role, permissions, inherits? })`.
+
 ```sql
 select permissions.rbac_create_role(
   role => 'viewer',
@@ -163,6 +173,8 @@ Deletes a role and its assignments. You cannot drop a role that another role inh
 
 Errors: `rbac:unknown_role` (`22023`) for an unknown role. `rbac:role_in_use` (`2BP01`) when another role inherits the role.
 
+JavaScript: `rbac.admin.dropRole({ role })`.
+
 ```sql
 select permissions.rbac_create_role(
   role => 'temp',
@@ -184,6 +196,8 @@ permissions.rbac_assign_role(
 Gives a user a role. When `scope` is `null`, the role applies app-wide. Otherwise it applies in that scope only. A repeated call changes nothing.
 
 Errors: `rbac:unknown_role` (`22023`) for an unknown role. `rbac:null_argument` (`22004`) when `user_id` is `null`.
+
+JavaScript: `rbac.admin.assignRole({ userId, role, scope? })`.
 
 ```sql
 select permissions.rbac_assign_role(
@@ -216,6 +230,8 @@ Removes an assignment. The call changes nothing when the user does not have the 
 
 Errors: `rbac:null_argument` (`22004`) when `user_id` or `role` is `null`.
 
+JavaScript: `rbac.admin.unassignRole({ userId, role, scope? })`.
+
 ```sql
 select permissions.rbac_unassign_role(
   user_id => 'bob',
@@ -236,6 +252,8 @@ permissions.rbac_user_permissions(
 Returns the permissions of a user, sorted, with inherited permissions. When `scope` is `null`, it returns the app-wide permissions. Otherwise it returns the permissions in that scope. The result is `{}` when the user has none.
 
 Errors: none.
+
+JavaScript: `rbac.admin.userPermissions({ userId, scope? })`.
 
 ```sql
 select permissions.rbac_user_permissions(user_id => 'alice');
@@ -260,6 +278,8 @@ Returns the ids of the users that have the role. The result includes users that 
 
 Errors: none.
 
+JavaScript: `rbac.admin.usersWithRole({ role, scope? })`.
+
 ```sql
 select permissions.rbac_users_with_role(role => 'viewer');
 -- alice: through editor
@@ -283,6 +303,8 @@ permissions.fga_write_authorization_model(model jsonb) returns text
 Validates a model in the JSON format of the OpenFGA WriteAuthorizationModel request. Compiles it, and makes it the latest model. Returns the id of the model, a ULID.
 
 Errors: `openfga:2000`, `2047`, `2050`, `2056` and `2057`.
+
+JavaScript: `fga.admin.writeAuthorizationModel(model)`.
 
 ```sql
 select permissions.fga_write_authorization_model(
@@ -320,6 +342,8 @@ Returns one model as JSON, with the key `id`. Without `model_id`, it returns the
 
 Errors: `openfga:2001` for an unknown id. `2020` when no model exists.
 
+JavaScript: `fga.admin.readAuthorizationModel({ authorizationModelId? })`.
+
 ```sql
 select permissions.fga_read_authorization_model(
   model_id => :'model_id'
@@ -339,6 +363,8 @@ Lists every model, newest first.
 
 Errors: none.
 
+JavaScript: `fga.admin.readAuthorizationModels()`.
+
 ```sql
 select id from permissions.fga_read_authorization_models();
 ```
@@ -352,6 +378,8 @@ permissions.fga_delete_store() returns void
 Deletes every model and every tuple.
 
 Errors: none.
+
+JavaScript: `fga.admin.deleteStore()`.
 
 The example uses a transaction and rolls it back:
 
@@ -375,6 +403,8 @@ permissions.fga_write(
 Writes and deletes tuples in one transaction. Each of `writes` and `deletes` is an array of tuple keys, or an object `{"tuple_keys": [...]}` with the option `on_duplicate` (writes) or `on_missing` (deletes). Pass at least one of them. The call accepts at most 100 tuple keys.
 
 Errors: `openfga:2000`, `2001`, `2003`, `2004`, `2017`, `2020`, `2027` and `2053`.
+
+JavaScript: `fga.admin.write({ writes?, deletes?, onDuplicate?, onMissing?, authorizationModelId? })`.
 
 ```sql
 select permissions.fga_write(
@@ -417,6 +447,8 @@ Writes one tuple. It does nothing when the tuple exists. The extension validates
 
 Errors: `openfga:2000`, `2017`, `2020` and `2027`.
 
+JavaScript: `fga.admin.writeTuple({ user, relation, object })`.
+
 ```sql
 select permissions.fga_write_tuple(
   subject => 'user:carol',
@@ -438,6 +470,8 @@ permissions.fga_delete_tuple(
 Deletes one tuple. It does nothing when the tuple does not exist. The tuple key must be well formed. The latest model does not need to accept it.
 
 Errors: `openfga:2000` and `2020`.
+
+JavaScript: `fga.admin.deleteTuple({ user, relation, object })`.
 
 ```sql
 select permissions.fga_delete_tuple(
@@ -463,6 +497,8 @@ permissions.fga_read(
 Returns one page of stored tuples, in the order of the writes. The `object` filter is `type:id` or `type:`. `page_size` is 1 to 100, and the default is 50. The column `continuation_token` is `''` on the last page. To get the next page, pass the token back as the argument `continuation_token`.
 
 Errors: `openfga:2000` for a `page_size` outside the range or a token with an invalid format. `2007` for a token that the extension does not know.
+
+JavaScript: `fga.admin.read({ object?, relation?, user?, pageSize?, continuationToken? })`.
 
 ```sql
 select
@@ -494,6 +530,8 @@ Returns `true` when the subject has the relation to the object. `contextual_tupl
 
 Errors: `openfga:2000`, `2001`, `2002`, `2020` and `2027`.
 
+JavaScript: `fga.admin.check({ user, relation, object, ... })`.
+
 ```sql
 select permissions.fga_check(
   subject => 'user:alice',
@@ -519,6 +557,8 @@ permissions.fga_list_objects(
 Returns the objects of one type that the subject has the relation to, as `type:id` strings. At most 1,000 results. The order is not defined.
 
 Errors: `openfga:2000`, `2001`, `2002`, `2020`, `2021`, `2022` and `2027`.
+
+JavaScript: `fga.admin.listObjects({ user, type, relation, ... })`.
 
 ```sql
 select permissions.fga_list_objects(
@@ -546,6 +586,8 @@ Returns the subjects that have the relation to the object. Each filter in `user_
 
 Errors: `openfga:2000`, `2001`, `2002`, `2020`, `2021`, `2022` and `2027`.
 
+JavaScript: `fga.admin.listUsers({ object, relation, userFilters, ... })`.
+
 ```sql
 select permissions.fga_list_users(
   object => 'document:1',
@@ -572,6 +614,8 @@ Returns `true` when the current subject has the permission, through a role that 
 
 Errors: none.
 
+JavaScript: `rbac.hasPermission({ permission, scope? })`.
+
 ```sql
 select set_config('permissions.subject_id', 'alice', false);
 select permissions.rbac_has_permission(permission => 'documents.edit');
@@ -595,6 +639,8 @@ permissions.rbac_has_role(
 Returns `true` when the current subject has the role, directly or through a role that inherits it. The scope rule is the same as for `rbac_has_permission`. An unknown role gives `false`.
 
 Errors: none.
+
+JavaScript: `rbac.hasRole({ role, scope? })`.
 
 ```sql
 select permissions.rbac_has_role(role => 'viewer');
@@ -621,6 +667,8 @@ Do not pass `plan_time_guard`. The extension ignores it. Its default value makes
 
 Errors: none.
 
+JavaScript: `rbac.scopesWithPermission({ permission })`.
+
 ```sql
 select permissions.rbac_scopes_with_permission(
   permission => 'documents.read'
@@ -640,6 +688,8 @@ permissions.fga_check_current(
 The same as `fga_check`, for the current subject. It takes no contextual tuples and no `context`. It returns `false` when there is no subject, no model, or the subject type is not in the model.
 
 Errors: `openfga:2000` for a malformed object, an unknown type or an unknown relation. `2002` when the answer needs 25 levels or more.
+
+JavaScript: `fga.check({ relation, object })`.
 
 ```sql
 select permissions.fga_check_current(
@@ -662,6 +712,8 @@ The same as `fga_list_objects`, for the current subject. It has no cap on the nu
 
 Errors: `openfga:2000` and `2002`.
 
+JavaScript: `fga.listObjects({ type, relation })`.
+
 ```sql
 select permissions.fga_list_objects_current(
   type => 'document',
@@ -682,6 +734,8 @@ permissions.fga_list_object_ids_current(
 The same as `fga_list_objects_current`, but each result is the id without the type. Use it to compare with the id column of a table. It has no cap on the number of results.
 
 Errors: `openfga:2000` and `2002`.
+
+JavaScript: `fga.listObjects({ type, relation, idsOnly: true })`.
 
 ```sql
 select permissions.fga_list_object_ids_current(

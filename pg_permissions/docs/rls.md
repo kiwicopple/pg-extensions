@@ -6,6 +6,8 @@ The two models are separate. A role does not give a relation, and a tuple does n
 
 To give access to single objects in an app that started with roles, add one more policy. You do not need to migrate data.
 
+A policy runs in the database. To ask the same questions from application code, see [Use from JavaScript](rbac.md#use-from-javascript) in the RBAC page and [Use from JavaScript](fga.md#use-from-javascript) in the OpenFGA page.
+
 ## Before you start
 
 Run the examples in order, in an empty database, as the role that installed the extension (the admin). Examples that start with `set local role authenticated` show what a client sees. The [RBAC page](rbac.md#before-you-start) explains the `anon`, `authenticated` and `service_role` roles.

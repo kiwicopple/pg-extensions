@@ -18,14 +18,14 @@ Node 20+ (developed on Node 23, npm 10). Stack: Astro 7, Starlight 0.42, `starli
 
 | Path | Source | In git? |
 | --- | --- | --- |
-| `src/content/docs/**/*.md` | Copied from `../pg_permissions` by `scripts/sync.mjs` | No (gitignored). Never edit. |
+| `src/content/docs/**/*.md`, and the `.mdx` of pages with tabs (`rbac`, `fga`, `conditions`) | Copied from `../pg_permissions` by `scripts/sync.mjs` | No (gitignored). Never edit. |
 | `src/data/bench/*.json` | Copied from `../pg_permissions/bench/baselines/data/*.json` | No (gitignored) |
 | `src/data/workloads.generated.json` | First sentence of each workload SQL header | No (gitignored) |
 | `src/content/docs/**/*.mdx`, `src/components`, `src/lib`, `src/styles` | Hand-written | Yes |
 | `src/data/fixture/*.json` | Dev fixture, generated once from `bench/baselines/*.md` by `npm run fixture` | Yes |
 | `src/data/workload-labels.json` | Human labels and groups for workload names | Yes |
 
-Rule: synced pages are `.md`, hand-written pages are `.mdx`, and `src/content/docs/**/*.md` is gitignored. So "generated" is a file-type convention, and every generated page also carries a `GENERATED ... Do not edit` comment and an Edit-page link to its real source.
+Rule: synced pages are `.md`, hand-written pages are `.mdx`, and `src/content/docs/**/*.md` is gitignored. One exception: a synced page that has code tab groups (adjacent fenced blocks with `tab="SQL"` and `tab="JavaScript"` meta, see `STYLE.md`) is written as `.mdx` with Starlight `Tabs` (`syncKey="lang"`). Its `.mdx` file is gitignored by name in `docs/.gitignore`: add a line there when another page gets tabs. So "generated" is a file-type convention, and every generated page also carries a `GENERATED ... Do not edit` comment and an Edit-page link to its real source.
 
 ## Sync (`scripts/sync.mjs`)
 
