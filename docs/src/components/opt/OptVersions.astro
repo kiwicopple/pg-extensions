@@ -29,7 +29,7 @@ const spread = rows
 const worst = spread[0];
 const within = spread.filter((x) => x.ratio <= 1.3).length;
 const takeaway = worst
-	? `${within} of ${spread.length} engine and workload pairs have a speedup within 30% across Postgres ${pairs.map((p) => p.major).join(', ')}. The biggest spread is ${worst.r.d.toUpperCase()} ${worst.r.c.cls.toLowerCase()}: ${times(worst.lo.r)} on ${worst.lo.major} against ${times(worst.hi.r)} on ${worst.hi.major} (${fmt(worst.lo.before)} to ${fmt(worst.lo.after)} ms against ${fmt(worst.hi.before)} to ${fmt(worst.hi.after)} ms).`
+	? `${within} of ${spread.length} design and workload pairs have a speedup within 30% across Postgres ${pairs.map((p) => p.major).join(', ')}. The biggest spread is ${worst.r.d.toUpperCase()} ${worst.r.c.cls.toLowerCase()}: ${times(worst.lo.r)} on ${worst.lo.major} against ${times(worst.hi.r)} on ${worst.hi.major} (${fmt(worst.lo.before)} to ${fmt(worst.lo.after)} ms against ${fmt(worst.hi.before)} to ${fmt(worst.hi.after)} ms).`
 	: '';
 ---
 
@@ -43,7 +43,7 @@ const takeaway = worst
 			<div class="tbl-wrap" style="overflow-x:auto">
 				<table>
 					<thead>
-						<tr><th>Workload</th><th>Engine</th>{pairs.map((p) => <th>PG {p.major}</th>)}</tr>
+						<tr><th>Workload</th><th>Design</th>{pairs.map((p) => <th>PG {p.major}</th>)}</tr>
 					</thead>
 					<tbody>
 						{rows.map((r) => (

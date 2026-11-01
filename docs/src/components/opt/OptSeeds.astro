@@ -33,13 +33,13 @@ const takeaway = [
 		>
 			<Legend slot="legend" extra={[{ label: 'before', kind: 'before' }, { label: 'after', kind: 'after' }]} />
 			<p class="viz-panel-title">Seed time</p>
-			<Dumbbell rows={timeRows} unit="s" context="Seed time before and after the optimizations, by engine" />
+			<Dumbbell rows={timeRows} unit="s" context="Seed time before and after the optimizations, by design" />
 			<p class="viz-panel-title">Storage</p>
-			<Dumbbell rows={sizeRows} unit="MB" context="Storage after the seed, before and after the optimizations, by engine" />
+			<Dumbbell rows={sizeRows} unit="MB" context="Storage after the seed, before and after the optimizations, by design" />
 			<Fragment slot="table">
 				<table>
 					<thead>
-						<tr><th>Measure</th><th>Configuration</th><th>Engine</th><th>Before</th><th>After</th><th>Change</th></tr>
+						<tr><th>Measure</th><th>Configuration</th><th>Design</th><th>Before</th><th>After</th><th>Change</th></tr>
 					</thead>
 					<tbody>
 						{[...ct, ...cs].map((x) => (

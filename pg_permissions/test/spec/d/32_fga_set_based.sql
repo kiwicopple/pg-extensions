@@ -1,5 +1,5 @@
 -- Goal: ListObjects and ListUsers on `base but not subtract` evaluated
--- set-based (designs/d-per-model.md §5: the walk to the base minus the walk to
+-- set-based (research/designs/d-per-model.md §5: the walk to the base minus the walk to
 -- the subtract) give exactly the per-candidate answer (_fga_rec on every
 -- candidate, which is also what Check computes): for a computed and a
 -- tupleToUserset subtract, a cyclic team graph and a chain in the base,

@@ -1,4 +1,4 @@
--- Goal: the public API's names follow one rule (DECISION.md, "API naming
+-- Goal: the public API's names follow one rule (research/decision.md, "API naming
 -- (session 5)"). A model-specific function carries its model's prefix
 -- (rbac_ or fga_); no prefix means shared across models (current_subject_id,
 -- current_subject_type, delete_subject); a leading _ is internal. Parameters

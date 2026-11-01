@@ -1,9 +1,9 @@
--- Goal: the rbac preset enforces access through RLS policies (PLAN.md §4, §6 RBAC scenario step 2 and 3)
+-- Goal: the rbac preset enforces access through RLS policies (research/plan.md §4, §6 RBAC scenario step 2 and 3)
 -- Runs as the non-superuser role `authenticated`, the way Supabase clients do.
 \ir ../fixtures/ids.sql
 \ir ../fixtures/rbac_roles.sql
 
--- app-wide roles: policies from PLAN.md §6
+-- app-wide roles: policies from research/plan.md §6
 create table public.handbook (id serial primary key, title text not null);
 insert into public.handbook (title) values ('welcome'), ('holidays'), ('expenses');
 alter table public.handbook enable row level security;

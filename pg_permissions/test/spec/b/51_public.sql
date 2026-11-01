@@ -1,4 +1,4 @@
--- Goal: public access, user:* (PLAN.md §10 G11)
+-- Goal: public access, user:* (research/plan.md §10 G11)
 -- Design B: public access is a policy with no role requirement on one
 -- resource (Cedar's `permit (principal, action, resource == Document::"x")`).
 -- It applies to every non-null user subject; revoking it is drop_policy.

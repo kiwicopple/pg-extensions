@@ -1,4 +1,4 @@
--- Benchmark seed, part 3a (Design C): folders for parent inheritance (PLAN.md
+-- Benchmark seed, part 3a (Design C): folders for parent inheritance (research/plan.md
 -- §10 G10), with the two-arm projection policy. Design C's native API
 -- (apply_model, set_parent, accessible). bench/run.sh loads it after the
 -- share_* workloads, because it replaces the documents select policy;

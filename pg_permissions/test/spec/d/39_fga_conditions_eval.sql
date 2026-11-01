@@ -1,5 +1,5 @@
 -- Goal: conditioned tuples behave as in OpenFGA v1.22.1 across the API
--- (designs/d-conditions.md sections 3 and 7; probe answers Pn from
+-- (research/designs/d-conditions.md sections 3 and 7; probe answers Pn from
 -- test/fga_abac/probe.sh): Write validates a tuple's condition (2000), Read
 -- returns it, deletes ignore it; contextual tuples carry conditions (Check
 -- 2027, lists 2000); the error rule per API (P14 to P16); stale stored
@@ -106,7 +106,7 @@ select tap.ok(fga_test.code_of($$ select permissions.fga_list_objects('user:cid'
 select tap.ok(fga_test.code_of($$ select permissions.fga_list_users('doc:7', 'viewer', '{user}', '[{"user": "user:cid", "relation": "viewer", "object": "doc:7", "condition": {"name": "nope"}}]') $$)
               ~ '^openfga:2000 ', 'ListUsers: 2000 as well');
 
--- the error rule (designs/d-conditions.md section 3, rule 7)
+-- the error rule (research/designs/d-conditions.md section 3, rule 7)
 select permissions.fga_write('[{"user": "group:x#member", "relation": "viewer", "object": "doc:2", "condition": {"name": "cx"}}]');
 select tap.ok(fga_test.code_of($$ select permissions.fga_check('user:jon', 'viewer', 'doc:2') $$)
               ~ '^openfga:2000 failed to evaluate relationship condition: ''cx'' - context is missing parameters ''\[x\]''',
@@ -180,7 +180,7 @@ select tap.is(permissions.fga_check('user:lee', 'viewer', 'doc:5'), true, 'a con
 select tap.is(array(select permissions.fga_list_users('doc:5', 'viewer', '{user}')), '{user:lee}'::text[], '... ListUsers');
 select tap.is(array(select permissions.fga_list_objects('user:lee', 'doc', 'viewer')), '{doc:5}'::text[], '... ListObjects');
 
--- a step evaluates a condition once per distinct context (designs/d-conditions.md, decision 2)
+-- a step evaluates a condition once per distinct context (research/designs/d-conditions.md, decision 2)
 select permissions.fga_write((select jsonb_agg(jsonb_build_object('user', 'user:wide', 'relation', 'viewer', 'object', 'doc:w' || g,
                                                                   'condition', jsonb_build_object('name', 'cx')))
                               from generate_series(1, 50) g));

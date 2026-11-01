@@ -32,7 +32,7 @@ if (ref) {
 		})
 		.filter(Boolean);
 	if (parts.length >= 2)
-		takeaway = `Per-document parent links dominate both costs at ${ref.scale}/${ref.shape}: ${parts.join(', ')}. The two-arm projection needs none of it. The other phases are small by comparison.`;
+		takeaway = `Per-document parent links are the largest part of both costs at ${ref.scale}/${ref.shape}: ${parts.join(', ')}. The two-arm projection needs none of them. The other phases are small in comparison.`;
 }
 ---
 
@@ -40,7 +40,7 @@ if (ref) {
 	configs.length ? (
 		<Frame
 			title="Seed time and storage, per phase"
-			subtitle="Left: native-API load time per phase (seconds, log axis). Right: size of the permissions tables after each phase (cumulative MB, after VACUUM FULL). Proj. = parents seeded through the folder_id projection; Links = a parent row per document."
+			subtitle="Left: native-API load time for each phase (seconds, log axis). Right: size of the permissions tables after each phase (cumulative MB, after VACUUM FULL). Proj. is parents seeded through the folder_id projection. Links is a parent row for each document."
 			takeaway={takeaway}
 			source={[{ href: comparisonLink(ref?.scale, ref?.shape), label: 'COMPARISON.md (local PG 16, before optimization: storage and seed cost)' }]}
 		>

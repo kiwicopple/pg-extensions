@@ -1,4 +1,4 @@
--- Goal: every example in usage/rls.md ("RLS with both models") works as written.
+-- Goal: every example in docs/rls.md ("RLS with both models") works as written.
 --
 -- This file mirrors that page, section by section and in the same order, so the
 -- state one section builds is what the next one uses. When you change an

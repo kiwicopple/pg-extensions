@@ -30,15 +30,15 @@ if (scales.length >= 2) {
 	};
 	const sh = designs.map((d) => g('share_select_page', d)).filter(Boolean).join(', ');
 	const pg = designs.map((d) => g('parents_select_page', d)).filter(Boolean).join(', ');
-	takeaway = `From ${SCALE_DOCS[first]} to ${SCALE_DOCS[last]} documents, the sharing page grows slowly (${sh}). The single-branch parents page tracks the number of visible ids and grows with it (${pg}). RBAC stays close to flat.`;
+	takeaway = `From ${SCALE_DOCS[first]} to ${SCALE_DOCS[last]} documents, the sharing page grows slowly (${sh}). The single-branch parents page follows the number of visible ids and grows with it (${pg}). The RBAC workloads stay almost flat.`;
 }
 ---
 
 {
 	panels.length && scales.length >= 2 ? (
 		<Frame
-			title="Scaling from 10k to 1M documents"
-			subtitle={`${s!.label}: p50 latency, default shape, log axis. x = documents in the table.${otherThanPrimary ? ` The small and medium default scales exist only in this series (${primary?.label} has the large default only), so this chart is not drawn from the same runs as the others on this page, and its numbers predate the optimization pass.` : ''}`}
+			title="Scale from 10k to 1M documents"
+			subtitle={`${s!.label}: p50 latency, default shape, log axis. The x axis is the number of documents in the table.${otherThanPrimary ? ` The small and medium default scales exist only in this series (${primary?.label} has only the large default). So this chart does not use the same runs as the other charts on this page, and its numbers are from before the optimization pass.` : ''}`}
 			takeaway={takeaway}
 			source={[
 				{ href: comparisonLink('large', 'default'), label: 'COMPARISON.md (local PG 16)' },
@@ -75,7 +75,7 @@ if (scales.length >= 2) {
 		</Frame>
 	) : (
 		<div class="viz-note">
-			<p>Scaling needs default-shape runs at two or more scales; not available in the current data.</p>
+			<p>The scale chart needs default-shape runs at two or more scales. The current data does not have them.</p>
 		</div>
 	)
 }

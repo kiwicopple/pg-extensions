@@ -1,4 +1,4 @@
--- Goal: rbac preset, managing roles and assignments safely (PLAN.md §6)
+-- Goal: rbac preset, managing roles and assignments safely (research/plan.md §6)
 \ir ../fixtures/ids.sql
 \ir ../fixtures/rbac_roles.sql
 select permissions.assign_role(:'bob', 'editor');

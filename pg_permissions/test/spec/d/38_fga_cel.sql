@@ -1,4 +1,4 @@
--- Goal: the CEL language a condition can use (designs/d-conditions.md section
+-- Goal: the CEL language a condition can use (research/designs/d-conditions.md section
 -- 4, tiers 1 and 2) evaluates as OpenFGA v1.22.1 (cel-go v0.31) does, through
 -- the API: each row writes a model whose doc#viewer is [user with cond], the
 -- tuple doc:1#viewer@user:u with that condition (and the row's stored
@@ -7,7 +7,7 @@
 -- validation_error), or 2056 (the model is refused). Rows marked Pn are the
 -- server's answers from test/fga_abac/probe.sh; the abac oracle
 -- (63_fga_abac_*) covers tier 1 through the walks. Deviations are noted
--- where they apply (designs/d-conditions.md section 6, Precision).
+-- where they apply (research/designs/d-conditions.md section 6, Precision).
 \ir ../../fixtures/fga_suite.sql
 
 -- 'int', 'list<string>', 'map<int>', 'any', ... as an OpenFGA parameter type

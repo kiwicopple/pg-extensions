@@ -1,4 +1,4 @@
--- Goal: forbid beats grants, including parent-derived ones (PLAN.md §10, G12)
+-- Goal: forbid beats grants, including parent-derived ones (research/plan.md §10, G12)
 -- Design C: a permission can list exclusion relations ("but_not"). A forbid is a
 -- grant of such a relation (here document#blocked), so it is admin-only like
 -- every grant. A forbid on an object also applies to everything that inherits

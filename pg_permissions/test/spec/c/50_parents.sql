@@ -1,4 +1,4 @@
--- Goal: parent inheritance org -> folder -> document (PLAN.md §10, G10)
+-- Goal: parent inheritance org -> folder -> document (research/plan.md §10, G10)
 -- Design C: a type declares its parent types ("parent": [...]) and a permission
 -- inherits itself from the parent with "parent->P". Parent links are set with
 -- set_parent() (one parent per object). Reads stay flat: the object, its parent

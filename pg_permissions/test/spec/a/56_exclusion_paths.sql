@@ -9,7 +9,7 @@
 -- decoys the first steps run backwards from the object, so the backward direction
 -- is the one under test.
 --
--- Exclusion semantics (designs/a-tuple-core.md section 12.3): a `blocked` tuple on an
+-- Exclusion semantics (research/designs/a-tuple-core.md section 12.3): a `blocked` tuple on an
 -- object removes that object's relation for that user, whatever path leads there,
 -- and everything derived through it. A direct grant on a child still applies.
 

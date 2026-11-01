@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Ask OpenFGA v1.22.1 itself the condition questions abac_tests.yaml doesn't
-# pin, for designs/d-conditions.md (section 3, "What the server says"). A
+# pin, for research/designs/d-conditions.md (section 3, "What the server says"). A
 # design aid, not part of the test run: it prints one line per probe; the
 # answers are recorded in the design doc, and phase 4's in-house specs should
 # pin each one.
@@ -336,7 +336,7 @@ for v in '10' '-1' '"10"' '1e19' '18446744073709551615'; do
         '{"tuple_key":{"user":"user:jon","relation":"uns","object":"doc:1"},"context":{"x":'"$v"'}}' .allowed
 done
 
-# Phase 4, steps 3 to 6 (P33 to P44 in designs/d-conditions.md): the request's
+# Phase 4, steps 3 to 6 (P33 to P44 in research/designs/d-conditions.md): the request's
 # validation of conditions, what the type checker accepts, the cost limit's
 # threshold, the no-parameter quirk, getters and Read.
 new_store

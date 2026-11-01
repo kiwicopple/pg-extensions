@@ -1,4 +1,4 @@
--- Goal: public access with a `user:*` wildcard subject; a null subject is denied (PLAN.md §10 G11)
+-- Goal: public access with a `user:*` wildcard subject; a null subject is denied (research/plan.md §10 G11)
 -- PROVISIONAL: uses Design A's zanzibar-level API. A tuple whose subject is
 -- `user:*` is reached by every non-null `user` subject.
 \ir ../../fixtures/ids.sql

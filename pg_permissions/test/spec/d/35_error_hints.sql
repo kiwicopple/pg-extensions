@@ -1,5 +1,5 @@
--- Goal: every error the extension raises is descriptive (DECISION.md, end of
--- session 4, point 5; designs/d-per-model.md section 7). One row per raise
+-- Goal: every error the extension raises is descriptive (research/decision.md, end of
+-- session 4, point 5; research/designs/d-per-model.md section 7). One row per raise
 -- site, rbac_* and fga_* alike: the statement that triggers it, the SQLSTATE,
 -- the DETAIL (OpenFGA's 'openfga:<code> <name>' on fga_* errors, none on
 -- rbac_*), a pattern for the MESSAGE (it names the offending values) and the
@@ -76,6 +76,16 @@ insert into sites (site, stmt, st, detail, msg, hint) values
  '22023', null, '^unknown role ''admn''$', '^Existing roles: editor, viewer\.$'),
 ('rbac_assign_role: null user', $$ select permissions.rbac_assign_role(null, 'viewer') $$,
  '22004', null, '^user_id is required to assign role ''viewer''$', 'rbac_assign_role\(user_id => id::text, role => ''viewer'', scope => org_id::text\)'),
+('rbac_create_role: null role', $$ select permissions.rbac_create_role(null, '{x.read}') $$,
+ '22004', null, '^role is required to create a role$', 'rbac_create_role\(role => ''editor'', permissions => ''\{documents.edit\}''\)'),
+('rbac_create_role: null permissions', $$ select permissions.rbac_create_role('auditor', null) $$,
+ '22004', null, '^permissions is required to create role ''auditor''$', '''\{\}'' for a role that only inherits'),
+('rbac_create_role: null inherits', $$ select permissions.rbac_create_role('auditor', '{audit.read}', null) $$,
+ '22004', null, '^inherits must not be null for role ''auditor''$', 'or omit inherits'),
+('rbac_unassign_role: null user', $$ select permissions.rbac_unassign_role(null, 'viewer') $$,
+ '22004', null, '^user_id is required to unassign role ''viewer''$', 'rbac_unassign_role\(user_id => id::text, role => ''viewer'', scope => org_id::text\)'),
+('rbac_unassign_role: null role', $$ select permissions.rbac_unassign_role('u1', null) $$,
+ '22004', null, '^role is required to unassign a role$', 'rbac_unassign_role\(user_id => id::text, role => ''editor''\)'),
 -- users and objects (validation.ValidateUser / ValidateObject)
 ('parse_user: malformed', $$ select permissions.fga_check('anne', 'viewer', 'document:1') $$,
  '22023', 'openfga:2000 validation_error', '^invalid ''user'' value: anne: ', '''user:anne'''),
@@ -99,7 +109,7 @@ insert into sites (site, stmt, st, detail, msg, hint) values
  '22023', 'openfga:2027 invalid_tuple', '^invalid tuple key: 1$', null),
 ('tuple_for_write: condition', $$ select permissions.fga_write('[{"user": "user:x", "relation": "editor", "object": "document:9", "condition": {"name": "cx"}}]') $$,
  '22023', 'openfga:2000 validation_error', '^Invalid tuple ''document:9#editor@user:x''\. Reason: undefined condition ''cx''$', 'the model''s conditions: none\.$'),
--- conditions (designs/d-conditions.md)
+-- conditions (research/designs/d-conditions.md)
 ('context: not an object', $$ select permissions.fga_check('user:anne', 'viewer', 'document:1', context => '[1]') $$,
  '22023', 'openfga:2000 validation_error', '^invalid context: must be a JSON object of condition parameters, got a JSON array$', 'context =>'),
 ('condition: evaluation error', $$ select permissions.fga_check('user:jon', 'viewer', 'doc:1', model_id => (select m.id from permissions.fga_models m order by m.seq limit 1)) $$,

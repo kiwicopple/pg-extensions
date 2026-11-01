@@ -26,7 +26,7 @@ const stillWorst = ranks.filter((r) => r.ga.length > 1 && r.ga[r.ga.length - 1].
 	pair.before && pair.after && key.length ? (
 		<ul>
 			<li>
-				<strong>Biggest single win:</strong> {describeChange(biggest, fmt)}. Per engine, the largest gain on the key workloads is{' '}
+				<strong>Biggest single win:</strong> {describeChange(biggest, fmt)}. Per design, the largest gain on the key workloads is{' '}
 				{byEngine.map((e, i) => (
 					<>
 						{i > 0 && '; '}
@@ -51,7 +51,7 @@ const stillWorst = ranks.filter((r) => r.ga.length > 1 && r.ga[r.ga.length - 1].
 			</li>
 			<li>
 				<strong>Ranking:</strong> {changed.length} of {ranks.length} workload classes changed order or tie pattern.
-				{stillWorst.length > 0 && <> The slowest engine is unchanged on {stillWorst.map((r) => r.c.cls).join('; ')}.</>}
+				{stillWorst.length > 0 && <> The slowest design is unchanged on {stillWorst.map((r) => r.c.cls).join('; ')}.</>}
 			</li>
 			{
 				nest && nestAfter.a != null && nestAfter.c != null && (

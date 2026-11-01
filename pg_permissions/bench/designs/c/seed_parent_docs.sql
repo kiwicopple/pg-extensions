@@ -1,5 +1,5 @@
 -- Benchmark seed, part 3b (Design C): link every document to its folder and
--- switch to C's single-branch policy (designs/c-compiled-model.md section 9).
+-- switch to C's single-branch policy (research/designs/c-compiled-model.md section 9).
 -- Loaded after the parents_proj_* workloads (seed_parents.sql).
 --
 -- accessible('document', 'documents.read') expands grants on containers to

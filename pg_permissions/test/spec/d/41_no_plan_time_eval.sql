@@ -1,5 +1,5 @@
 -- Goal: the FGA list functions RLS policies call are STABLE and are not run
--- at plan time (PLAN.md §4; d/22_no_plan_time_eval covers
+-- at plan time (research/plan.md §4; d/22_no_plan_time_eval covers
 -- rbac_scopes_with_permission).
 -- fga_list_object_ids_current and fga_list_objects_current return `setof
 -- text`, not an array: the planner takes a set-returning function's row

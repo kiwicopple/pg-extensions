@@ -28,11 +28,11 @@ const takeaway = ch.length
 			source={[{ href: BASELINES_URL, label: 'per-run reports (pg18-docker-*, pg18-docker-*-opt)' }]}
 		>
 			<Legend slot="legend" extra={[{ label: 'before', kind: 'before' }, { label: 'after', kind: 'after' }]} />
-			<Dumbbell rows={rows} unit="ms" context="p50 latency before and after the optimizations, key workloads, by engine" />
+			<Dumbbell rows={rows} unit="ms" context="p50 latency before and after the optimizations, key workloads, by design" />
 			<Fragment slot="table">
 				<table>
 					<thead>
-						<tr><th>Workload</th><th>Configuration</th><th>Engine</th><th>Before p50 ms</th><th>After p50 ms</th><th>Change</th></tr>
+						<tr><th>Workload</th><th>Configuration</th><th>Design</th><th>Before p50 ms</th><th>After p50 ms</th><th>Change</th></tr>
 					</thead>
 					<tbody>
 						{KEY_CASES.flatMap((c) =>

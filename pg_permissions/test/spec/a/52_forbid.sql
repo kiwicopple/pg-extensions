@@ -1,4 +1,4 @@
--- Goal: a forbid beats every grant, including parent-derived ones (PLAN.md §10 G12)
+-- Goal: a forbid beats every grant, including parent-derived ones (research/plan.md §10 G12)
 -- PROVISIONAL: uses Design A's zanzibar-level API. Forbid is an OpenFGA-style
 -- exclusion: `unless => '{blocked}'` on a relation means a subject with a direct
 -- `blocked` tuple on the object never reaches that relation there, whatever the path.
@@ -31,7 +31,7 @@ select permissions.set_parent('folder', :'plans', 'org', :'acme');
 select permissions.set_parent('document', :'acme_readme', 'folder', :'specs');
 select permissions.set_parent('document', :'roadmap', 'folder', :'plans');
 
--- reference scenario (PLAN.md §5)
+-- reference scenario (research/plan.md §5)
 select permissions.grant('org', :'acme', 'admin',  'user', :'alice');
 select permissions.grant('org', :'acme', 'member', 'user', :'carol');
 select permissions.grant('team', :'eng', 'member', 'user', :'carol');

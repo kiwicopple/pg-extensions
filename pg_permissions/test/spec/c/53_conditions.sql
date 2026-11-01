@@ -1,4 +1,4 @@
--- Goal: conditions: document status and expired grants (PLAN.md §10, G13)
+-- Goal: conditions: document status and expired grants (research/plan.md §10, G13)
 -- Design C: resource conditions stay in the RLS policy on the app's own column
 -- (status), composed with two fast-path arms; grant expiry is expires_at on the tuple.
 \ir ../../fixtures/ids.sql

@@ -14,7 +14,7 @@ const worst = [...ch].sort((a, b) => Math.abs(Math.log(b.r)) - Math.abs(Math.log
 const slower = ch.filter((x) => x.r < 1);
 const slowerBy = Math.max(0, ...slower.map((x) => x.after - x.before));
 const takeaway = ch.length
-	? `${ch.length - moved.length} of ${ch.length} RBAC measurements (5 workloads, 3 engines) are within 20% of their old value; ${moved.length ? `${moved.length} moved by more than that` : 'none moved more than that'}. ` +
+	? `${ch.length - moved.length} of ${ch.length} RBAC measurements (5 workloads, 3 designs) are within 20% of their old value; ${moved.length ? `${moved.length} moved by more than that` : 'none moved more than that'}. ` +
 		`The largest relative change is ${worst.design.toUpperCase()} ${worst.c.key}: ${fmt(worst.before)} to ${fmt(worst.after)} ms. ` +
 		`${slower.length} of ${ch.length} got slower, by at most ${fmt(slowerBy)} ms; the optimizations target sharing, parents and nesting, so RBAC is the control group.`
 	: '';
@@ -29,11 +29,11 @@ const takeaway = ch.length
 			source={[{ href: BASELINES_URL, label: 'per-run reports' }]}
 		>
 			<Legend slot="legend" extra={[{ label: 'before', kind: 'before' }, { label: 'after', kind: 'after' }]} />
-			<Dumbbell rows={rows} unit="ms" context="p50 latency before and after the optimizations, RBAC workloads, by engine" />
+			<Dumbbell rows={rows} unit="ms" context="p50 latency before and after the optimizations, RBAC workloads, by design" />
 			<Fragment slot="table">
 				<table>
 					<thead>
-						<tr><th>Workload</th><th>Engine</th><th>Before p50 ms</th><th>After p50 ms</th><th>Change</th></tr>
+						<tr><th>Workload</th><th>Design</th><th>Before p50 ms</th><th>After p50 ms</th><th>Change</th></tr>
 					</thead>
 					<tbody>
 						{ch.map((x) => (

@@ -1,5 +1,5 @@
 -- Goal: fga_write_authorization_model rejects what OpenFGA's server rejects
--- and accepts what it accepts (designs/d-per-model.md sections 7 and 8), with
+-- and accepts what it accepts (research/designs/d-per-model.md sections 7 and 8), with
 -- the same error code. The graph checks are OpenFGA v1.22.1's
 -- typesystem.NewAndValidate (pkg/typesystem/typesystem.go): every relation
 -- needs an entrypoint (hasEntrypoints) and computed relations on a type must

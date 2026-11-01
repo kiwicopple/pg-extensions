@@ -1,4 +1,4 @@
--- Goal: forbid beats every permit, including parent-derived ones (PLAN.md §10 G12)
+-- Goal: forbid beats every permit, including parent-derived ones (research/plan.md §10 G12)
 -- Design B: forbid policies have the same shape as permits; any matching
 -- forbid makes the decision false (Cedar semantics, no priorities). RLS from
 -- apply_rls has a deny side (denies_all / denied_ids), so the fast path honours forbids.

@@ -1,8 +1,18 @@
 # Benchmark results as JSON
 
-One file per benchmark run, for charting (the docs site reads this directory). Written by [`../../report_to_json.sh`](../../report_to_json.sh) from a `bench/run.sh` markdown report; `bench/run.sh` calls it after every complete run (not `--only` runs). The `pg16-local-*` files are the 15 serial runs of 2026-10-28/29 in `bench/baselines/<design>-<scale>-<shape>.md`, backfilled. The `pg1[678]-docker-*` files are the Docker runs of 2026-10-29 (`bench/baselines/pg<NN>-docker-<design>-<scale>-<shape>.md`, analysed in [`../VERSIONS.md`](../VERSIONS.md)); their JSON was regenerated from the copied report to add `report`, keeping the run's `date` and `host`. The `*-opt` files are the same 27 configurations with the session 3 optimized engines (`tag: "opt"`); four of them are repeat runs that replaced disturbed originals (OPTIMIZATIONS.md, Repeatability). `pg18-docker-d-*-opt` are design D (unoptimized prototype) in the same three configurations, tagged `opt` so they sit in the same primary series ([`../D.md`](../D.md)). `pg18-docker-d-*-opt2` are D after its second optimization pass (`tag: "opt2"`, a separate series; D.md, section "opt2").
+This folder has one JSON file for each benchmark run. The docs site reads this folder to make charts. [`../../report_to_json.sh`](../../report_to_json.sh) writes each file from a markdown report of `bench/run.sh`. `bench/run.sh` calls the script after every complete run (not after `--only` runs). The per-run markdown reports are in [`../`](../). The [index of the benchmark summaries](../../../research/benchmarks/README.md) explains how the reports are named.
 
-File name: `<run_id>.json`. A later run with the same settings replaces the file.
+The file groups are these:
+
+- `pg16-local-*`: the 15 serial runs of 2026-10-28/29 in `bench/baselines/<design>-<scale>-<shape>.md`. We backfilled these files.
+- `pg1[678]-docker-*`: the Docker runs of 2026-10-29 (`bench/baselines/pg<NN>-docker-<design>-<scale>-<shape>.md`, analyzed in [`VERSIONS.md`](../../../research/benchmarks/VERSIONS.md)). We made the JSON again from the copied report, to add `report`. The files keep the `date` and the `host` of the run.
+- `*-opt`: the same 27 configurations with the session 3 optimized designs (`tag: "opt"`). Four of them are repeat runs that replaced disturbed originals ([`OPTIMIZATIONS.md`](../../../research/benchmarks/OPTIMIZATIONS.md), Repeatability).
+- `pg18-docker-d-*-opt`: design D (the unoptimized prototype) in the same three configurations. They have the tag `opt`, so they are in the same primary series ([`D.md`](../../../research/benchmarks/D.md)).
+- `pg18-docker-d-*-opt2`: design D after its second optimization pass (`tag: "opt2"`, a separate series; section "opt2" of [`D.md`](../../../research/benchmarks/D.md)).
+- `pg18-docker-d-*-opt3`: design D after its third pass (`tag: "opt3"`; section "opt3" of [`D.md`](../../../research/benchmarks/D.md)).
+- `pg18-docker-{a,b,c,d}-{small,medium,large}-default-p6`: the phase 6 runs (`tag: "p6"`; section "Phase 6" of [`D.md`](../../../research/benchmarks/D.md)). `pg18-docker-d-large-default-p6check` is the `--check` run.
+
+The name of a file is `<run_id>.json`. A later run with the same settings replaces the file.
 
 ```json
 {
@@ -21,19 +31,19 @@ File name: `<run_id>.json`. A later run with the same settings replaces the file
 
 | Field | Meaning |
 | --- | --- |
-| `run_id` | `pg<major>-<environment>-<design>-<scale>-<shape>`, plus `-<tag>` if the run had `--tag` (e.g. `-smoke`; tagged runs aren't reference data) |
-| `tag` | Optional. Present only for tagged runs, equal to the run_id suffix (`opt`: the session 3 optimized engines, see [`../OPTIMIZATIONS.md`](../OPTIMIZATIONS.md)). Untagged and tagged runs of the same configuration are different series; don't treat a tagged run as a newer version of an untagged one |
-| `date` | When the run started measuring, UTC. Backfilled files use the report's minute-precision local time, converted to UTC |
+| `run_id` | `pg<major>-<environment>-<design>-<scale>-<shape>`, plus `-<tag>` if the run had `--tag` (for example `-smoke`; tagged runs are not reference data) |
+| `tag` | Optional. Present only for tagged runs, equal to the run_id suffix (`opt`: the session 3 optimized designs, see [`OPTIMIZATIONS.md`](../../../research/benchmarks/OPTIMIZATIONS.md)). Untagged and tagged runs of the same configuration are different series. Do not treat a tagged run as a newer version of an untagged one |
+| `date` | The time when the run started to measure, in UTC. Backfilled files use the minute-precision local time of the report, converted to UTC |
 | `environment` | `local` (throwaway cluster from `test/lib/cluster.sh` on the host) or `docker` (`docker/compose.yaml`) |
-| `host` | Machine CPU, CPU count and memory; for `docker`, plus the container's CPU and memory limits |
+| `host` | CPU model of the machine, CPU count and memory. For `docker`, also the CPU limit and the memory limit of the container |
 | `pg_version` | `server_version` up to the first space (`16.4`, `17.11`) |
 | `design` | `a`, `b`, `c` or `d` (`none` for the extension file) |
 | `scale` | `small` (10k documents), `medium` (100k), `large` (1M) |
 | `shape` | `default`, `deep` or `wide` (see `bench/run.sh --help`) |
-| `clients`, `duration_s` | pgbench clients and seconds per workload |
-| `workloads[]` | In run order. `p50_ms`, `p95_ms`: latency percentiles from pgbench's per-transaction log. `tps`: integer. `budget_ms`: the p95 budget from `bench/budgets.tsv` at the time of the run, `null` if none. A skipped or failed workload has `null` for `p50_ms`, `p95_ms` and `tps` |
-| `seeds[]` | In phase order (`rbac`, `sharing`, `parents_proj`, `parents`, `nesting`). `seconds`: native-API seed load time. `size_mb`: total size of the tables in schema `permissions` after the seed and `VACUUM FULL`, cumulative across phases. `null` if the seed failed |
-| `report` | Optional. Path from `pg_permissions/` of the run's full markdown report when it's committed in `bench/baselines/` (the docs site links it as the raw report). Absent for runs whose report is only in the git-ignored `bench/results/` |
-| `checksums` | Per read policy, the first 8 hex digits of the md5 of the report's equivalence rows for that policy (`user<TAB>visible<TAB>md5-of-sorted-ids`, one line per sample user, by user). The same value `bench/run.sh` prints as `checksum (<policy>)`. Identical data and correct engines give identical checksums across designs and versions; `parents_proj` and `parents` must always be equal. Policies whose phase didn't run are absent |
+| `clients`, `duration_s` | pgbench clients and seconds for each workload |
+| `workloads[]` | In run order. `p50_ms` and `p95_ms` are latency percentiles from the per-transaction log of pgbench. `tps` is an integer. `budget_ms` is the p95 budget from [`bench/budgets.tsv`](../../budgets.tsv) at the time of the run (`null` if none). A workload that was skipped or failed has `null` for `p50_ms`, `p95_ms` and `tps` |
+| `seeds[]` | In phase order (`rbac`, `sharing`, `parents_proj`, `parents`, `nesting`, and for design d also `conditions` and `blocklist`). `seconds` is the native-API seed load time. `size_mb` is the total size of the tables in schema `permissions` after the seed and `VACUUM FULL`, cumulative across phases. It is `null` if the seed failed |
+| `report` | Optional. The path from `pg_permissions/` of the full markdown report of the run, when the report is committed in `bench/baselines/` (the docs site links it as the raw report). Absent for runs whose report is only in the git-ignored `bench/results/` |
+| `checksums` | For each read policy, the first 8 hex digits of the md5 of the equivalence rows of the report for that policy (`user<TAB>visible<TAB>md5-of-sorted-ids`, one line for each sample user, by user). This is the same value that `bench/run.sh` prints as `checksum (<policy>)`. Identical data and correct designs give identical checksums across designs and versions. `parents_proj` and `parents` must always be equal. For design d, the policy `conditions` must equal `parents`. A policy whose phase did not run is absent |
 
-Write numbers (`write_*`) are optimistic in both environments: `fsync` is off.
+Write numbers (`write_*`) are optimistic in both environments, because `fsync` is off.

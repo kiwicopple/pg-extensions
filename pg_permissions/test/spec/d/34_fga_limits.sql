@@ -1,5 +1,5 @@
--- Goal: OpenFGA's limits on the API functions (DECISION.md, end of session 4,
--- point 4; designs/d-per-model.md section 4). ListObjects and ListUsers return
+-- Goal: OpenFGA's limits on the API functions (research/decision.md, end of session 4,
+-- point 4; research/designs/d-per-model.md section 4). ListObjects and ListUsers return
 -- at most 1,000 results, silently truncated like OpenFGA (which ones survive is
 -- unspecified, so only the count and membership in the true set are
 -- asserted); the RLS helpers (fga_list_objects_current,

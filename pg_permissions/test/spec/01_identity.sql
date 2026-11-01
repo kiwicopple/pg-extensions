@@ -1,4 +1,4 @@
--- Goal: identity (PLAN.md §3)
+-- Goal: identity (research/plan.md §3)
 -- The current subject comes from the JWT `sub` claim, falling back to the
 -- `permissions.subject_id` setting, with no dependency on Supabase's auth schema.
 \ir ../fixtures/ids.sql

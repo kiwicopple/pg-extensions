@@ -45,7 +45,7 @@ select permissions.add_parent('user', md5('nest-user' || i)::uuid::text, 'team',
 from generate_series(1, 1000) i;
 
 -- Same two-branch policies as A (org roles or shares), written by hand.
--- permissions.apply_rls would add a forbid side; see designs/b-policy-first.md.
+-- permissions.apply_rls would add a forbid side; see research/designs/b-policy-first.md.
 drop policy documents_select on public.documents;
 create policy documents_select on public.documents for select to authenticated using (
     org_id = any (array(select unnest(permissions.scopes_with_permission('documents.read'))::uuid))

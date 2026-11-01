@@ -11,7 +11,7 @@
 # Spec files in test/spec/ are the shared RBAC, RLS and install specs in the
 # API the prototypes have (unprefixed create_role, has_permission, ...); they
 # run for every design except d. The extension (design d) renamed that API
-# (rbac_*, DECISION.md "API naming (session 5)") and runs its own copies in
+# (rbac_*, research/decision.md "API naming (session 5)") and runs its own copies in
 # test/spec/d/. Files in test/spec/<design>/ use that design's native API and
 # run only with it. --design defaults to the first letter of the --impl
 # file name before a dash (a-tuple-core.sql -> a), "d" for the extension file

@@ -47,7 +47,7 @@ function panelsFor(c: ReturnType<typeof configsOf>[number]) {
 type Best = { name: string; d: Design; hi: Series; lo: Series; r: number; vhi: number; vlo: number; cfg: string };
 function takeawayFor(series: Series[], configs: ReturnType<typeof configsOf>, what: string) {
 	if (new Set(series.map((s) => s.major)).size < 2)
-		return `Only ${series.map((s) => s.label).join(', ')} exists in this group, so there is nothing to compare yet.`;
+		return `This group has only ${series.map((s) => s.label).join(', ')}, so nothing is available to compare yet.`;
 	let best: Best | undefined;
 	let pairs = 0;
 	for (const c of configs)
@@ -65,15 +65,15 @@ function takeawayFor(series: Series[], configs: ReturnType<typeof configsOf>, wh
 							best = { name, d, hi: x.v > y.v ? x.s : y.s, lo: x.v > y.v ? y.s : x.s, r, vhi: Math.max(x.v, y.v), vlo: Math.min(x.v, y.v), cfg: c.label };
 					}
 			}
-	if (!best) return `No two Postgres versions share a configuration in ${what} yet.`;
+	if (!best) return `No two Postgres versions have a configuration in common in ${what} yet.`;
 	return best.r < 1.2
-		? `Across ${pairs} workload pairs in ${what}, no key workload differs by more than about 20% between Postgres versions.`
-		: `In ${what} the largest gap between versions is ${workloadInfo(best.name).title} on ${engine(best.d).letter} (${best.cfg}): ${fmt(best.vlo)} ms on PG ${best.lo.major} against ${fmt(best.vhi)} ms on PG ${best.hi.major} (${times(best.r)}). Gaps under about 20% are within noise.`;
+		? `In ${pairs} workload pairs in ${what}, no key workload differs by more than about 20% between Postgres versions.`
+		: `In ${what} the largest gap between versions is ${workloadInfo(best.name).title} on ${engine(best.d).letter} (${best.cfg}): ${fmt(best.vlo)} ms on PG ${best.lo.major} against ${fmt(best.vhi)} ms on PG ${best.hi.major} (${times(best.r)}). Gaps under about 20% are noise.`;
 }
 
 const sections = groups.map((g) => {
 	const configs = configsOf(g.series);
-	const name = `${g.environment === 'docker' ? 'Docker' : g.environment === 'local' ? 'Local' : g.environment}, ${g.tag ? tagLabel(g.tag) + ' engines (tag ' + g.tag + ')' : 'untagged runs (before the optimization pass)'}`;
+	const name = `${g.environment === 'docker' ? 'Docker' : g.environment === 'local' ? 'Local' : g.environment}, ${g.tag ? tagLabel(g.tag) + ' designs (tag ' + g.tag + ')' : 'untagged runs (before the optimization pass)'}`;
 	return { ...g, configs, name, takeaway: takeawayFor(g.series, configs, 'this group'), compare: new Set(g.series.map((s) => s.major)).size >= 2 };
 });
 const majors = [...new Set(allSeries.map((s) => s.major))].sort((a, b) => a - b);
@@ -83,8 +83,8 @@ const majors = [...new Set(allSeries.map((s) => s.major))].sort((a, b) => a - b)
 	usingFixture && (
 		<div class="viz-note">
 			<p>
-				<strong>Showing the development fixture.</strong> It is a single local PG 16 series parsed from the saved
-				reports. Docker runs for pg16, pg17 and pg18 will appear here once their files are in{' '}
+				<strong>This page shows the development fixture.</strong> It is a single local PG 16 series that the page parses from the saved
+				reports. Docker runs for pg16, pg17 and pg18 will appear here when their files are in{' '}
 				<code>pg_permissions/bench/baselines/data/</code>.
 			</p>
 		</div>
@@ -98,15 +98,15 @@ const majors = [...new Set(allSeries.map((s) => s.major))].sort((a, b) => a - b)
 				<p>
 					{majors.length === 1 ? (
 						<>
-							<strong>Only PG {majors[0]} is available so far</strong> ({allSeries.map((s) => s.label).join(', ')}).
-							Versions are compared as soon as runs for another Postgres major version exist in the data.
+							<strong>Only PG {majors[0]} is available now</strong> ({allSeries.map((s) => s.label).join(', ')}).
+							The page compares versions when the data has runs for another Postgres major version.
 						</>
 					) : (
 						<>
 							<strong>
 								{majors.length} Postgres versions available: {majors.map((m) => `PG ${m}`).join(', ')}.
 							</strong>{' '}
-							A series is one Postgres major version on one environment with one tag (the optimized engines are tagged <code>opt</code>). Only series with the same environment and tag are compared, so a version gap never includes a machine or an optimization gap. The optimized engines come first; the pre-optimization runs follow. The latest run per engine, scale and shape is used.
+							A series is one Postgres major version on one environment with one tag (the optimized designs have the tag <code>opt</code>). The page compares only series with the same environment and tag, so a version gap never includes a machine gap or an optimization gap. The optimized designs come first, and the runs before the optimizations follow. The page uses the latest run for each design, scale and shape.
 						</>
 					)}
 				</p>
@@ -115,7 +115,7 @@ const majors = [...new Set(allSeries.map((s) => s.major))].sort((a, b) => a - b)
 			<div class="sl-markdown-content">
 				<table>
 					<thead>
-						<tr><th>Series</th><th>Postgres</th><th>Runs</th><th>Engines</th><th>Configurations</th><th>Host</th></tr>
+						<tr><th>Series</th><th>Postgres</th><th>Runs</th><th>Designs</th><th>Configurations</th><th>Host</th></tr>
 					</thead>
 					<tbody>
 						{allSeries.map((s) => (
@@ -138,7 +138,7 @@ const majors = [...new Set(allSeries.map((s) => s.major))].sort((a, b) => a - b)
 					{sec.compare ? (
 						<Frame
 							title="p50 latency by Postgres version"
-							subtitle={`Key workloads, one panel each; columns are engines, groups are Postgres versions. Log axis, milliseconds.`}
+							subtitle={`Key workloads, one panel for each workload. The columns are designs, and the groups are Postgres versions. Log axis, milliseconds.`}
 							takeaway={sec.takeaway}
 							source={[{ href: DATA_URL, label: 'bench/baselines/data' }]}
 						>
@@ -189,6 +189,6 @@ const majors = [...new Set(allSeries.map((s) => s.major))].sort((a, b) => a - b)
 			))}
 		</>
 	) : (
-		<div class="viz-note"><p>No benchmark data found.</p></div>
+		<div class="viz-note"><p>The page found no benchmark data.</p></div>
 	)
 }

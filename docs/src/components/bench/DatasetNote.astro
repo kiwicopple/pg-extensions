@@ -25,8 +25,8 @@ if (s) {
 	usingFixture && (
 		<div class="viz-note">
 			<p>
-				<strong>Showing the development fixture.</strong> No run files exist in{' '}
-				<code>pg_permissions/bench/baselines/data/</code> yet, so the charts use numbers parsed from the saved
+				<strong>This page shows the development fixture.</strong> No run files exist yet in{' '}
+				<code>pg_permissions/bench/baselines/data/</code>, so the charts use numbers that the page parses from the saved
 				reports in <code>bench/baselines/</code> (the same numbers as COMPARISON.md). Real data replaces the
 				fixture automatically at the next <code>npm run sync</code>.
 			</p>
@@ -59,29 +59,29 @@ if (s) {
 					<div class="value">
 						{agree} of {total}
 					</div>
-					<div class="note">configurations: identical visible ids on A, B and C</div>
+					<div class="note">configurations with identical visible ids on A, B and C</div>
 				</div>
 			</div>
 			<p>
-				Charts use <strong>{s.label}</strong>
-				{hosts.length > 0 && <>{' '}on {hosts.join('; ')}</>}: Postgres {s.versions.join(', ')}, the latest run per engine, scale
-				and shape. This is the primary series, chosen on purpose: Docker, the newest Postgres version, and the
-				optimized engines when their runs exist (otherwise the newest Docker series, then local).{' '}
-				{s.runs[0]?.clients && <>{s.runs[0].clients} pgbench clients, {s.runs[0].duration_s} s per workload. </>}
-				Docker runs cover the large default, medium deep and medium wide configurations only.
+				The charts use <strong>{s.label}</strong>
+				{hosts.length > 0 && <>{' '}on {hosts.join('; ')}</>}: Postgres {s.versions.join(', ')}, the latest run for each design, scale
+				and shape. This is the primary series, and we chose it on purpose. It is Docker, the newest Postgres version, and the
+				optimized designs when their runs exist (otherwise the newest Docker series, then local).{' '}
+				{s.runs[0]?.clients && <>{s.runs[0].clients} pgbench clients, {s.runs[0].duration_s} s for each workload. </>}
+				Docker runs cover only the large default, medium deep and medium wide configurations.
 				{scaling && scaling !== s && (
-					<> The small and medium default scales exist only for <strong>{scaling.label}</strong>, so the scaling chart uses that series and says so.</>
+					<> The small and medium default scales exist only for <strong>{scaling.label}</strong>, so the scale chart uses that series and says so.</>
 				)}{' '}
-				Charts never mix environments or tags in one figure. Series in the data: {allSeries.map((x) => x.label).join('; ')}.
-				Compare Postgres versions on the <a href={'../postgres-versions/'}>Postgres versions page</a> and the before and
-				after of the optimization pass on the <a href={'../optimizations/'}>Optimizations page</a>. All latencies are
-				milliseconds; one run per configuration, so differences under about 20% are noise. Run files live in{' '}
+				A figure never mixes environments or tags. The data has these series: {allSeries.map((x) => x.label).join('; ')}.
+				Compare Postgres versions on the <a href={'../postgres-versions/'}>Postgres versions page</a>. Compare the runs before and
+				after the optimization pass on the <a href={'../optimizations/'}>Optimizations page</a>. All latencies are in
+				milliseconds. There is one run for each configuration, so differences under about 20% are noise. The run files are in{' '}
 				<a href={DATA_URL}>bench/baselines/data</a>.
 			</p>
 		</>
 	) : (
 		<div class="viz-note">
-			<p>No benchmark data found (neither real runs nor the fixture).</p>
+			<p>The page found no benchmark data (no real runs and no fixture).</p>
 		</div>
 	)
 }

@@ -1,4 +1,4 @@
--- Goal: parent inheritance org -> folder -> document, one fast-path RLS branch, cycles terminate (PLAN.md §10 G10)
+-- Goal: parent inheritance org -> folder -> document, one fast-path RLS branch, cycles terminate (research/plan.md §10 G10)
 -- PROVISIONAL: uses Design A's zanzibar-level API. Parents are OpenFGA-style
 -- tuple-to-userset rules: a `parent` tuple links a child to its parent, and
 -- `from_parent` on a relation names the relation it inherits from the parent.

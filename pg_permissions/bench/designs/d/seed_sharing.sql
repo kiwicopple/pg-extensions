@@ -1,7 +1,7 @@
 -- Benchmark seed, part 2 (Design D): per-document sharing with nested teams,
 -- as OpenFGA tuples (fga_*). The RBAC side (org roles) stays in rbac_* from
 -- bench/seed_rbac.sql: D composes the two models in RLS with one permissive
--- policy each (designs/d-per-model.md §6), so this seed adds an FGA policy
+-- policy each (research/designs/d-per-model.md §6), so this seed adds an FGA policy
 -- next to seed_rbac.sql's documents_select instead of replacing it. Permissive
 -- policies OR, so the visible set is A's `org roles or shares` policy.
 --

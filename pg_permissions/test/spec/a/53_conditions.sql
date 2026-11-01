@@ -1,4 +1,4 @@
--- Goal: conditions: document status and expired grants, asserted through RLS (PLAN.md §10 G13)
+-- Goal: conditions: document status and expired grants, asserted through RLS (research/plan.md §10 G13)
 -- PROVISIONAL: uses Design A's zanzibar-level API. A has no condition evaluator:
 -- the status rule is RLS composition over the app's own `status` column, and
 -- expiry is the grant's `expires_at`. The document -> org parent link comes from

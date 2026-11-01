@@ -32,7 +32,7 @@ let takeaway = '';
 if (w0 && pt('a') && pt('c')) {
 	const a = pt('a')!;
 	const c = pt('c')!;
-	takeaway = `No engine wins both axes. In the ${w0.title.toLowerCase()}, A reads the sharing page in ${fmt(a.x)} ms and nests a team in ${fmt(a.y)} ms; C reads in ${fmt(c.x)} ms (${times(a.x / c.x)} faster) but nesting costs ${fmt(c.y)} ms (${times(c.y / a.y)} slower), because it writes membership rows under a global lock.`;
+	takeaway = `No design wins on both axes. In the ${w0.title.toLowerCase()}, A reads the sharing page in ${fmt(a.x)} ms and nests a team in ${fmt(a.y)} ms. C reads in ${fmt(c.x)} ms (${times(a.x / c.x)} faster), but a nest costs ${fmt(c.y)} ms (${times(c.y / a.y)} slower), because C writes membership rows under a global lock.`;
 }
 ---
 
@@ -40,7 +40,7 @@ if (w0 && pt('a') && pt('c')) {
 	panels.length ? (
 		<Frame
 			title="Read cost against write cost"
-			subtitle={`${s!.label}. Each point is one engine. x = sharing page read (share_select_page p50), y = nest a 1,000-member team (write_nest_team p50), both ms on log axes. Nearer the bottom left is better.`}
+			subtitle={`${s!.label}. Each point is one design. The x axis is the read of the sharing page (share_select_page p50). The y axis is a nest of a team of 1,000 members (write_nest_team p50). Both axes are in ms on a log scale. A point nearer the bottom left is better.`}
 			takeaway={takeaway}
 			source={[{ href: comparisonLink('large', 'default'), label: 'COMPARISON.md (local PG 16, before optimization: Nesting)' }]}
 		>
@@ -55,7 +55,7 @@ if (w0 && pt('a') && pt('c')) {
 							yDomain={yDomain}
 							xTitle="read: share_select_page p50 (ms)"
 							yTitle="write: write_nest_team p50 (ms)"
-							title={`Read vs write, ${p.title}`}
+							title={`Read against write, ${p.title}`}
 						/>
 					</div>
 				))}
@@ -63,7 +63,7 @@ if (w0 && pt('a') && pt('c')) {
 			<Fragment slot="table">
 				<table>
 					<thead>
-						<tr><th>Configuration</th><th>Engine</th><th>share_select_page p50</th><th>write_nest_team p50</th></tr>
+						<tr><th>Configuration</th><th>Design</th><th>share_select_page p50</th><th>write_nest_team p50</th></tr>
 					</thead>
 					<tbody>
 						{panels.flatMap((p) => p.points.map((q) => (
@@ -74,6 +74,6 @@ if (w0 && pt('a') && pt('c')) {
 			</Fragment>
 		</Frame>
 	) : (
-		<div class="viz-note"><p>Read-vs-write needs share_select_page and write_nest_team for at least two engines; not available in the current data.</p></div>
+		<div class="viz-note"><p>The read and write chart needs share_select_page and write_nest_team for at least two designs. The current data does not have them.</p></div>
 	)
 }

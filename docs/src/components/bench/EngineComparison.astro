@@ -38,24 +38,24 @@ if (ref) {
 	const pse = extremes(ps);
 	const nt = p50s(s!, ref.scale, ref.shape, 'write_nest_team');
 	const nte = extremes(nt);
-	if (rb) bits.push(`RBAC is a wash (rbac_check p50 ${fmt(rb.min.v)} to ${fmt(rb.max.v)} ms across engines)`);
+	if (rb) bits.push(`the RBAC workloads are equal on all designs (rbac_check p50 ${fmt(rb.min.v)} to ${fmt(rb.max.v)} ms across designs)`);
 	if (pse && pse.max.v / pse.min.v > 2)
 		bits.push(
-			`the single-branch parents page spans ${fmt(pse.min.v)} ms on ${engine(pse.min.d).letter} to ${fmt(pse.max.v)} ms on ${engine(pse.max.d).letter} (${times(pse.max.v / pse.min.v)})`,
+			`the single-branch parents page takes ${fmt(pse.min.v)} ms on ${engine(pse.min.d).letter} and ${fmt(pse.max.v)} ms on ${engine(pse.max.d).letter} (${times(pse.max.v / pse.min.v)})`,
 		);
 	if (nte && nte.max.v / nte.min.v > 2)
 		bits.push(
-			`nesting a team is ${fmt(nte.min.v)} ms on ${engine(nte.min.d).letter} but ${fmt(nte.max.v)} ms on ${engine(nte.max.d).letter}`,
+			`a nest of a team takes ${fmt(nte.min.v)} ms on ${engine(nte.min.d).letter} but ${fmt(nte.max.v)} ms on ${engine(nte.max.d).letter}`,
 		);
-	if (bits.length) takeaway = `At ${ref.scale}/${ref.shape}: ${bits.join('; ')}. The engines separate on sharing, parents and nesting, not on RBAC.`;
+	if (bits.length) takeaway = `At ${ref.scale}/${ref.shape}: ${bits.join('; ')}. The designs differ on sharing, parents and nesting, not on RBAC.`;
 }
 ---
 
 {
 	s ? (
 		<Frame
-			title="Latency by workload and engine"
-			subtitle="Bar = p50, whisker = p95, milliseconds on a log axis. Pick a data scale and team shape."
+			title="Latency by workload and design"
+			subtitle="The bar is the p50 and the whisker is the p95, in milliseconds on a log axis. Pick a data scale and a team shape."
 			takeaway={takeaway}
 			source={[
 				{ href: comparisonLink(ref?.scale, ref?.shape), label: 'COMPARISON.md (local PG 16, before optimization)' },

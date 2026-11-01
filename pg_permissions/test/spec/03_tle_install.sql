@@ -1,6 +1,6 @@
 -- Goal: installs as a non-superuser that owns the database; no superuser-only
 -- features, no C. If pg_tle is available, also installs through
--- pgtle.install_extension (PLAN.md §10, G14).
+-- pgtle.install_extension (research/plan.md §10, G14).
 --
 -- The runner's per-spec database already has the implementation installed as
 -- superuser, so this file builds its own scratch databases owned by a

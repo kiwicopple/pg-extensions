@@ -1,4 +1,4 @@
--- Goal: rbac preset, tenant-scoped roles (PLAN.md §6, RBAC scenario steps 3 and 5)
+-- Goal: rbac preset, tenant-scoped roles (research/plan.md §6, RBAC scenario steps 3 and 5)
 -- The extension's copy of test/spec/11_rbac_tenant.sql (the prototypes' version,
 -- in their unprefixed API): the same assertions, with the rbac_* names.
 \ir ../../fixtures/ids.sql

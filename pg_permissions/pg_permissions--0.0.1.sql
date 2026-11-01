@@ -3,7 +3,7 @@
  *
  * Copyright (c) 2026 Paul Copplestone: https://github.com/kiwicopple/pg-extensions/
  *
- * Design: ../designs/d-per-model.md. Two independent models in one schema:
+ * Design: research/designs/d-per-model.md. Two independent models in one schema:
  *
  *   rbac_*  roles, permissions, scoped assignments (the blessed path)
  *   fga_*   OpenFGA: JSON authorization models (schema 1.1), tuples, Check,
@@ -52,7 +52,7 @@ $$;
 -- all-constant arguments the planner evaluates the call while planning, to
 -- estimate the unnest's row count, and the executor runs it again. A volatile
 -- default makes the call non-constant while the function stays STABLE (and so
--- keeps the statement's snapshot). PLAN.md §4.
+-- keeps the statement's snapshot). research/plan.md §4.
 create function permissions._unfolded_null()
 returns boolean
 language plpgsql volatile
@@ -62,7 +62,7 @@ begin
 end;
 $$;
 
--- Error hints (DECISION.md, end of session 4, point 5): every error has a
+-- Error hints (research/decision.md, end of session 4, point 5): every error has a
 -- HINT, and a misspelt name gets the nearest existing one. Levenshtein edit
 -- distance, written here because the extension stays plain SQL and PL/pgSQL
 -- (pg_tle): no fuzzystrmatch or pg_trgm. Only ever called on an error path.
@@ -184,6 +184,18 @@ as $$
 declare
     x text;
 begin
+    if rbac_create_role.role is null then
+        raise exception 'role is required to create a role' using errcode = '22004',
+            hint = 'Pass the name of the role as text, e.g. select permissions.rbac_create_role(role => ''editor'', permissions => ''{documents.edit}'').';
+    end if;
+    if rbac_create_role.permissions is null then
+        raise exception 'permissions is required to create role ''%''', rbac_create_role.role using errcode = '22004',
+            hint = format('Pass an array of permission names, or ''{}'' for a role that only inherits: select permissions.rbac_create_role(role => %L, permissions => ''{documents.read}'').', rbac_create_role.role);
+    end if;
+    if rbac_create_role.inherits is null then
+        raise exception 'inherits must not be null for role ''%''', rbac_create_role.role using errcode = '22004',
+            hint = format('Pass an array of role names, or omit inherits: select permissions.rbac_create_role(role => %L, permissions => ''{documents.read}'', inherits => ''{viewer}'').', rbac_create_role.role);
+    end if;
     if exists (select 1 from permissions.rbac_roles r where r.role = rbac_create_role.role) then
         raise exception 'role ''%'' already exists', rbac_create_role.role using errcode = '23505',
             hint = format('Roles are immutable: pick another name, or rbac_drop_role(role => %L) and create it again (that also removes its assignments).', rbac_create_role.role);
@@ -268,6 +280,14 @@ language plpgsql security definer
 set search_path = ''
 as $$
 begin
+    if rbac_unassign_role.user_id is null then
+        raise exception 'user_id is required to unassign role ''%''', rbac_unassign_role.role using errcode = '22004',
+            hint = format('Pass the user''s id as text, e.g. select permissions.rbac_unassign_role(user_id => id::text, role => %L, scope => org_id::text).', rbac_unassign_role.role);
+    end if;
+    if rbac_unassign_role.role is null then
+        raise exception 'role is required to unassign a role' using errcode = '22004',
+            hint = 'Pass the name of the role as text, e.g. select permissions.rbac_unassign_role(user_id => id::text, role => ''editor'').';
+    end if;
     if rbac_unassign_role.scope is null then
         delete from permissions.rbac_assignments a
         where a.user_id = rbac_unassign_role.user_id and a.role = rbac_unassign_role.role and a.scope is null;
@@ -280,7 +300,7 @@ $$;
 
 -- Checks for the current subject. Roles are held by `user` subjects; any other
 -- subject type has none. PL/pgSQL so the plans are cached per session
--- (PLAN.md §4); app-wide and scoped lookups are separate statements so each
+-- (research/plan.md §4); app-wide and scoped lookups are separate statements so each
 -- one probes rbac_assignments_key directly.
 create function permissions.rbac_has_permission(permission text, scope text default null)
 returns boolean
@@ -396,7 +416,7 @@ $$;
 -- read filters them through the model in use (its type restrictions), so tuples
 -- left over from an earlier model that no longer type-check are ignored.
 --
--- Ids, types and relations are collate "C" (PLAN.md §4).
+-- Ids, types and relations are collate "C" (research/plan.md §4).
 
 create type permissions.fga_tuple as (
     object_type   text collate "C",
@@ -572,7 +592,7 @@ create table permissions.fga_walk_steps (
 create index on permissions.fga_walk_steps (model_id, target_type, target_relation);
 
 -- The model's conditions, compiled when the model is written
--- (designs/d-conditions.md): parameters as CEL types ({"x": "int", "l":
+-- (research/designs/d-conditions.md): parameters as CEL types ({"x": "int", "l":
 -- ["list", "string"]}), ast the typed tree _fga_cel_eval walks.
 create table permissions.fga_conditions (
     model_id   text collate "C" not null references permissions.fga_models on delete cascade,
@@ -1047,7 +1067,7 @@ $$;
 -- ----------------------------------------------------------------------------
 -- Conditions (CEL): compiler and evaluator
 -- ----------------------------------------------------------------------------
--- designs/d-conditions.md. A model's conditions are compiled when the model is
+-- research/designs/d-conditions.md. A model's conditions are compiled when the model is
 -- written: tokens, a precedence-climbing parser, macro expansion and a type
 -- checker that resolves every operator to one overload, stored as a jsonb AST
 -- in fga_conditions (no parsing at Check time, no generated functions). The
@@ -1068,7 +1088,7 @@ $$;
 create type permissions.fga_cel_result as (
     v jsonb,   -- the value (canonical form of the node's type)
     e text,    -- an error message, else null
-    c int      -- cost so far (designs/d-conditions.md section 6, cost limit)
+    c int      -- cost so far (research/designs/d-conditions.md section 6, cost limit)
 );
 
 -- OpenFGA's cost limit (pkg/server/config/config.go: MaxConditionEvaluationCost
@@ -1499,7 +1519,7 @@ begin
             x := jsonb_build_object('k', 'call', 'f', name, 'p', pos[p], 'a', args);
         elsif k[q] = '{' then
             node := jsonb_build_object('k', 'err', 'm', format('message construction (%s{...}) is not supported (column %s)', name, pos[p]), 't3', true,
-                                       'h', 'pg_permissions'' CEL has no protobuf messages: use a map literal {"key": value} or a map parameter instead.');
+                                       'h', 'Use a map literal {"key": value} or a map parameter instead.');
             np := q; return;
         else
             x := jsonb_build_object('k', 'id', 'n', name, 'p', pos[p]);
@@ -1645,7 +1665,7 @@ begin
         if n ->> 'n' in ('int', 'uint', 'double', 'bool', 'string', 'bytes', 'list', 'map', 'null_type', 'type', 'dyn') then
             return jsonb_build_object('k', 'err', 't3', true,
                 'm', format('type names used as values are not supported: %s (column %s)', n ->> 'n', n -> 'p'),
-                'h', 'pg_permissions'' CEL has no type values: compare values, not types.');
+                'h', 'Compare values, not types.');
         end if;
         return jsonb_build_object('k', 'err', 'm', format('undeclared reference to ''%s'' (column %s)', n ->> 'n', n -> 'p'),
                                   'h', format('Every name in the expression must be a parameter of the condition. Parameters: %s.',
@@ -1869,7 +1889,7 @@ begin
         rt := '"int"';
     elsif kk = 'call' and f in ('dyn', 'type', 'bytes') then
         return jsonb_build_object('k', 'err', 't3', true, 'm', format('%s() is not supported (column %s)', f, n -> 'p'),
-                                  'h', 'pg_permissions'' CEL has no bytes, type() or dyn(): declare the parameter with the type you need (any for a JSON value).');
+                                  'h', 'Declare the parameter with the type you need (any for a JSON value).');
     elsif kk = 'call' and na = 1 and f in ('int', 'uint', 'double', 'string', 'bool', 'timestamp', 'duration', 'ipaddress') then
         if t[1] = '"dyn"'
            or (f = 'int' and t[1] in ('"int"', '"uint"', '"double"', '"string"', '"timestamp"'))
@@ -1947,7 +1967,7 @@ begin
     select * into tk from permissions._fga_cel_tokens(p_expr);
     if tk.err is not null then
         return jsonb_build_object('k', 'err', 'm', tk.err, 't3', tk.err like 'bytes%',
-            'h', case when tk.err like 'bytes%' then 'pg_permissions'' CEL has no bytes: use a string.'
+            'h', case when tk.err like 'bytes%' then 'Use a string.'
                       else 'Check the expression''s CEL syntax (https://github.com/google/cel-spec/blob/master/doc/langdef.md), e.g. x < 100 || user_ip.in_cidr("10.0.0.0/8").' end);
     end if;
     select * into r from permissions._fga_cel_parse(tk.k, tk.v, tk.pos, 1, 0);
@@ -2726,7 +2746,7 @@ $$;
 
 -- A tuple's condition p_name under model p_m, with its stored context p_tctx
 -- and the request's context p_req: 't', 'f', or an error message.
--- OpenFGA's rules (internal/condition/eval, condition.go; designs/d-conditions.md
+-- OpenFGA's rules (internal/condition/eval, condition.go; research/designs/d-conditions.md
 -- section 3): the tuple's context wins over the request's on a shared key;
 -- every declared parameter must have a value, whatever the expression would
 -- give without it; each value is converted to its declared type. A stored
@@ -2879,7 +2899,7 @@ $$;
 -- compile it. Returns the new model id; it becomes the latest model.
 -- Raises openfga:2056 (invalid_authorization_model) or 2057 (schema version),
 -- 2000 for what OpenFGA's request validation rejects. Conditions are
--- compiled into fga_conditions (designs/d-conditions.md).
+-- compiled into fga_conditions (research/designs/d-conditions.md).
 create function permissions.fga_write_authorization_model(model jsonb)
 returns text
 language plpgsql security definer
@@ -3023,7 +3043,7 @@ begin
                            permissions._fga_relation_hint(m, bad_type, bad)));
     end if;
 
-    -- conditions (designs/d-conditions.md): the key is the name, the
+    -- conditions (research/designs/d-conditions.md): the key is the name, the
     -- parameter types are OpenFGA's, the expression compiles (parsed and
     -- type-checked, a bool) for those parameters. 2056 otherwise.
     for cnd in select e.key, e.value from jsonb_each(conds) e order by e.key loop
@@ -3049,7 +3069,7 @@ begin
                 if ast ->> 'k' = 'err' then
                     bad := ast ->> 'm';
                     h := case when (ast ->> 't3')::boolean
-                              then (ast ->> 'h') || ' pg_permissions'' CEL leaves out bytes, type(), dyn(), protobuf messages and optional syntax (designs/d-conditions.md, section 4).'
+                              then (ast ->> 'h') || ' pg_permissions'' CEL leaves out bytes, type(), dyn(), protobuf messages and optional syntax (see docs/conditions.md).'
                               else ast ->> 'h' end;
                 end if;
             end if;
@@ -3888,7 +3908,7 @@ $$;
 -- '*' a typed wildcard. The walks keep frontiers and visited sets in parallel
 -- arrays, like design A's check_for, and are PL/pgSQL so plans are cached.
 --
--- Conditions (designs/d-conditions.md section 7): a tuple matches the edge of
+-- Conditions (research/designs/d-conditions.md section 7): a tuple matches the edge of
 -- its own condition (tuple.condition_name = edge.condition), and a
 -- conditioned tuple is taken only when its condition is true. Every walk
 -- takes p_req (the request's context) and p_mode, how an evaluation error
@@ -4412,7 +4432,7 @@ begin
 end;
 $$;
 
--- OpenFGA's error rule for a Check that found no true path (designs/d-conditions.md
+-- OpenFGA's error rule for a Check that found no true path (research/designs/d-conditions.md
 -- section 3, rule 7): its top-down search fails with the error of any
 -- conditioned tuple it evaluates, even one off the user's path. That search
 -- reads, from the object down, the userset and tupleset tuples of every node
@@ -4956,7 +4976,7 @@ $$;
 -- subtract of a difference (a cycle there makes the difference false). A
 -- monotone relation, under a subtract or not, goes to the set-based search
 -- instead: its least fixpoint, in which a cycle of usersets contributes
--- nobody (designs/d-per-model.md §5). So the flag only comes from recursion
+-- nobody (research/designs/d-per-model.md §5). So the flag only comes from recursion
 -- through a non-monotone relation, such as a relation that reaches itself
 -- through a subtract.
 --
@@ -5523,7 +5543,7 @@ $$;
 -- object. Invalid input raises openfga:2000, an invalid contextual tuple 2027,
 -- too deep a resolution 2002, a condition that can't be evaluated 2000
 -- (OpenFGA's rule: when no path of true edges exists and the search met an
--- edge whose condition errors, designs/d-conditions.md section 3).
+-- edge whose condition errors, research/designs/d-conditions.md section 3).
 create function permissions.fga_check(subject text, relation text, object text,
                                       contextual_tuples jsonb default null,
                                       model_id text default null,

@@ -1,4 +1,4 @@
--- Goal: attribute conditions: document status and expired grants (PLAN.md §10 G13)
+-- Goal: attribute conditions: document status and expired grants (research/plan.md §10 G13)
 -- Design B: the status rule is a policy condition on a resource attribute
 -- (resource.status). apply_rls compiles it into the RLS expression as a SQL
 -- predicate on documents.status next to its own ids() group, so it stays on

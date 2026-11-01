@@ -1,15 +1,15 @@
 ---
 title: pg_permissions
-description: A pure SQL authorization extension for Postgres, usable inside RLS policies. Design D (RBAC plus an OpenFGA-compatible model) is the extension; A, B and C are the measured prototypes it was chosen from.
+description: A pure SQL authorization extension for Postgres. It has RBAC and an OpenFGA-compatible model, and you can use both in RLS policies.
 template: splash
 hero:
-  tagline: RBAC and an OpenFGA-compatible relationship model in one Postgres schema, usable inside RLS policies. The extension is design D, chosen from three benchmarked prototypes; this site has the decision, the numbers and the usage docs.
+  tagline: RBAC and an OpenFGA-compatible relationship model in one Postgres schema. Use them inside RLS policies, so that the database enforces access.
   actions:
-    - text: Read the decision guide
-      link: ./decision/guide/
+    - text: Install the extension
+      link: ./install/
       icon: right-arrow
-    - text: Open the benchmarks
-      link: ./benchmarks/dashboard/
+    - text: Read about RBAC
+      link: ./rbac/
       variant: minimal
 ---
 
@@ -18,48 +18,51 @@ import EngineCards from '../../components/bench/EngineCards.astro';
 
 ## What it is
 
-`pg_permissions` is an authorization extension written in pure SQL. One schema supports several permission models: RBAC
-today, Zanzibar/FGA-style relationships (sharing, nested teams, parent inheritance), and attribute rules later. Policies
-call it from inside row-level security, so the database enforces access, not the app.
+`pg_permissions` is an authorization extension written in pure SQL. One schema supports more than one permission model.
+It has RBAC (roles, permissions and scopes) and Zanzibar/FGA-style relationships (sharing, nested teams, parent inheritance).
+The relationship model follows OpenFGA, and it has OpenFGA conditions (CEL).
+Policies call the extension from inside row level security (RLS), so the database enforces access, not the app.
+
+## Where to start
+
+Start with Install. Then read the page for the model that you use.
+
+<CardGrid>
+	<LinkCard title="Install" description="Install the extension with psql, as a non-superuser, with pg_tle or with Docker. Check the install." href="./install/" />
+	<LinkCard title="RBAC" description="Roles, permissions and scopes, with tested examples. Use RBAC when access depends on what a user is." href="./rbac/" />
+	<LinkCard title="FGA" description="The OpenFGA model in SQL: models, tuples, Check, ListObjects and ListUsers. Use it for access to single objects." href="./fga/" />
+	<LinkCard title="Conditions" description="OpenFGA conditions in CEL. Use them for access that expires or that depends on an attribute." href="./conditions/" />
+	<LinkCard title="RLS" description="How to write row level security policies with RBAC, with the OpenFGA model, and with both." href="./rls/" />
+	<LinkCard title="Reference" description="Every public function, with its signature, its errors and an example." href="./reference/" />
+	<LinkCard title="Errors and limits" description="Every error that the extension raises, and the limits of the API functions." href="./errors-and-limits/" />
+	<LinkCard title="Research" description="How the extension was designed, measured and chosen: the plan, the decision, the benchmarks and the build journal." href="./research/overview/" />
+</CardGrid>
 
 ## Status
 
 <CardGrid>
-	<Card title="Design D is the extension" icon="approve-check">
-		`pg_permissions--0.0.1.sql` is design D: `rbac_*` tables and an OpenFGA-compatible `fga_*` model. It passes the
-		whole suite (37 spec files, 2,164 assertions), including OpenFGA's own test suite, on Postgres 16, 17 and 18.
+	<Card title="The extension is design D" icon="approve-check">
+		`pg_permissions--0.0.1.sql` is design D. It has `rbac_*` tables and an OpenFGA-compatible `fga_*` model. It passes the
+		whole suite (56 spec files, 3,638 assertions) on Postgres 16, 17 and 18. The suite includes the test suite of OpenFGA.
 	</Card>
 	<Card title="A, B and C are history" icon="pencil">
-		The three earlier prototypes stay in `prototypes/` as measured history, selectable with `--impl`. They pass the
+		The three earlier prototypes stay in `prototypes/` as measured history. You can select them with `--impl`. They pass the
 		same shared goals G1-G14, and the `rbac` preset gives the same answers on all of them.
 	</Card>
 	<Card title="Benchmarked on identical data" icon="rocket">
-		Serial pgbench runs at 10k, 100k and 1M documents, three team shapes. Every read policy returns identical
-		visible-document sets on every engine.
+		The benchmarks are serial pgbench runs at 10k, 100k and 1M documents, with three team shapes. Every read policy returns
+		identical sets of visible documents on every design.
 	</Card>
 	<Card title="Not yet measured" icon="warning">
-		pg_tle installs, concurrency beyond 4 clients, and Postgres versions other than 16, 17 and 18. See the [Postgres versions](./benchmarks/postgres-versions/) page for what exists.
+		pg_tle installs, concurrency beyond 4 clients, and Postgres versions other than 16, 17 and 18 are not yet measured.
 	</Card>
 </CardGrid>
 
-## The three prototypes at a glance (history)
+## The three prototypes of the research (history)
+
+The extension is design D. The research started with three prototypes, A, B and C, and compared them with benchmarks. The cards show what each design does and when to pick it.
 
 <EngineCards />
 
-The headline: RBAC is a wash, with every engine within about 0.2 ms. The choice only mattered once an app graduates to
-per-object sharing, where the engines trade read cost against nesting cost and complexity; D's numbers are on the [design D report](./benchmarks/design-d-report/).
-
-## Where to start
-
-<CardGrid>
-	<LinkCard title="How do I use it?" description="Install, identity, the rbac preset and RLS policies, with tested examples. One page per engine for sharing." href="./usage/guide/" />
-	<LinkCard title="Decision guide" description="Scorecard, when each engine wins, hybrids, open questions." href="./decision/guide/" />
-	<LinkCard title="Benchmarks dashboard" description="Charts for every comparison, with takeaways and table views." href="./benchmarks/dashboard/" />
-	<LinkCard title="Optimizations" description="Before and after the optimization pass, per engine, with ranking changes." href="./benchmarks/optimizations/" />
-	<LinkCard title="Postgres versions" description="pg16, pg17 and pg18 side by side, within one environment and engine build." href="./benchmarks/postgres-versions/" />
-	<LinkCard title="Plan and goals" description="What it must do, the rbac preset API, evaluation criteria." href="./overview/plan/" />
-	<LinkCard title="Design docs" description="D per-model tables (the extension), then A, B and C as history." href="./designs/d-per-model/" />
-	<LinkCard title="Build journal" description="How it was built, including the dead ends." href="./journal/build-journal/" />
-</CardGrid>
-
-Running the tests and benchmarks yourself is covered in the [test suite page](./testing/test-suite/).
+The headline is that RBAC is the same on every design, within about 0.2 ms. The choice mattered only when an app grows to
+per-object sharing. There the designs trade read cost against nesting cost and complexity. The Research section has the numbers of D, and the decision guide.

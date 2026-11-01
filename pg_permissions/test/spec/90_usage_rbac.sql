@@ -1,4 +1,4 @@
--- Goal: every example in usage/README.md ("Using pg_permissions") works as written.
+-- Goal: every example in docs/README.md ("Using pg_permissions") works as written.
 --
 -- This file mirrors that page, section by section and in the same order, so the
 -- state built by one section (roles, assignments, tables) is what the next one

@@ -1,4 +1,4 @@
--- Goal: public access, user:* (PLAN.md §10, G11)
+-- Goal: public access, user:* (research/plan.md §10, G11)
 -- Design C: the model allows "user:*" on a relation; grant_public() writes it
 -- (a separate function, so a null subject id can never grant public access).
 \ir ../../fixtures/ids.sql

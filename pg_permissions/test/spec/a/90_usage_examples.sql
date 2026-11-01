@@ -1,5 +1,5 @@
--- Goal: every example in usage/a-tuple-core.md runs and gives the answer the page states.
--- This file mirrors usage/a-tuple-core.md, section by section and in the same order, so the
+-- Goal: every example in research/prototypes/a-tuple-core.md runs and gives the answer the page states.
+-- This file mirrors research/prototypes/a-tuple-core.md, section by section and in the same order, so the
 -- two stay in step: when you change an example on the page, change it here (and the other way
 -- round). Sections share one database, as the page does, and each how-to leaves the data the
 -- way it found it unless the page says otherwise.
@@ -18,7 +18,7 @@
 select tap.plan(141);
 
 -- ============================================================================
--- 2. Quick start (PLAN.md §5)
+-- 2. Quick start (research/plan.md §5)
 -- ============================================================================
 
 select permissions.define_type('user');

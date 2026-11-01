@@ -1,4 +1,4 @@
--- Goal: the reference scenario (PLAN.md §5)
+-- Goal: the reference scenario (research/plan.md §5)
 -- PROVISIONAL: the zanzibar-level API isn't settled. These tests use Design A's
 -- function names (define_type, define_relation, grant, check_for, list_objects_for,
 -- list_subjects). Update them when the engine is chosen; keep the assertions.

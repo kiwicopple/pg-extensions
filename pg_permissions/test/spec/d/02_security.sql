@@ -1,4 +1,4 @@
--- Goal: clients can't read or write permission data, or act on other users (PLAN.md §3, §4)
+-- Goal: clients can't read or write permission data, or act on other users (research/plan.md §3, §4)
 -- Checked through the catalog, so it holds for any engine's table names.
 -- The extension's copy of test/spec/02_security.sql (the prototypes' version,
 -- in their unprefixed API): the same assertions, with the rbac_* names.

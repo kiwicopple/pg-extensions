@@ -292,7 +292,7 @@ export function comparisonAnchor(scale: string, shape: string): string {
 }
 
 export const comparisonLink = (scale?: string, shape?: string) =>
-	url(`benchmarks/comparison/${scale && shape ? comparisonAnchor(scale, shape) : ''}`);
+	url(`research/benchmarks/comparison/${scale && shape ? comparisonAnchor(scale, shape) : ''}`);
 
 export type ByEngine = Partial<Record<Design, number>>;
 

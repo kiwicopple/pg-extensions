@@ -1,5 +1,5 @@
 -- Goal: a model's conditions are validated and compiled when the model is
--- written, as OpenFGA v1.22.1 does (designs/d-conditions.md sections 2, 3 and
+-- written, as OpenFGA v1.22.1 does (research/designs/d-conditions.md sections 2, 3 and
 -- 4; test/fga_abac/probe.sh answers P1 to P4 and P33 to P39). The request's
 -- validation (names, expression size, parameter count, $expression) is 2000;
 -- everything typesystem.NewAndValidate and the CEL compiler reject is 2056,
@@ -41,7 +41,7 @@ begin
 end;
 $$;
 
-select tap.plan(51);
+select tap.plan(53);
 
 -- accepted, and kept
 select tap.is(pg_temp.with_cond('x < 100', '{"x": {"type_name": "TYPE_NAME_INT"}}') ~ '^openfga', false, 'a condition on a type restriction is accepted');
@@ -115,6 +115,8 @@ select tap.ok(pg_temp.with_cond('b"abc" == b"abc"', '{}') ~ '^openfga:2056 .*byt
 select tap.ok(pg_temp.with_cond('type(x) == int', '{"x": {"type_name": "TYPE_NAME_INT"}}') ~ '^openfga:2056 .*type\(\) is not supported', 'type() is refused (2056)');
 select tap.ok(pg_temp.with_cond('dyn(x) < 1.5', '{"x": {"type_name": "TYPE_NAME_INT"}}') ~ '^openfga:2056 .*dyn\(\) is not supported', 'dyn() is refused (2056; OpenFGA accepts it, P37)');
 select tap.ok(pg_temp.hint_of('dyn(x) < 1.5', '{"x": {"type_name": "TYPE_NAME_INT"}}') ~ 'leaves out bytes, type\(\), dyn\(\)', '... with a hint naming what is left out');
+select tap.is((select count(*)::int from regexp_matches(pg_temp.hint_of('dyn(x) < 1.5', '{"x": {"type_name": "TYPE_NAME_INT"}}'), 'CEL', 'g')), 1, '... and the hint says it once');
+select tap.ok(pg_temp.hint_of('dyn(x) < 1.5', '{"x": {"type_name": "TYPE_NAME_INT"}}') ~ '\(see docs/conditions\.md\)\.$', '... and the hint ends with a pointer to docs/conditions.md');
 select tap.ok(pg_temp.with_cond('x == int', '{"x": {"type_name": "TYPE_NAME_INT"}}') ~ '^openfga:2056 .*type names used as values are not supported', 'a type name as a value is refused (2056)');
 select tap.ok(pg_temp.with_cond('Foo{a: 1}.a == x', '{"x": {"type_name": "TYPE_NAME_INT"}}') ~ '^openfga:2056 .*message construction', 'message construction is refused (2056)');
 select tap.ok(pg_temp.with_cond('m.?a == x', '{"m": {"type_name": "TYPE_NAME_MAP", "generic_types": [{"type_name": "TYPE_NAME_INT"}]}, "x": {"type_name": "TYPE_NAME_INT"}}')

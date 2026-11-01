@@ -1,4 +1,4 @@
--- Goal: every example in usage/b-policy-first.md gives the answer the page shows.
+-- Goal: every example in research/prototypes/b-policy-first.md gives the answer the page shows.
 -- This file mirrors that page, section by section: the "-- §" comments are the
 -- page's headings. Change an example here and on the page together.
 -- Design B only. The world is built once (the quick start) and the how-tos

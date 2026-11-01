@@ -3,7 +3,7 @@
 #
 # Set on 2026-10-28 at roughly 2-3x Design A's measured p95 (Postgres 16,
 # Apple Silicon laptop, 4 clients). Tight enough to catch a real regression
-# (the per-row cast bug in PLAN.md section 4 was 5x), loose enough for
+# (the per-row cast bug in research/plan.md section 4 was 5x), loose enough for
 # machine-to-machine noise.
 #
 # Added on 2026-10-29 (rows after the session-1 block below): the parents,
@@ -13,14 +13,14 @@
 # reference, rounded up to a whole ms, at least 1 ms. The reference is the
 # fastest of the three engines on that workload (session 1 had only A), so a
 # budget says "an engine has shown this is achievable on this data". Engines
-# that miss a budget are listed in bench/baselines/COMPARISON.md; budgets were
+# that miss a budget are listed in research/benchmarks/COMPARISON.md; budgets were
 # not loosened to fit them. The session-1 rows are unchanged.
 #
 # Re-baselined on 2026-10-30 (phase 6): large parents_proj_select_count 9 -> 20,
 # for every engine, not an exemption. The query is a bitmap heap scan over
 # about 10,900 all-visible heap pages of documents; Postgres 16.4 skipped the
 # heap fetch for them and the current patch releases (16.15, 17.11, 18.6) read
-# every page (bench/baselines/VERSIONS.md, Calibration). That floor is the same
+# every page (research/benchmarks/VERSIONS.md, Calibration). That floor is the same
 # for A, B, C and D: p50 7.5-9.4 ms and p95 8.2-16.1 ms over the 27 large
 # reports on PG 16-18 in bench/baselines/pg*-docker-*-large-default*.md, the
 # p95 spread depending on what else the host is doing. 9 ms was 3x the fastest
@@ -28,7 +28,7 @@
 # Docker. 20 is above every p95 measured (worst 16.10, A, tag p6) and 2.1x the
 # worst p50, so it still fails if the plan regresses (a floor that doubles).
 # The old rule (3x the fastest p95, 8.2 ms) would give 25; 20 is stricter.
-# Numbers and the table: bench/baselines/D.md, "Phase 6".
+# Numbers and the table: research/benchmarks/D.md, "Phase 6".
 #
 # Stress shapes (--shape deep|wide) use scale-shape keys, e.g. medium-wide.
 # Workloads without a row have no budget.

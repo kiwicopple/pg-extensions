@@ -1,4 +1,4 @@
--- Goal: who_can reports public (user:*) grants without enumerating users (PLAN.md §10, G11)
+-- Goal: who_can reports public (user:*) grants without enumerating users (research/plan.md §10, G11)
 -- Design C: a public grant is a tuple with a null subject_id, so who_can
 -- returns one null row for it: "every principal of the grant's type". It is
 -- the counterpart of A's ('user', '*') row from list_subjects. Like A's row it

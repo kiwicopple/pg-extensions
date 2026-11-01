@@ -1,4 +1,4 @@
--- Goal: groups, nesting, cycles, revocation, expiry and cleanup (PLAN.md §2 Model 2, §3)
+-- Goal: groups, nesting, cycles, revocation, expiry and cleanup (research/plan.md §2 Model 2, §3)
 -- Design B's native API. Same scenario and assertions as a/31_zanzibar_groups.sql.
 -- Group membership is a parents edge (user in team, team in team), kept as a
 -- closure on write. Differences from A, both by design:
@@ -53,7 +53,7 @@ select tap.is(permissions.can_for('user', :'erin', 'update', 'document', :'acme_
 select permissions.grant_role('user', :'erin', 'editor', 'document', :'acme_readme', now() + interval '1 hour');
 select tap.is(permissions.can_for('user', :'erin', 'update', 'document', :'acme_readme'), true, 'an unexpired grant does');
 
--- cleanup (PLAN.md §3: apps remove a deleted user's permissions)
+-- cleanup (research/plan.md §3: apps remove a deleted user's permissions)
 select permissions.grant_role('user', :'erin', 'editor', 'document', :'acme_plan');
 select permissions.delete_entity('user', :'erin');
 select tap.set_eq(permissions.ids_for('user', :'erin', 'select', 'document'), '{}', 'delete_entity removes all of a user''s access');

@@ -1,4 +1,4 @@
--- Goal: every example in usage/fga.md ("The OpenFGA model") works as written.
+-- Goal: every example in docs/fga.md ("The OpenFGA model") works as written.
 --
 -- This file mirrors that page, section by section and in the same order, so the
 -- state one section builds (the model, the tuples) is what the next one uses.

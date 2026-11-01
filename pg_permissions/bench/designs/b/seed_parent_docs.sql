@@ -3,7 +3,7 @@
 -- parents_proj_* workloads (seed_parents.sql).
 --
 -- With documents as parents-table children, ids('select', 'document') returns
--- every document below an anchor the caller holds (designs/b-policy-first.md,
+-- every document below an anchor the caller holds (research/designs/b-policy-first.md,
 -- "Partial evaluation for RLS": "resources linked by parents rows below an
 -- anchor"), plus the shares, so one call covers everything. This is B's only
 -- single-expression form: without document rows, folder_id = any(ids(..,

@@ -51,7 +51,7 @@ from generate_series(1, 1000) i;
 
 -- accessible() returns uuid[], so the share branch needs no unnest or cast:
 -- the ::uuid[] is a no-op that makes Postgres treat the subquery as an array
--- (see designs/c-compiled-model.md, "RLS fast path").
+-- (see research/designs/c-compiled-model.md, "RLS fast path").
 drop policy documents_select on public.documents;
 create policy documents_select on public.documents for select to authenticated using (
     org_id = any (array(select unnest(permissions.scopes_with_permission('documents.read'))::uuid))

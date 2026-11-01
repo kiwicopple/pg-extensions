@@ -22,7 +22,7 @@ const domain = logDomain(panels.flatMap((p) => p.groups.flatMap((g) => g.cols.ma
 const lg = panels[panels.length - 1];
 let takeaway = '';
 if (lg && lg.proj.a && lg.single.a && lg.proj.c && lg.single.c) {
-	takeaway = `The policy shape costs more than the engine. At ${SCALE_DOCS[lg.sc]} documents the single-branch page is ${times(lg.single.a / lg.proj.a)} slower than the projection on A (${fmt(lg.proj.a)} to ${fmt(lg.single.a)} ms)${lg.proj.b && lg.single.b ? `, ${times(lg.single.b / lg.proj.b)} on B` : ''} and ${times(lg.single.c / lg.proj.c)} on C (${fmt(lg.proj.c)} to ${fmt(lg.single.c)} ms), because the engine has to materialise every visible id.`;
+	takeaway = `The policy shape costs more than the design. At ${SCALE_DOCS[lg.sc]} documents the single-branch page is ${times(lg.single.a / lg.proj.a)} slower than the projection on A (${fmt(lg.proj.a)} to ${fmt(lg.single.a)} ms)${lg.proj.b && lg.single.b ? `, ${times(lg.single.b / lg.proj.b)} on B` : ''} and ${times(lg.single.c / lg.proj.c)} on C (${fmt(lg.proj.c)} to ${fmt(lg.single.c)} ms). The reason is that the design must materialize every visible id.`;
 }
 ---
 
@@ -30,7 +30,7 @@ if (lg && lg.proj.a && lg.single.a && lg.proj.c && lg.single.c) {
 	panels.length ? (
 		<Frame
 			title="Parents: two-arm projection against single-branch policy"
-			subtitle={`${s!.label}: first page p50, default shape, ms on a log axis${panels.length > 1 ? ` shared by the ${panels.length} panels` : ''}. ${panels.length === 1 ? 'This series has the large default scale only.' : ''}`}
+			subtitle={`${s!.label}: first page p50, default shape, ms on a log axis${panels.length > 1 ? ` shared by the ${panels.length} panels` : ''}. ${panels.length === 1 ? 'This series has only the large default scale.' : ''}`}
 			takeaway={takeaway}
 			source={[{ href: comparisonLink('large', 'default'), label: 'COMPARISON.md (local PG 16, before optimization: policy shape)' }]}
 		>
@@ -58,6 +58,6 @@ if (lg && lg.proj.a && lg.single.a && lg.proj.c && lg.single.c) {
 			</Fragment>
 		</Frame>
 	) : (
-		<div class="viz-note"><p>Parents comparison needs default-shape runs with both parents workloads; not available in the current data.</p></div>
+		<div class="viz-note"><p>The parents comparison needs default-shape runs with both parents workloads. The current data does not have them.</p></div>
 	)
 }

@@ -1,5 +1,5 @@
 -- Goal: ListObjects' forward walk (one recursive CTE over fga_walk_steps,
--- pruned to the nodes that can reach the target; designs/d-per-model.md §5)
+-- pruned to the nodes that can reach the target; research/designs/d-per-model.md §5)
 -- returns what Check says for every object, for every relation of a model
 -- with several targets, cycles, a wildcard, tupleToUserset and userset users,
 -- and that its depth rule is unchanged: an answer that needs 25 levels or more

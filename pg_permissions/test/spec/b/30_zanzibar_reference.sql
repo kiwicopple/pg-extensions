@@ -1,4 +1,4 @@
--- Goal: the reference scenario (PLAN.md §5)
+-- Goal: the reference scenario (research/plan.md §5)
 -- Design B's native API: roles declared per resource type (define_role), facts
 -- (grant_role, add_parent), and policies that say what the facts allow (permit).
 -- Same scenario and assertions as a/30_zanzibar_reference.sql. A's org relations

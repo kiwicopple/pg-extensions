@@ -9,7 +9,7 @@ interface Props {
 const { designs = DESIGN_IDS as string[], kind = 'bar', extra = [] } = Astro.props;
 ---
 
-<ul class="viz-legend" aria-label="Engines">
+<ul class="viz-legend" aria-label="Designs">
 	{
 		ENGINES.filter((e) => designs.includes(e.id)).map((e) => (
 			<li>

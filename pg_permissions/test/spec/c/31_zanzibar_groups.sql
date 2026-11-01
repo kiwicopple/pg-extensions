@@ -1,4 +1,4 @@
--- Goal: groups, nesting, cycles, revocation, expiry and cleanup (PLAN.md §2 Model 2, §3)
+-- Goal: groups, nesting, cycles, revocation, expiry and cleanup (research/plan.md §2 Model 2, §3)
 -- Design C's native API. Same scenario and assertions as a/31_zanzibar_groups.sql.
 \ir ../../fixtures/ids.sql
 
@@ -43,7 +43,7 @@ select tap.is(permissions.can_for('user', :'erin', 'document', :'acme_readme', '
 select permissions.grant('document', :'acme_readme', 'editor', 'user', :'erin', null, now() + interval '1 hour');
 select tap.is(permissions.can_for('user', :'erin', 'document', :'acme_readme', 'editor'), true, 'an unexpired grant does');
 
--- cleanup (PLAN.md §3: apps remove a deleted user's permissions)
+-- cleanup (research/plan.md §3: apps remove a deleted user's permissions)
 select permissions.grant('document', :'acme_plan', 'editor', 'user', :'erin');
 select permissions.forget_subject(:'erin');
 select tap.set_eq(permissions.accessible_for('user', :'erin', 'document', 'viewer'), '{}', 'forget_subject removes all of a user''s access');

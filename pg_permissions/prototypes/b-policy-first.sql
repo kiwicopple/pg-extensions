@@ -1,7 +1,7 @@
 /*
  * pg_permissions prototype: Design B (policy-first, Cedar-shaped) + rbac preset
  *
- * See ../designs/b-policy-first.md. This is a prototype for testing and
+ * See research/designs/b-policy-first.md. This is a prototype for testing and
  * benchmarking, not the extension itself. Run the test suite against it with:
  *
  *   ./test/run.sh --impl prototypes/b-policy-first.sql
@@ -1600,7 +1600,7 @@ as $$
 $$;
 
 -- ============================================================================
--- rbac preset (PLAN.md §6)
+-- rbac preset (research/plan.md §6)
 --
 -- Two built-in resource types hold roles: `app` (one resource, app:global) and
 -- `tenant` (one resource per scope). A role is declared on both, its

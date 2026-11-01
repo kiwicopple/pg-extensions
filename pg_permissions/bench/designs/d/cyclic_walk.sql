@@ -2,7 +2,7 @@
 -- what userset cycles cost ListObjects' leveled walk (_fga_forward), against
 -- the same walk without levels (_fga_forward_ids, one row per node), on a
 -- database the D benchmark left behind (docker/run-matrix.sh bench ...
--- --keep-running). bench/baselines/D.md, "opt3", candidate 5.
+-- --keep-running). research/benchmarks/D.md, "opt3", candidate 5.
 --
 -- The leveled walk keeps one row per (node, level), so a node on a cycle of
 -- length k is expanded again every k levels until level 25, and so is every

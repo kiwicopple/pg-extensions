@@ -3,7 +3,7 @@
 -- block_list_objects, phase 7, seed_blocklist.sql):
 -- ListObjects on a relation with `but not`, on a database the D benchmark
 -- left behind (docker/run-matrix.sh bench ... --keep-running, or a local
--- bench/run.sh --external run). bench/baselines/D.md, "Diagnosis" 3 and
+-- bench/run.sh --external run). research/benchmarks/D.md, "Diagnosis" 3 and
 -- "opt2".
 --
 -- Writes a second model, which becomes the latest: the benchmark's model with

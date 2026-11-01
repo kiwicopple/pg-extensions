@@ -1,7 +1,7 @@
 /*
  * pg_permissions prototype: Design C (compiled model) + rbac preset
  *
- * See ../designs/c-compiled-model.md. This is a prototype for testing and
+ * See research/designs/c-compiled-model.md. This is a prototype for testing and
  * benchmarking, not the extension itself:
  *
  *   ./test/run.sh --impl prototypes/c-compiled-model.sql
@@ -16,7 +16,7 @@
  *   5. Reads     can, accessible, who_can (+ admin-only *_for variants)
  *   6. Writes    grant, revoke, grant_public, revoke_public, set_parent, ...
  *   7. Upkeep    verify, rebuild
- *   8. rbac preset (PLAN.md §6)
+ *   8. rbac preset (research/plan.md §6)
  *
  * All IDs are uuid. No dynamic SQL and no DDL after install.
  */
@@ -1129,7 +1129,7 @@ $$;
 
 -- Rules for one check: which (relation, via_parent, forbid) satisfy or veto it.
 -- Unknown type or permission names have no rules, so every read returns false
--- or empty rather than raising (same rule as the rbac preset, PLAN.md §6).
+-- or empty rather than raising (same rule as the rbac preset, research/plan.md §6).
 
 create function permissions._can(
     p_subject_type text, p_subject_id uuid,
@@ -1614,7 +1614,7 @@ begin
 end;
 $$;
 
--- Cleanup (PLAN.md §3). forget_subject removes every grant to a principal;
+-- Cleanup (research/plan.md §3). forget_subject removes every grant to a principal;
 -- forget_object removes every grant on an object, grants to its usersets,
 -- and its parent links (children become roots).
 create function permissions.forget_subject(p_subject_id uuid)
@@ -1742,13 +1742,13 @@ as $$
 $$;
 
 -- ============================================================================
--- 8. rbac preset (PLAN.md §6)
+-- 8. rbac preset (research/plan.md §6)
 --
 -- Roles live on two preset-owned types: `app` (one object, the nil uuid) for
 -- app-wide roles, and `tenant` (one object per scope). Each role is a relation
 -- on both, `inherits` compiles to `implies`, and each permission is a
 -- permission on both. create_role / drop_role edit the active model and
--- recompile it. Signatures take text IDs exactly as in PLAN.md §6, so the
+-- recompile it. Signatures take text IDs exactly as in research/plan.md §6, so the
 -- preset API is identical across designs; the IDs are uuids underneath.
 -- ============================================================================
 
@@ -1905,7 +1905,7 @@ as $$
                             'tenant', p_scope, p_role, 'relation')
 $$;
 
--- RLS fast path for tenant scoping. text[] as in PLAN.md §6; policies use
+-- RLS fast path for tenant scoping. text[] as in research/plan.md §6; policies use
 -- org_id = any (array(select unnest(permissions.scopes_with_permission(...))::uuid)).
 --
 -- STABLE, with a trailing argument whose default is a volatile function that

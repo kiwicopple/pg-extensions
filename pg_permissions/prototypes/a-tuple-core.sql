@@ -1,7 +1,7 @@
 /*
  * pg_permissions prototype: Design A (shared tuple core) + rbac preset
  *
- * See ../designs/a-tuple-core.md. This is a prototype for testing and
+ * See research/designs/a-tuple-core.md. This is a prototype for testing and
  * benchmarking, not the extension itself. Run the test suite against it with:
  *
  *   ./test/run.sh --impl prototypes/a-tuple-core.sql
@@ -681,7 +681,7 @@ as $$
 $$;
 
 -- ============================================================================
--- rbac preset (PLAN.md §6)
+-- rbac preset (research/plan.md §6)
 -- ============================================================================
 
 select permissions.define_type('user');

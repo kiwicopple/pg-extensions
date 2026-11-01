@@ -3,7 +3,7 @@
 -- and returns 'ok', or a description of what differed, so a wrong answer or an
 -- unexpected error fails that one TAP test and the file carries on.
 --
--- Errors: Design D raises with DETAIL 'openfga:<code>' (designs/d-per-model.md,
+-- Errors: Design D raises with DETAIL 'openfga:<code>' (research/designs/d-per-model.md,
 -- "Errors"); fga_test.code_of() reads it back.
 create schema if not exists fga_test;
 

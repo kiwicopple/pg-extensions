@@ -26,7 +26,7 @@
 -- them, and the checksum of this phase must equal the parents phase's.
 --
 -- The condition reads only the tuple's stored context because the RLS
--- helpers (fga_*_current) pass no request context (designs/d-conditions.md):
+-- helpers (fga_*_current) pass no request context (research/designs/d-conditions.md):
 -- a condition that needs a request parameter is denied there. One shared
 -- context is the case where evaluating once per distinct (condition,
 -- context) pays most; bench/designs/d/conditions_cost.sql measures distinct

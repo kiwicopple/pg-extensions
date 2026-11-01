@@ -1,4 +1,4 @@
--- Goal: an rbac app adds per-object sharing without migrating anything (PLAN.md §6, RBAC scenario step 4)
+-- Goal: an rbac app adds per-object sharing without migrating anything (research/plan.md §6, RBAC scenario step 4)
 -- Design B's native API for the sharing half. Same assertions as a/40_graduation.sql.
 \ir ../../fixtures/ids.sql
 \ir ../../fixtures/rbac_roles.sql

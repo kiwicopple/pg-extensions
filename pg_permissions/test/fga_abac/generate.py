@@ -19,7 +19,7 @@ Each assertion is one TAP test named <mode>:<case>:s<stage>:<kind><index>.
 
 What this suite adds over the consolidated one: an assertion may carry a
 request `context` (a JSON object), passed to the check functions as their
-`context` argument (designs/d-conditions.md, API), through the helpers in
+`context` argument (research/designs/d-conditions.md, API), through the helpers in
 test/fixtures/fga_abac.sql. Numbers are kept as written (Decimal), so the
 out-of-range double in handles_floats reaches the database unchanged.
 Expectations are never edited.

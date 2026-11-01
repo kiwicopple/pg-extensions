@@ -1,4 +1,4 @@
--- Goal: every example in usage/conditions.md ("OpenFGA conditions") works as
+-- Goal: every example in docs/conditions.md ("OpenFGA conditions") works as
 -- written, in the page's order. Statements without a result are copied from
 -- the page; queries that return something appear as tap.is(<the same
 -- expression>, <the documented answer>), errors as fga_test.error_of(<the

@@ -1,4 +1,4 @@
--- Goal: the reference scenario (PLAN.md §5)
+-- Goal: the reference scenario (research/plan.md §5)
 -- Design C's native API: apply_model (JSON model), grant, can_for, accessible_for,
 -- who_can. Same scenario and assertions as a/30_zanzibar_reference.sql.
 \ir ../../fixtures/ids.sql

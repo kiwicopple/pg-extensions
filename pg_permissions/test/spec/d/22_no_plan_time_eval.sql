@@ -1,4 +1,4 @@
--- Goal: RLS policies don't run rbac_scopes_with_permission() at plan time (PLAN.md §4)
+-- Goal: RLS policies don't run rbac_scopes_with_permission() at plan time (research/plan.md §4)
 -- A STABLE function with constant arguments inside `array(select unnest(...))`
 -- is evaluated by the planner (to estimate the unnest's row count) and then
 -- again by the executor, so every query paid for two computations. Engines keep
@@ -23,7 +23,7 @@ insert into public.documents values
     (:'globex_notes', :'globex', 'globex notes');
 alter table public.documents enable row level security;
 grant select on public.documents to authenticated;
--- PLAN.md §4: the documented form
+-- research/plan.md §4: the documented form
 create policy documents_select on public.documents for select to authenticated
     using (org_id = any (array(select unnest(permissions.rbac_scopes_with_permission('documents.read'))::uuid)));
 

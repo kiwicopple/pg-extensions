@@ -2,7 +2,7 @@
 -- what conditions cost Check, ListObjects and ListUsers, in the server, on a
 -- database the D benchmark left behind after its conditions phase
 -- (docker/run-matrix.sh bench ... --keep-running; seed_conditions.sql wrote
--- `cviewer`, the conditioned copy of `viewer`). bench/baselines/D.md, "opt3",
+-- `cviewer`, the conditioned copy of `viewer`). research/benchmarks/D.md, "opt3",
 -- candidate 6.
 --
 -- For viewer and cviewer: the time per call and the number of condition

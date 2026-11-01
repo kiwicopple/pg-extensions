@@ -1,4 +1,4 @@
--- Goal: clients can't read or write permission data, or act on other users (PLAN.md §3, §4)
+-- Goal: clients can't read or write permission data, or act on other users (research/plan.md §3, §4)
 -- Checked through the catalog, so it holds for any engine's table names.
 \ir ../fixtures/ids.sql
 \ir ../fixtures/rbac_roles.sql

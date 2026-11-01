@@ -1,4 +1,4 @@
--- Goal: can() outside RLS fails closed when a forbid's inputs are missing (PLAN.md §10 G12, G13)
+-- Goal: can() outside RLS fails closed when a forbid's inputs are missing (research/plan.md §10 G12, G13)
 -- Design B: can() takes the row's parents and attributes in `resource`. A
 -- forbid that could apply to the subject and reads a parent (via) or an
 -- attribute (resource condition) the caller left out raises 22023 instead of

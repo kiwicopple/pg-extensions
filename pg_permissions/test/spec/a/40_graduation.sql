@@ -1,4 +1,4 @@
--- Goal: an rbac app adds per-object sharing without migrating anything (PLAN.md §6, RBAC scenario step 4)
+-- Goal: an rbac app adds per-object sharing without migrating anything (research/plan.md §6, RBAC scenario step 4)
 -- PROVISIONAL: the sharing half uses Design A's zanzibar-level API.
 \ir ../../fixtures/ids.sql
 \ir ../../fixtures/rbac_roles.sql

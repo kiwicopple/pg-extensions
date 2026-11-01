@@ -14,11 +14,11 @@ const ties = (g: Design[][]) => g.length === 1 && g[0].length > 1;
 	rows.length && pair.before && pair.after ? (
 		<Frame
 			title="Ranking, before and after"
-			subtitle={`${pair.before.label} against ${pair.after.label}. Best first. Engines within ${Math.round((TIE - 1) * 100)}% of the best in a group are tied (=); "<" means the next group is slower.`}
+			subtitle={`${pair.before.label} against ${pair.after.label}. Best first. Designs within ${Math.round((TIE - 1) * 100)}% of the best in a group are tied (=); "<" means the next group is slower.`}
 			takeaway={`${changed.length} of ${rows.length} workload classes changed order or tie pattern. ` +
 				(changed.length ? `Changed: ${changed.map((r) => r.c.cls).join('; ')}. ` : '') +
 				(rows.filter((r) => ties(r.ga) && !ties(r.gb)).length
-					? `Now a tie between all three engines: ${rows.filter((r) => ties(r.ga) && !ties(r.gb)).map((r) => r.c.cls).join('; ')}.`
+					? `Now a tie between all three designs: ${rows.filter((r) => ties(r.ga) && !ties(r.gb)).map((r) => r.c.cls).join('; ')}.`
 					: '')}
 		>
 			<div class="rank-wrap">

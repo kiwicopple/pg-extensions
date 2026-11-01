@@ -1,5 +1,5 @@
 -- Goal: pin D's answer for a cycle under a subtract where the subtracted
--- relation is monotone and positively recursive (designs/d-per-model.md §5,
+-- relation is monotone and positively recursive (research/designs/d-per-model.md §5,
 -- §8). D uses least-fixpoint semantics there: a cycle of usersets with no user
 -- in it contributes nobody, so `blocked` is empty and `viewer: [user] but not
 -- blocked` holds. Check, ListObjects and ListUsers agree. Recursion through

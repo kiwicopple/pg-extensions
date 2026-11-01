@@ -1,4 +1,4 @@
--- Goal: an rbac app adds per-object sharing without migrating anything (PLAN.md §6, RBAC scenario step 4)
+-- Goal: an rbac app adds per-object sharing without migrating anything (research/plan.md §6, RBAC scenario step 4)
 -- Design C: graduating is one apply_model() call that adds a document type. The
 -- preset's types (app, tenant) are carried over, so the roles are untouched.
 \ir ../../fixtures/ids.sql

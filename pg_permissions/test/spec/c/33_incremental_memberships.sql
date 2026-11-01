@@ -1,4 +1,4 @@
--- Goal: Design C's incremental membership maintenance (designs/c-compiled-model.md
+-- Goal: Design C's incremental membership maintenance (research/designs/c-compiled-model.md
 -- §5, "Optimizations (session 3)"). Inserts apply a delta (members of the
 -- subject x the sets above the object, least depth wins); deletes recompute
 -- the affected principals. These cases target the delta: a shorter path

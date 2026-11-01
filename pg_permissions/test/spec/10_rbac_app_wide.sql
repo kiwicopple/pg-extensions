@@ -1,4 +1,4 @@
--- Goal: rbac preset, app-wide roles (PLAN.md §6, RBAC scenario step 1 and 5)
+-- Goal: rbac preset, app-wide roles (research/plan.md §6, RBAC scenario step 1 and 5)
 \ir ../fixtures/ids.sql
 \ir ../fixtures/rbac_roles.sql
 select permissions.assign_role(:'alice', 'admin');

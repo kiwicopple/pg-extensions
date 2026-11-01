@@ -1,6 +1,6 @@
 -- Goal: ListObjects on relations that are not monotone, evaluated set-based
 -- over the rewrite tree (fga_relations.set_eval, phase 5 of session 5;
--- designs/d-per-model.md section 5): every leaf a walk, combined by union,
+-- research/designs/d-per-model.md section 5): every leaf a walk, combined by union,
 -- intersection and difference with _fga_rec's rules. It must give what Check
 -- gives for every object, and what the per-candidate path (the candidates of
 -- the positive walk, each checked by _fga_rec) gives, for: a union under the

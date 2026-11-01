@@ -1,4 +1,4 @@
--- Goal: rbac preset, managing roles and assignments safely (PLAN.md §6)
+-- Goal: rbac preset, managing roles and assignments safely (research/plan.md §6)
 -- The extension's copy of test/spec/12_rbac_management.sql (the prototypes' version,
 -- in their unprefixed API): the same assertions, with the rbac_* names.
 \ir ../../fixtures/ids.sql
@@ -6,7 +6,7 @@
 select permissions.rbac_assign_role(:'bob', 'editor');
 select permissions.rbac_assign_role(:'bob', 'editor', :'acme');
 
-select tap.plan(15);
+select tap.plan(16);
 
 -- assignments
 select tap.lives_ok(format($$ select permissions.rbac_assign_role(%L, 'editor') $$, :'bob'), 'assigning the same role twice is idempotent');
@@ -23,6 +23,8 @@ select tap.throws_ok($$ select permissions.rbac_create_role('viewer', '{document
 select tap.throws_ok($$ select permissions.rbac_create_role('auditor', '{audit.read}', '{nonexistent}') $$, null, 'inheriting an unknown role fails');
 select tap.throws_ok($$ select permissions.rbac_create_role('documents.read', '{x.y}') $$, null, 'a role cannot share a name with a permission');
 select tap.throws_ok($$ select permissions.rbac_create_role('auditor', '{viewer}') $$, null, 'a permission cannot share a name with a role');
+select tap.lives_ok($$ select permissions.rbac_create_role('inherit_only', '{}', '{viewer}') $$, 'an empty permissions array is valid: a role can only inherit');
+select permissions.rbac_drop_role('inherit_only');
 
 -- a new role works immediately, including for existing permissions
 select permissions.rbac_create_role('auditor', '{documents.read,audit.read}');

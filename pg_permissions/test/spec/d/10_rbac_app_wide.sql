@@ -1,4 +1,4 @@
--- Goal: rbac preset, app-wide roles (PLAN.md §6, RBAC scenario step 1 and 5)
+-- Goal: rbac preset, app-wide roles (research/plan.md §6, RBAC scenario step 1 and 5)
 -- The extension's copy of test/spec/10_rbac_app_wide.sql (the prototypes' version,
 -- in their unprefixed API): the same assertions, with the rbac_* names.
 \ir ../../fixtures/ids.sql

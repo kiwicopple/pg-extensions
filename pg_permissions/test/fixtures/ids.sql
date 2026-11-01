@@ -1,4 +1,4 @@
--- Fixed IDs for the scenarios in PLAN.md §5 and §6.
+-- Fixed IDs for the scenarios in research/plan.md §5 and §6.
 -- UUID-shaped so they work with text- and uuid-typed implementations.
 -- The 4th group says what kind of thing it is.
 

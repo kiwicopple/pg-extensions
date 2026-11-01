@@ -1,4 +1,4 @@
--- Goal: every example with an observable result in usage/c-compiled-model.md
+-- Goal: every example with an observable result in research/prototypes/c-compiled-model.md
 -- runs and gives the answer the guide states. This file mirrors that guide,
 -- section by section (the "-- N.N" comments are the guide's section numbers).
 -- Design C's native API. Each section starts from a clean model, so the

@@ -15,7 +15,7 @@
 -- shared with any of their teams) and muted on another (the highest):
 -- bench.team_members and bench.team_grants, so every shape has them.
 --
--- The three relations take different ListObjects paths (designs/d-per-model.md
+-- The three relations take different ListObjects paths (research/designs/d-per-model.md
 -- section 5): can_view is the set-based difference (one subtract that is a
 -- monotone relation); can_view_unmuted (a union under the subtract) and
 -- can_edit (an intersection) were checked candidate by candidate before

@@ -1,5 +1,5 @@
 -- Benchmark seed, part 3b (Design A): link every document to its folder and
--- switch to A's single-branch policy (designs/a-tuple-core.md §12.1).
+-- switch to A's single-branch policy (research/designs/a-tuple-core.md §12.1).
 -- Loaded after the parents_proj_* workloads (seed_parents.sql).
 --
 -- document#viewer inherits folder#viewer, so org roles, folder viewers and

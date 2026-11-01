@@ -1,4 +1,4 @@
--- Goal: every example in usage/README.md ("Using pg_permissions") works as written.
+-- Goal: every example in docs/README.md ("Using pg_permissions") works as written.
 --
 -- This file mirrors that page, section by section and in the same order, so the
 -- state built by one section (roles, assignments, tables) is what the next one
@@ -9,7 +9,7 @@
 -- surface (identity, privileges, RLS rules).
 -- The extension's copy of test/spec/90_usage_rbac.sql (the prototypes' version,
 -- in their unprefixed API): the same assertions, with the rbac_* names. Calls
--- pass arguments by name, as in usage/README.md.
+-- pass arguments by name, as in docs/README.md.
 --
 -- The page's own IDs, not fixtures/ids.sql: the page defines them in its first
 -- code block.

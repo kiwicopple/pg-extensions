@@ -1,4 +1,4 @@
--- Goal: parent inheritance org -> folder -> document (PLAN.md §10 G10)
+-- Goal: parent inheritance org -> folder -> document (research/plan.md §10 G10)
 -- Design B: folders are entities with a parents edge to their org; a document's
 -- folder is its own folder_id column (documents never enter the permission
 -- tables). Policies with via => 'org' / via => 'folder' anchor on the

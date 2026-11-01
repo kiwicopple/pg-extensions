@@ -1,4 +1,4 @@
--- Benchmark seed, part 3a (Design A): folders for parent inheritance (PLAN.md
+-- Benchmark seed, part 3a (Design A): folders for parent inheritance (research/plan.md
 -- §10 G10), with the two-arm projection policy. Uses Design A's zanzibar-level
 -- API. bench/run.sh loads it after the share_* workloads, because it replaces
 -- the documents select policy; seed_parent_docs.sql follows.

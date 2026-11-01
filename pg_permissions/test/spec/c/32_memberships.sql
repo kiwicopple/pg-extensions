@@ -1,4 +1,4 @@
--- Goal: what is unique to Design C (designs/c-compiled-model.md §3, §10)
+-- Goal: what is unique to Design C (research/designs/c-compiled-model.md §3, §10)
 -- Materialized memberships and the ancestor closure stay correct through
 -- nesting, un-nesting, removal and model changes; verify() finds drift and
 -- rebuild() repairs it; the isolation rule and depth cap are enforced; the

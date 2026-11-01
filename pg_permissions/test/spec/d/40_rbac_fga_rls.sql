@@ -1,4 +1,4 @@
--- Goal: one table whose RLS combines both models (PLAN.md "Current plan").
+-- Goal: one table whose RLS combines both models (research/plan.md "Current plan").
 -- Permissive policies OR: a document is visible with documents.read in its
 -- org (rbac_*) or as its viewer (fga_*). A restrictive policy ANDs: nobody
 -- sees the documents of an org that FGA says they are banned from. Updates:

@@ -1,4 +1,4 @@
--- Goal: the fga_* API beyond what OpenFGA's suite covers (designs/d-per-model.md):
+-- Goal: the fga_* API beyond what OpenFGA's suite covers (research/designs/d-per-model.md):
 -- writes and their errors, model versioning and validation, Read, the
 -- current-subject wrappers, cleanup, and who may call what.
 \ir ../../fixtures/ids.sql

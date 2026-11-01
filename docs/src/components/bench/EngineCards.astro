@@ -7,24 +7,24 @@ import type { Design } from '../../lib/chart';
 const s = primary;
 const info: Record<Design, { line: string; pick: string; link: string }> = {
 	a: {
-		line: 'Zanzibar-style tuples. Every check is a read-time recursive walk; nothing is derived, so nothing can drift.',
-		pick: 'Shallow, narrow sharing graphs, frequent team edits, the smallest thing to maintain.',
-		link: './designs/a-tuple-core/',
+		line: 'Zanzibar-style tuples. Every check is a recursive walk at read time. The design derives nothing, so nothing can drift.',
+		pick: 'Shallow and narrow sharing graphs, frequent team edits, and the smallest design to maintain.',
+		link: './research/designs/a-tuple-core/',
 	},
 	b: {
-		line: 'Cedar-style policies. Closures are precomputed on write; forbid and conditions are first-class.',
-		pick: 'Forbid on groups or engine-evaluated conditions in year one; text or bigint keys.',
-		link: './designs/b-policy-first/',
+		line: 'Cedar-style policies. The design computes closures at write time. Forbid rules and conditions are first-class.',
+		pick: 'Forbid rules on groups, or conditions that the design evaluates, in year one; text or bigint keys.',
+		link: './research/designs/b-policy-first/',
 	},
 	c: {
-		line: 'A typed JSON model compiled to SQL, with memberships materialized on write. Reads barely move with shape.',
-		pick: 'Read-heavy apps with wide or deep groups, where nesting a team is rare.',
-		link: './designs/c-compiled-model/',
+		line: 'A typed JSON model that the design compiles to SQL. The design materializes memberships at write time. Reads barely change with the shape.',
+		pick: 'Apps with many reads and wide or deep groups, where nests of teams are rare.',
+		link: './research/designs/c-compiled-model/',
 	},
 	d: {
-		line: 'First-class rbac_* tables plus OpenFGA-compatible fga_* tables, composed in RLS. Passes OpenFGA\'s own test suite.',
-		pick: 'Teams that want OpenFGA\'s model and API inside Postgres next to plain RBAC. Benchmarked, not yet optimized.',
-		link: './designs/d-per-model/',
+		line: 'First-class rbac_* tables plus OpenFGA-compatible fga_* tables, composed in RLS. It passes the test suite of OpenFGA.',
+		pick: 'Teams that want the model and the API of OpenFGA inside Postgres, next to plain RBAC. Benchmarked, and optimized in two passes.',
+		link: './research/designs/d-per-model/',
 	},
 };
 const metrics = [
@@ -56,7 +56,7 @@ const metrics = [
 		))
 	}
 </div>
-<p class="engine-foot">p50 latency, 4 pgbench clients, {s ? <>{seriesVersionLabel(s)}</> : 'no data'}. The numbers come from the dashboard's primary series; the before and after of the optimization pass is on the <a href="./benchmarks/optimizations/">Optimizations page</a>. Source: the <a href="./benchmarks/dashboard/">benchmarks dashboard</a>.</p>
+<p class="engine-foot">p50 latency, 4 pgbench clients, {s ? <>{seriesVersionLabel(s)}</> : 'no data'}. The numbers come from the primary series of the dashboard. The <a href="./research/benchmarks/optimizations/">Optimizations page</a> shows the runs before and after the optimization pass. The source is the <a href="./research/benchmarks/dashboard/">benchmarks dashboard</a>.</p>
 
 <style>
 	.engine-cards {
