@@ -1,5 +1,5 @@
 import { toResult } from '../lib/result'
-import type { Fetch, Result, Transport } from '../lib/types'
+import type { Fetch, Result, Transport, TransportKind } from '../lib/types'
 import { postgrestTransport } from '../transport/postgrest'
 
 /**
@@ -51,15 +51,12 @@ export interface RbacTransportOptions<T extends Transport = Transport> {
   throwOnError?: boolean
 }
 
-/** The transport type that gives a client an `admin` namespace: a transport with `kind: 'sql'`. */
-export type SqlKindTransport = Transport & { readonly kind: 'sql' }
-
 /**
  * The current-subject checks. They answer for the subject of the request (the
  * JWT `sub` over PostgREST, or the subject of `withSubject()` over SQL), and
- * they work over both transports.
+ * they work on every transport.
  */
-export interface RbacClient<N extends RbacNames = RbacNames> {
+export interface RbacClientMethods<N extends RbacNames = RbacNames> {
   /**
    * Checks whether the current subject has a permission, directly or through an inherited role.
    *
@@ -143,33 +140,47 @@ export interface RbacAdminApi<N extends RbacNames = RbacNames> {
   usersWithRole(args: { role: RoleName<N>; scope?: Scope }): Promise<Result<string[]>>
 }
 
-/** An RBAC client with an SQL transport: the checks of {@link RbacClient} and the `admin` namespace. */
-export interface RbacSqlClient<N extends RbacNames = RbacNames> extends RbacClient<N> {
-  /** The admin calls. Server side only. */
-  readonly admin: RbacAdminApi<N>
-}
+/**
+ * The type of an `RbacClient` on a transport of kind `K` (see {@link TransportKind}),
+ * with the names `N` (see {@link RbacNames}).
+ *
+ * `admin` is part of the type only when `K` is exactly `'sql'`:
+ *
+ * - `sqlTransport(pool)` gives `RbacClient<'sql'>`, with `admin`.
+ * - `postgrestTransport(url)` and `new RbacClient(restUrl)` give `RbacClient<'postgrest'>`, without `admin`.
+ * - `sqlTransport(pool).withSubject(...)` gives `RbacClient<'subject'>`, without `admin`:
+ *   the calls run as the end user.
+ *
+ * A transport typed as the general `Transport` gives `K = TransportKind`: the type
+ * then has no `admin`, even if the runtime object has one. Use `'admin' in client`
+ * to narrow such a client.
+ */
+export type RbacClient<K extends TransportKind = TransportKind, N extends RbacNames = RbacNames> = RbacClientMethods<N> &
+  ([K] extends ['sql'] ? { readonly admin: RbacAdminApi<N> } : unknown)
 
 /**
  * The constructor of {@link RbacClient}. Its overloads give the typing rule for `admin`:
  *
  * - `new RbacClient(restUrl, options?)` builds a PostgREST transport and returns an
- *   {@link RbacClient}. It has no `admin`, at type level or at runtime.
- * - `new RbacClient({ transport })` with a transport typed `kind: 'sql'` (for example
- *   `sqlTransport(pool)`) returns an {@link RbacSqlClient}, which has `admin`.
- * - `new RbacClient({ transport })` with any other `Transport` type returns an
- *   {@link RbacClient} without a typed `admin`. At runtime the client still has
- *   `admin` when `transport.kind` is `'sql'`.
+ *   `RbacClient<'postgrest'>`. It has no `admin`, at type level or at runtime.
+ * - `new RbacClient({ transport })` returns an `RbacClient` of the kind of the
+ *   transport. Only a transport of kind `'sql'` (for example `sqlTransport(pool)`)
+ *   gives `admin`.
  *
- * The first type argument narrows the names (see {@link RbacNames}).
+ * The type argument narrows the names (see {@link RbacNames}). The overloads per
+ * kind keep the kind when you pass it: `new RbacClient<Names>({ transport: sqlTransport(pool) })`
+ * is an `RbacClient<'sql', Names>`.
  */
 export interface RbacClientConstructor {
-  new <N extends RbacNames = RbacNames>(restUrl: string, options?: RbacPostgrestOptions): RbacClient<N>
-  new <N extends RbacNames = RbacNames>(options: RbacTransportOptions<SqlKindTransport>): RbacSqlClient<N>
-  new <N extends RbacNames = RbacNames>(options: RbacTransportOptions): RbacClient<N>
+  new <N extends RbacNames = RbacNames>(restUrl: string, options?: RbacPostgrestOptions): RbacClient<'postgrest', N>
+  new <N extends RbacNames = RbacNames>(options: RbacTransportOptions<Transport<'sql'>>): RbacClient<'sql', N>
+  new <N extends RbacNames = RbacNames>(options: RbacTransportOptions<Transport<'subject'>>): RbacClient<'subject', N>
+  new <N extends RbacNames = RbacNames>(options: RbacTransportOptions<Transport<'postgrest'>>): RbacClient<'postgrest', N>
+  new <N extends RbacNames = RbacNames>(options: RbacTransportOptions): RbacClient<TransportKind, N>
   readonly prototype: RbacClient
 }
 
-class RbacClientImpl<N extends RbacNames> implements RbacClient<N> {
+class RbacClientImpl<N extends RbacNames> implements RbacClientMethods<N> {
   private readonly transport: Transport
   private readonly throwOnError: boolean
   /** Only on a client with an SQL transport. */
@@ -251,5 +262,10 @@ function createAdminApi<N extends RbacNames>(transport: Transport, throwOnError:
  * // Server side: SQL, with admin calls
  * const rbac = new RbacClient({ transport: sqlTransport(pool) })
  * await rbac.admin.assignRole({ userId: 'alice', role: 'editor', scope: 'acme' })
+ *
+ * @example
+ * // Server side, as a subject: the checks only, no admin
+ * const alice = new RbacClient({ transport: sqlTransport(pool).withSubject({ id: 'alice' }) })
+ * await alice.hasPermission({ permission: 'documents.edit', scope: 'acme' })
  */
 export const RbacClient: RbacClientConstructor = RbacClientImpl as unknown as RbacClientConstructor

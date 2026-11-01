@@ -26,14 +26,16 @@ export interface SqlTransportOptions {
 }
 
 /** The SQL transport. It can call every function, and it can run calls as a subject. */
-export interface SqlTransport extends Transport {
-  readonly kind: 'sql'
+export interface SqlTransport extends Transport<'sql'> {
   /**
    * Returns a transport that runs each call in its own transaction, as `subject`:
    * `begin; [set local role <role>;] select set_config('permissions.subject_id', ...,
    * true), ...; <call>; commit`. The settings end with the transaction.
+   *
+   * The returned transport has kind `'subject'`: the calls run as the end user,
+   * so a client on it has no `admin` namespace, at type level or at runtime.
    */
-  withSubject(subject: Subject): Transport
+  withSubject(subject: Subject): Transport<'subject'>
 }
 
 /**
@@ -118,11 +120,11 @@ export function sqlTransport(db: Queryable, options: SqlTransportOptions = {}): 
     async rpc<T>(fn: string, args: RpcArgs, shape: Shape): Promise<T> {
       return run((conn) => call<T>(conn, fn, args, shape))
     },
-    withSubject(subject: Subject): Transport {
+    withSubject(subject: Subject): Transport<'subject'> {
       // Validate now, so a bad role fails at `as()` and not at the first call.
       if (subject.role !== undefined) quoteRole(subject.role)
       return {
-        kind: 'sql',
+        kind: 'subject',
         async rpc<T>(fn: string, args: RpcArgs, shape: Shape): Promise<T> {
           // Build first: an unknown function fails before the transaction starts.
           buildCall(schema, fn, args, shape)

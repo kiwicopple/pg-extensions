@@ -24,6 +24,20 @@ export type Shape = 'scalar' | 'set' | 'record' | 'rows' | 'void'
 export type RpcArgs = Record<string, unknown>
 
 /**
+ * The kind of a transport. It decides which functions a client can call, and
+ * whether the client has an `admin` namespace:
+ *
+ * - `'sql'`: a direct SQL connection, as the role of the connection (a trusted
+ *   backend role). It can call every function. Clients on it have `admin`.
+ * - `'postgrest'`: HTTP to PostgREST, as the end user of the JWT. It can call
+ *   only the client (PUBLIC) functions. Clients on it have no `admin`.
+ * - `'subject'`: SQL scoped to one subject (`sqlTransport(db).withSubject(...)`,
+ *   or `as()`). The calls run as the end user, often with
+ *   `set local role authenticated`, so clients on it have no `admin`.
+ */
+export type TransportKind = 'sql' | 'postgrest' | 'subject'
+
+/**
  * A way to call a `permissions.*` function. The clients take a transport and never
  * build SQL or HTTP requests themselves.
  *
@@ -31,10 +45,13 @@ export type RpcArgs = Record<string, unknown>
  * (or a subclass). A call that the transport refuses (an unknown function, an
  * admin function over PostgREST, an unknown argument name) rejects with a plain
  * `Error`: that is a programming error, not a result.
+ *
+ * `K` is the kind of the transport (see {@link TransportKind}). A client has
+ * `admin` in its type only when `K` is exactly `'sql'`.
  */
-export interface Transport {
-  /** `'sql'` can call every function. `'postgrest'` can call only the client (PUBLIC) functions. */
-  readonly kind: 'sql' | 'postgrest'
+export interface Transport<K extends TransportKind = TransportKind> {
+  /** See {@link TransportKind}. */
+  readonly kind: K
   rpc<T = unknown>(fn: string, args: RpcArgs, shape: Shape): Promise<T>
 }
 

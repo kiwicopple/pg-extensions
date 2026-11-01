@@ -1,13 +1,10 @@
 import { toResult } from '../lib/result'
-import type { BaseClientOptions, Result, Transport } from '../lib/types'
+import type { BaseClientOptions, Result, Transport, TransportKind } from '../lib/types'
 import { postgrestTransport } from '../transport/postgrest'
 import type { PostgrestTransportOptions } from '../transport/postgrest'
 import { FgaAdmin } from './FgaAdmin'
 import type { FgaAdminApi } from './FgaAdmin'
 import type { CurrentCheckRequest, CurrentListObjectsRequest } from './types'
-
-/** The kind of a transport: `'sql'` (every function) or `'postgrest'` (client functions only). */
-export type TransportKind = Transport['kind']
 
 /** Options of `new FgaClient(restUrl, options)`: a PostgREST client. */
 export interface FgaPostgrestClientOptions extends PostgrestTransportOptions, BaseClientOptions {}
@@ -46,13 +43,17 @@ export interface FgaClientMethods {
 }
 
 /**
- * The type of an `FgaClient` on a transport of kind `K`.
+ * The type of an `FgaClient` on a transport of kind `K` (see {@link TransportKind}).
  *
- * `admin` is part of the type only when `K` is exactly `'sql'`, so
- * `new FgaClient(restUrl).admin` is a type error. A transport typed as the
- * general `Transport` (for example the result of `sqlTransport(pool).withSubject(...)`
- * or `postgrestTransport(...)`) gives `K = 'sql' | 'postgrest'`: the type then
- * has no `admin`, even if the runtime object has one. Use `'admin' in client`
+ * `admin` is part of the type only when `K` is exactly `'sql'`:
+ *
+ * - `sqlTransport(pool)` gives `FgaClient<'sql'>`, with `admin`.
+ * - `postgrestTransport(url)` and `new FgaClient(restUrl)` give `FgaClient<'postgrest'>`, without `admin`.
+ * - `sqlTransport(pool).withSubject(...)` gives `FgaClient<'subject'>`, without `admin`:
+ *   the calls run as the end user.
+ *
+ * A transport typed as the general `Transport` gives `K = TransportKind`: the type
+ * then has no `admin`, even if the runtime object has one. Use `'admin' in client`
  * to narrow such a client.
  */
 export type FgaClient<K extends TransportKind = TransportKind> = FgaClientMethods &
@@ -90,11 +91,12 @@ export interface FgaClientConstructor {
    * const fga = new FgaClient({ transport: sqlTransport(pool) })
    * await fga.admin.writeTuple({ user: 'user:anne', relation: 'viewer', object: 'document:1' })
    *
+   * // A subject-scoped transport: client methods only, no admin.
    * const anne = new FgaClient({ transport: sqlTransport(pool).withSubject({ id: 'anne' }) })
    * await anne.check({ relation: 'viewer', object: 'document:1' }) // { data: true, error: null }
    * ```
    */
-  new <T extends Transport>(options: FgaTransportClientOptions<T>): FgaClient<T['kind']>
+  new <K extends TransportKind>(options: FgaTransportClientOptions<Transport<K>>): FgaClient<K>
 
   readonly prototype: FgaClient
 }

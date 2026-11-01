@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
+import type { Transport } from '../../src/lib/types'
 import { buildCall, sqlTransport, toPermissionsError } from '../../src/transport/sql'
 import { PermissionsError, PermissionsFetchError } from '../../src/lib/errors'
 
@@ -154,6 +155,7 @@ describe('withSubject', () => {
       },
     }
     const alice = sqlTransport(pool).withSubject({ id: 'alice', role: 'authenticated' })
+    expect(alice.kind).toBe('subject')
     expect(await alice.rpc('rbac_has_permission', { permission: 'p' }, 'scalar')).toBe(true)
     expect(log.map((q) => [q.conn, q.text])).toEqual([
       ['client', 'begin'],
@@ -255,5 +257,13 @@ describe('withSubject', () => {
       'select',
       'commit',
     ])
+  })
+})
+
+describe('transport kinds (types)', () => {
+  it('types sqlTransport as sql and withSubject as subject', () => {
+    const t = sqlTransport({ query: async () => ({ rows: [] }) })
+    expectTypeOf(t.kind).toEqualTypeOf<'sql'>()
+    expectTypeOf(t.withSubject({ id: 'a' })).toEqualTypeOf<Transport<'subject'>>()
   })
 })

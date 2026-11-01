@@ -1,14 +1,14 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { RbacClient } from '../../src/rbac'
-import type { RbacAdminApi, RbacSqlClient } from '../../src/rbac'
+import type { RbacAdminApi } from '../../src/rbac'
 import { PermissionsError } from '../../src/lib/errors'
-import type { RpcArgs, Shape, Transport } from '../../src/lib/types'
+import type { RpcArgs, Shape, Transport, TransportKind } from '../../src/lib/types'
 import type { SqlTransport } from '../../src/transport/sql'
 
 type Call = { fn: string; args: RpcArgs; shape: Shape }
 
 /** A mock transport: records each call, answers from `respond`. */
-function mockTransport(kind: 'sql' | 'postgrest', respond: (fn: string) => unknown = () => null) {
+function mockTransport(kind: TransportKind, respond: (fn: string) => unknown = () => null) {
   const calls: Call[] = []
   const transport: Transport = {
     kind,
@@ -109,6 +109,10 @@ describe('RbacClient admin', () => {
     expect((rbac as unknown as { admin?: RbacAdminApi }).admin).toBeDefined()
   })
 
+  it('has no admin property on a subject transport', () => {
+    expect('admin' in new RbacClient({ transport: mockTransport('subject').transport })).toBe(false)
+  })
+
   it('has no admin property on a PostgREST client', async () => {
     const rbac = new RbacClient('http://localhost:3000', { fetch: (async () => new Response('true')) as typeof fetch })
     expect('admin' in rbac).toBe(false)
@@ -142,15 +146,32 @@ describe('RbacClient admin', () => {
 describe('RbacClient types', () => {
   type Names = { permissions: 'documents.read' | 'documents.edit'; roles: 'viewer' | 'editor' }
   const sql = mockTransport('sql').transport as SqlTransport
-  const pgrst = mockTransport('postgrest').transport
+  const pgrst = mockTransport('postgrest').transport as Transport<'postgrest'>
+  const subject = mockTransport('subject').transport as Transport<'subject'>
+  const general: Transport = mockTransport('sql').transport
 
   it('types admin only on an SQL-kind transport', () => {
-    expectTypeOf(new RbacClient({ transport: sql })).toEqualTypeOf<RbacSqlClient>()
+    expectTypeOf(new RbacClient({ transport: sql })).toEqualTypeOf<RbacClient<'sql'>>()
+    expectTypeOf(new RbacClient({ transport: sql }).admin).toEqualTypeOf<RbacAdminApi>()
+    expectTypeOf(new RbacClient({ transport: pgrst })).toEqualTypeOf<RbacClient<'postgrest'>>()
+    expectTypeOf(new RbacClient({ transport: subject })).toEqualTypeOf<RbacClient<'subject'>>()
+    expectTypeOf(new RbacClient('http://x')).toEqualTypeOf<RbacClient<'postgrest'>>()
+    expectTypeOf(new RbacClient({ transport: general })).toEqualTypeOf<RbacClient>()
     const rest = new RbacClient('http://x')
     // @ts-expect-error a PostgREST client has no admin
     void rest.admin
     // @ts-expect-error a PostgREST transport has no admin
     void new RbacClient({ transport: pgrst }).admin
+    // @ts-expect-error a subject transport has no admin
+    void new RbacClient({ transport: subject }).admin
+    // @ts-expect-error a general Transport has no typed admin
+    void new RbacClient({ transport: general }).admin
+  })
+
+  it('keeps the kind with an explicit names argument', () => {
+    expectTypeOf(new RbacClient<Names>({ transport: sql })).toEqualTypeOf<RbacClient<'sql', Names>>()
+    expectTypeOf(new RbacClient<Names>({ transport: subject })).toEqualTypeOf<RbacClient<'subject', Names>>()
+    expectTypeOf(new RbacClient<Names>('http://x')).toEqualTypeOf<RbacClient<'postgrest', Names>>()
   })
 
   it('narrows permission and role names with the generic', () => {

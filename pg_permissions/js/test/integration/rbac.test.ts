@@ -1,16 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type pg from 'pg'
 import { RbacClient } from '../../src/rbac'
-import type { RbacSqlClient } from '../../src/rbac'
 import { sqlTransport } from '../../src/transport/sql'
 import { PermissionsError, isRbacError } from '../../src/lib/errors'
-import { REST_URL, authHeaders, ownerPool, servicePool, userToken } from './helpers'
+import { REST_URL, authHeaders, authenticatedPool, ownerPool, servicePool, userToken } from './helpers'
 
 // Shared database: another test file may run FGA tests at the same time. This file
 // cleans only the RBAC tables, and uses names with the prefix rbac_t_.
 let owner: pg.Pool
 let service: pg.Pool
-let admin: RbacSqlClient
+let admin: RbacClient<'sql'>
 
 async function resetRbac() {
   await owner.query(
@@ -186,14 +185,21 @@ describe('RbacClient on the SQL transport (service_role)', () => {
   })
 
   it('returns 42501 with a null reason for an admin call as authenticated', async () => {
-    const asUser = new RbacClient({
-      transport: sqlTransport(service).withSubject({ id: ALICE, role: 'authenticated' }),
-    }) as unknown as RbacSqlClient
-    const e = failed(await asUser.admin.assignRole({ userId: ALICE, role: VIEWER }))
-    expect(e.code).toBe('42501')
-    expect(e.reason).toBeNull()
-    // The client checks still work as authenticated.
-    expect(ok(await asUser.hasPermission({ permission: READ }))).toBe(true)
+    // An SQL transport whose connection role lacks the admin grants.
+    const pool = authenticatedPool()
+    try {
+      const asUser = new RbacClient({ transport: sqlTransport(pool) })
+      const e = failed(await asUser.admin.assignRole({ userId: ALICE, role: VIEWER }))
+      expect(e.code).toBe('42501')
+      expect(e.reason).toBeNull()
+    } finally {
+      await pool.end()
+    }
+
+    // A subject-scoped client has no admin, and its checks work as authenticated.
+    const alice = new RbacClient({ transport: sqlTransport(service).withSubject({ id: ALICE, role: 'authenticated' }) })
+    expect('admin' in alice).toBe(false)
+    expect(ok(await alice.hasPermission({ permission: READ }))).toBe(true)
   })
 
   it('drops roles, children first, with their assignments', async () => {

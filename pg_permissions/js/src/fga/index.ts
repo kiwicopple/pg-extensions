@@ -4,8 +4,8 @@ export type {
   FgaClientMethods,
   FgaPostgrestClientOptions,
   FgaTransportClientOptions,
-  TransportKind,
 } from './FgaClient'
+export type { Transport, TransportKind } from '../lib/types'
 export type { FgaAdminApi } from './FgaAdmin'
 export type {
   AuthorizationModel,

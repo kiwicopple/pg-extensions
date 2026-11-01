@@ -2,13 +2,13 @@ import { describe, expect, expectTypeOf, it } from 'vitest'
 import { FgaClient } from '../../src/fga'
 import type { FgaAdminApi } from '../../src/fga'
 import { PermissionsError, isFgaError } from '../../src/lib/errors'
-import type { RpcArgs, Shape, Transport } from '../../src/lib/types'
+import type { RpcArgs, Shape, Transport, TransportKind } from '../../src/lib/types'
 import type { SqlTransport } from '../../src/transport/sql'
 
 type Call = { fn: string; args: RpcArgs; shape: Shape }
 
 /** A fake transport: records each call and answers from `respond`. */
-function fakeTransport<K extends 'sql' | 'postgrest'>(
+function fakeTransport<K extends TransportKind>(
   kind: K,
   respond: (call: Call) => unknown = () => null,
 ): Transport & { kind: K; calls: Call[] } {
@@ -94,6 +94,26 @@ describe('FgaClient: admin only on SQL', () => {
     expectTypeOf(fga.admin).toEqualTypeOf<FgaAdminApi>()
     // A transport typed as SqlTransport (what sqlTransport() returns) gives an admin client.
     expectTypeOf<ReturnType<typeof makeSqlClient>['admin']>().toEqualTypeOf<FgaAdminApi>()
+  })
+
+  it('a subject transport has no admin, at runtime and in the type', () => {
+    const fga = new FgaClient({ transport: fakeTransport('subject') })
+    expect('admin' in fga).toBe(false)
+    // @ts-expect-error admin does not exist on a subject transport
+    void fga.admin
+  })
+
+  it('types the client by the kind of the transport', () => {
+    expectTypeOf(new FgaClient({ transport: fakeTransport('sql') })).toEqualTypeOf<FgaClient<'sql'>>()
+    expectTypeOf(new FgaClient({ transport: fakeTransport('postgrest') })).toEqualTypeOf<FgaClient<'postgrest'>>()
+    expectTypeOf(new FgaClient({ transport: fakeTransport('subject') })).toEqualTypeOf<FgaClient<'subject'>>()
+    expectTypeOf(new FgaClient('http://x')).toEqualTypeOf<FgaClient<'postgrest'>>()
+    const general: Transport = fakeTransport('sql')
+    expectTypeOf(new FgaClient({ transport: general })).toEqualTypeOf<FgaClient>()
+    expectTypeOf<FgaClient<'sql'>['admin']>().toEqualTypeOf<FgaAdminApi>()
+    expectTypeOf<FgaClient<'subject'>>().not.toHaveProperty('admin')
+    expectTypeOf<FgaClient<'postgrest'>>().not.toHaveProperty('admin')
+    expectTypeOf<FgaClient>().not.toHaveProperty('admin')
   })
 
   it('a general Transport has no admin in the type', () => {

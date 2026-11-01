@@ -19,7 +19,7 @@ export interface PostgrestTransportOptions {
  *
  * @param restUrl The PostgREST URL, for example `https://<project>.supabase.co/rest/v1`.
  */
-export function postgrestTransport(restUrl: string, options: PostgrestTransportOptions = {}): Transport {
+export function postgrestTransport(restUrl: string, options: PostgrestTransportOptions = {}): Transport<'postgrest'> {
   const base = restUrl.replace(/\/+$/, '')
   const schema = options.schema ?? 'permissions'
   const headers = options.headers ?? {}

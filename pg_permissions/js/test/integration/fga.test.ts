@@ -4,7 +4,7 @@ import { FgaClient } from '../../src/fga'
 import type { AuthorizationModel, TupleKey } from '../../src/fga'
 import { PermissionsError, isFgaError } from '../../src/lib/errors'
 import { sqlTransport } from '../../src/transport/sql'
-import { REST_URL, authHeaders, ownerPool, servicePool, userToken } from './helpers'
+import { REST_URL, authHeaders, authenticatedPool, ownerPool, servicePool, userToken } from './helpers'
 
 // The model of docs/conditions.md, with a team for usersets.
 const MODEL: AuthorizationModel = {
@@ -316,16 +316,22 @@ describe('FGA admin (sql, service_role)', () => {
   })
 
   it('gives 42501 for an admin function without the grant', async () => {
-    const asAuthenticated = new FgaClient({
-      transport: sqlTransport(service).withSubject({ id: 'alice', role: 'authenticated' }),
-    })
-    if (!('admin' in asAuthenticated)) throw new Error('an SQL transport has admin at runtime')
-    const admin = (asAuthenticated as unknown as FgaClient<'sql'>).admin
-    const denied = await admin.check({ user: 'user:alice', relation: 'viewer', object: 'document:1' })
-    expect(denied.data).toBeNull()
-    expect(denied.error).toBeInstanceOf(PermissionsError)
-    expect(denied.error!.code).toBe('42501')
-    expect(denied.error!.reason).toBeNull()
+    // An SQL transport whose connection role lacks the admin grants.
+    const pool = authenticatedPool()
+    try {
+      const asAuthenticated = new FgaClient({ transport: sqlTransport(pool) })
+      const denied = await asAuthenticated.admin.check({ user: 'user:alice', relation: 'viewer', object: 'document:1' })
+      expect(denied.data).toBeNull()
+      expect(denied.error).toBeInstanceOf(PermissionsError)
+      expect(denied.error!.code).toBe('42501')
+      expect(denied.error!.reason).toBeNull()
+    } finally {
+      await pool.end()
+    }
+
+    // A subject-scoped client has no admin at runtime.
+    const alice = new FgaClient({ transport: sqlTransport(service).withSubject({ id: 'alice', role: 'authenticated' }) })
+    expect('admin' in alice).toBe(false)
 
     // service_role has every admin grant but fga_delete_store().
     const store = await fga.admin.deleteStore()

@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, expectTypeOf, it, vi } from 'vitest'
+import type { Transport } from '../../src/lib/types'
 import { postgrestTransport } from '../../src/transport/postgrest'
 import { PermissionsError, PermissionsFetchError, PermissionsHttpError } from '../../src/lib/errors'
 
@@ -21,6 +22,7 @@ describe('postgrestTransport', () => {
     const { calls, fetch } = mockFetch(() => json(true))
     const t = postgrestTransport('http://localhost:3000/', { fetch, headers: { apikey: 'k' } })
     expect(t.kind).toBe('postgrest')
+    expectTypeOf(t).toEqualTypeOf<Transport<'postgrest'>>()
     const data = await t.rpc('rbac_has_permission', { permission: 'documents.edit', scope: undefined }, 'scalar')
     expect(data).toBe(true)
     expect(calls).toHaveLength(1)

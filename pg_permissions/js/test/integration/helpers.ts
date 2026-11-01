@@ -14,6 +14,14 @@ export function servicePool(): pg.Pool {
   return new pg.Pool({ connectionString: PG_URL, options: '-c role=service_role', max: 4 })
 }
 
+/**
+ * A pool as `authenticated`, the role of a signed-in user: it has no admin grants.
+ * Close it with `await pool.end()`.
+ */
+export function authenticatedPool(): pg.Pool {
+  return new pg.Pool({ connectionString: PG_URL, options: '-c role=authenticated', max: 2 })
+}
+
 /** A pool as the superuser `postgres` (owner of the extension). For setup and reset only. */
 export function ownerPool(): pg.Pool {
   return new pg.Pool({ connectionString: PG_URL, max: 2 })
@@ -22,6 +30,11 @@ export function ownerPool(): pg.Pool {
 /** A PostgREST token for `sub` with `role` (default `authenticated`). */
 export function userToken(sub: string, role = 'authenticated'): string {
   return signJwt({ sub, role }, JWT_SECRET)
+}
+
+/** A PostgREST token for `anon`: what a Supabase anon key is. */
+export function anonToken(): string {
+  return signJwt({ role: 'anon' }, JWT_SECRET)
 }
 
 /** A PostgREST token for `service_role`, without a subject. */

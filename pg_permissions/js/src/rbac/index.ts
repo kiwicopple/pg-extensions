@@ -3,11 +3,11 @@ export type {
   PermissionName,
   RbacAdminApi,
   RbacClientConstructor,
+  RbacClientMethods,
   RbacNames,
   RbacPostgrestOptions,
-  RbacSqlClient,
   RbacTransportOptions,
   RoleName,
   Scope,
-  SqlKindTransport,
 } from './RbacClient'
+export type { Transport, TransportKind } from '../lib/types'
