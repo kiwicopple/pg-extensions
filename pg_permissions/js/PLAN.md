@@ -1,6 +1,15 @@
 # `permissions` JS library: plan
 
-The status is planned. Nothing is implemented yet. This file is the source of truth for the implementation sessions.
+The status is implemented (phases 1-6). The code and its TSDoc are now the source of truth for the API. This file records the plan and the deviations from it.
+
+## Deviations from the plan
+
+- **Transport kind `'subject'`.** `as()` and `withSubject()` return a transport of kind `'subject'`, not `'sql'`. A client on it has no `admin`, at type level and at runtime, because the calls run as the end user.
+- **Extra shape `'rows'`.** `Transport.rpc` has a fifth shape, `'rows'`, for `returns table` functions (`fga_read_authorization_models`).
+- **8 PUBLIC functions, not 9.** `_unfolded_null` is internal. The 8 are `current_subject_id`, `current_subject_type`, 3 `rbac_*` and 3 `fga_*` current-subject functions. The clients wrap 6 of them.
+- **`deleteStore` needs the owner.** `service_role` has no grant on `fga_delete_store`, as the docs say. Use the role that installed the extension.
+- **Node.** Development uses Node 24 (`.nvmrc`). The runtime needs Node 20 or later (`engines`).
+- **CDN bundle.** A UMD bundle is at `dist/umd/permissions.js`, with the global `permissions` (`unpkg` and `jsdelivr` fields).
 
 ## Goal
 

@@ -39,6 +39,7 @@ const PAGES = [
 	{ src: 'docs/rls.md', route: 'rls', label: 'RLS' },
 	{ src: 'docs/reference.md', route: 'reference', label: 'Reference' },
 	{ src: 'docs/errors-and-limits.md', route: 'errors-and-limits', label: 'Errors and limits' },
+	{ src: 'docs/javascript.md', route: 'javascript', label: 'JavaScript client' },
 	// contributing
 	{ src: 'test/README.md', route: 'contributing/test-suite', label: 'Test suite and bench harness' },
 	{ src: 'STYLE.md', route: 'contributing/style-guide', label: 'Style guide' },

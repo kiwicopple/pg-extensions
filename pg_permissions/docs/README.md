@@ -15,6 +15,7 @@ The extension has two permission models in one schema, `permissions`. The `rbac_
 | [RLS policies](rls.md) | How to write RLS policies for RBAC, and how to use both models in one policy set. Denies, row attributes and conditions in policies. |
 | [Function reference](reference.md) | The full signature, arguments and return type of each function. |
 | [Errors and limits](errors-and-limits.md) | Each error code, and the limits of the extension. |
+| [JavaScript client](javascript.md) | The npm package `permissions`. How to call the functions from Node and from a browser, and how it reports errors. |
 
 ## Which model do I use
 

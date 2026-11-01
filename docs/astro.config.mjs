@@ -36,6 +36,7 @@ export default defineConfig({
 				{ label: 'RLS', slug: 'rls' },
 				{ label: 'Reference', slug: 'reference' },
 				{ label: 'Errors and limits', slug: 'errors-and-limits' },
+				{ label: 'JavaScript client', slug: 'javascript' },
 				{
 					label: 'Contributing',
 					items: [

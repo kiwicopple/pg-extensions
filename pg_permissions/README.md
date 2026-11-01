@@ -80,6 +80,24 @@ The example uses the role `authenticated` of Supabase. On plain Postgres, create
 | [RLS policies](docs/rls.md) | RLS policies for RBAC, and for both models together |
 | [Function reference](docs/reference.md) | The signature of each function |
 | [Errors and limits](docs/errors-and-limits.md) | Error codes and limits |
+| [JavaScript client](docs/javascript.md) | The npm package `permissions` |
+
+## JavaScript client
+
+The npm package [`permissions`](js/README.md) is the JavaScript client for the extension. `createServerClient` calls every function over SQL on a server. `createClient` calls the client functions over PostgREST or Supabase in a browser.
+
+```bash
+npm install permissions
+```
+
+```ts
+import { createClient } from 'permissions'
+
+const permissions = createClient('https://your-project.supabase.co', 'your-anon-key')
+const { data: canEdit } = await permissions.rbac.hasPermission({ permission: 'documents.edit', scope: 'acme' })
+```
+
+See [JavaScript client](docs/javascript.md) for the methods and the errors.
 
 ## Contributing
 
