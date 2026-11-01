@@ -186,18 +186,22 @@ declare
 begin
     if rbac_create_role.role is null then
         raise exception 'role is required to create a role' using errcode = '22004',
+            detail = 'rbac:null_argument argument=role',
             hint = 'Pass the name of the role as text, e.g. select permissions.rbac_create_role(role => ''editor'', permissions => ''{documents.edit}'').';
     end if;
     if rbac_create_role.permissions is null then
         raise exception 'permissions is required to create role ''%''', rbac_create_role.role using errcode = '22004',
+            detail = 'rbac:null_argument argument=permissions',
             hint = format('Pass an array of permission names, or ''{}'' for a role that only inherits: select permissions.rbac_create_role(role => %L, permissions => ''{documents.read}'').', rbac_create_role.role);
     end if;
     if rbac_create_role.inherits is null then
         raise exception 'inherits must not be null for role ''%''', rbac_create_role.role using errcode = '22004',
+            detail = 'rbac:null_argument argument=inherits',
             hint = format('Pass an array of role names, or omit inherits: select permissions.rbac_create_role(role => %L, permissions => ''{documents.read}'', inherits => ''{viewer}'').', rbac_create_role.role);
     end if;
     if exists (select 1 from permissions.rbac_roles r where r.role = rbac_create_role.role) then
         raise exception 'role ''%'' already exists', rbac_create_role.role using errcode = '23505',
+            detail = format('rbac:role_exists role=%L', rbac_create_role.role),
             hint = format('Roles are immutable: pick another name, or rbac_drop_role(role => %L) and create it again (that also removes its assignments).', rbac_create_role.role);
     end if;
     select case when exists (select 1 from permissions.rbac_role_permissions rp where rp.permission = rbac_create_role.role)
@@ -209,12 +213,14 @@ begin
     into x;
     if x is not null then
         raise exception 'role and permission names must not overlap: %', x using errcode = '22023',
+            detail = 'rbac:name_overlap',
             hint = 'rbac_has_role and rbac_has_permission share one namespace: use distinct names, e.g. a role ''editor'' with permissions like ''documents.edit''.';
     end if;
     select i into x from unnest(rbac_create_role.inherits) i
     where not exists (select 1 from permissions.rbac_roles r where r.role = i) limit 1;
     if x is not null then
         raise exception 'unknown role ''%'' in inherits of role ''%''', x, rbac_create_role.role using errcode = '22023',
+            detail = format('rbac:unknown_role role=%L', x),
             hint = permissions._rbac_role_hint(x);
     end if;
 
@@ -240,12 +246,14 @@ declare
 begin
     if not exists (select 1 from permissions.rbac_roles r where r.role = rbac_drop_role.role) then
         raise exception 'unknown role ''%''', rbac_drop_role.role using errcode = '22023',
+            detail = format('rbac:unknown_role role=%L', rbac_drop_role.role),
             hint = permissions._rbac_role_hint(rbac_drop_role.role);
     end if;
     heirs := array(select i.role from permissions.rbac_role_inherits i where i.inherits = rbac_drop_role.role order by i.role);
     if cardinality(heirs) > 0 then
         raise exception 'role ''%'' is inherited by %', rbac_drop_role.role,
             (select string_agg(format('%L', h), ', ') from unnest(heirs) h) using errcode = '2BP01',
+            detail = format('rbac:role_in_use role=%L', rbac_drop_role.role),
             hint = format('Drop the roles that inherit it first (%s), or keep %L.',
                           (select string_agg(format('rbac_drop_role(role => %L)', h), ', ') from unnest(heirs) h), rbac_drop_role.role);
     end if;
@@ -262,10 +270,12 @@ as $$
 begin
     if not exists (select 1 from permissions.rbac_roles r where r.role = rbac_assign_role.role) then
         raise exception 'unknown role ''%''', rbac_assign_role.role using errcode = '22023',
+            detail = format('rbac:unknown_role role=%L', rbac_assign_role.role),
             hint = permissions._rbac_role_hint(rbac_assign_role.role);
     end if;
     if rbac_assign_role.user_id is null then
         raise exception 'user_id is required to assign role ''%''', rbac_assign_role.role using errcode = '22004',
+            detail = 'rbac:null_argument argument=user_id',
             hint = format('Pass the user''s id as text, e.g. select permissions.rbac_assign_role(user_id => id::text, role => %L, scope => org_id::text).', rbac_assign_role.role);
     end if;
     insert into permissions.rbac_assignments (user_id, role, scope)
@@ -282,10 +292,12 @@ as $$
 begin
     if rbac_unassign_role.user_id is null then
         raise exception 'user_id is required to unassign role ''%''', rbac_unassign_role.role using errcode = '22004',
+            detail = 'rbac:null_argument argument=user_id',
             hint = format('Pass the user''s id as text, e.g. select permissions.rbac_unassign_role(user_id => id::text, role => %L, scope => org_id::text).', rbac_unassign_role.role);
     end if;
     if rbac_unassign_role.role is null then
         raise exception 'role is required to unassign a role' using errcode = '22004',
+            detail = 'rbac:null_argument argument=role',
             hint = 'Pass the name of the role as text, e.g. select permissions.rbac_unassign_role(user_id => id::text, role => ''editor'').';
     end if;
     if rbac_unassign_role.scope is null then

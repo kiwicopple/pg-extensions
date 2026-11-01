@@ -377,33 +377,39 @@ select * from permissions.rbac_users_with_role(role => 'editor');   -- Alice (th
 
 ## Errors
 
-The RBAC functions raise these errors. Each error has a `HINT` that tells you what to do.
+The RBAC functions raise these errors. Each error has a `DETAIL` code and a `HINT`. The code names the cause. The hint tells you what to do. [Errors and limits](errors-and-limits.md#rbac-errors) describes each code.
 
-| Function | Cause | SQLSTATE |
-| --- | --- | --- |
-| `rbac_create_role` | The role exists | `23505` |
-| `rbac_create_role` | A role in `inherits` does not exist | `22023` |
-| `rbac_create_role` | A role and a permission have the same name | `22023` |
-| `rbac_create_role` | `role`, `permissions` or `inherits` is `null` | `22004` |
-| `rbac_unassign_role` | `user_id` or `role` is `null` | `22004` |
-| `rbac_assign_role` | The role does not exist | `22023` |
-| `rbac_assign_role` | `user_id` is null | `22004` |
-| `rbac_drop_role` | The role does not exist | `22023` |
-| `rbac_drop_role` | Another role inherits the role | `2BP01` |
+| Function | Cause | `DETAIL` code | SQLSTATE |
+| --- | --- | --- | --- |
+| `rbac_create_role` | The role exists | `rbac:role_exists` | `23505` |
+| `rbac_create_role` | A role in `inherits` does not exist | `rbac:unknown_role` | `22023` |
+| `rbac_create_role` | A role and a permission have the same name | `rbac:name_overlap` | `22023` |
+| `rbac_create_role` | `role`, `permissions` or `inherits` is `null` | `rbac:null_argument` | `22004` |
+| `rbac_unassign_role` | `user_id` or `role` is `null` | `rbac:null_argument` | `22004` |
+| `rbac_assign_role` | The role does not exist | `rbac:unknown_role` | `22023` |
+| `rbac_assign_role` | `user_id` is null | `rbac:null_argument` | `22004` |
+| `rbac_drop_role` | The role does not exist | `rbac:unknown_role` | `22023` |
+| `rbac_drop_role` | Another role inherits the role | `rbac:role_in_use` | `2BP01` |
 
 ```sql
 select permissions.rbac_create_role(role => 'viewer', permissions => '{documents.read}');
 -- ERROR:  role 'viewer' already exists
+-- DETAIL:  rbac:role_exists role='viewer'
 select permissions.rbac_create_role(role => 'reviewer', permissions => '{audit.read}', inherits => '{nonexistent}');
 -- ERROR:  unknown role 'nonexistent' in inherits of role 'reviewer'
+-- DETAIL:  rbac:unknown_role role='nonexistent'
 select permissions.rbac_create_role(role => 'documents.read', permissions => '{x.y}');
 -- ERROR:  role and permission names must not overlap: 'documents.read' is already a permission
+-- DETAIL:  rbac:name_overlap
 select permissions.rbac_create_role(role => 'moderator', permissions => '{viewer}');
 -- ERROR:  role and permission names must not overlap: 'viewer' is already a role
+-- DETAIL:  rbac:name_overlap
 select permissions.rbac_assign_role(user_id => :'bob', role => 'nonexistent');
 -- ERROR:  unknown role 'nonexistent'
+-- DETAIL:  rbac:unknown_role role='nonexistent'
 select permissions.rbac_drop_role(role => 'nonexistent');
 -- ERROR:  unknown role 'nonexistent'
+-- DETAIL:  rbac:unknown_role role='nonexistent'
 ```
 
 ## Clean up with `delete_subject`

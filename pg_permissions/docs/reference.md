@@ -116,7 +116,7 @@ permissions.rbac_create_role(role text, permissions text[], inherits text[] defa
 
 Creates a role with the permissions that it grants and the roles that it inherits. A role cannot change after you create it.
 
-Errors: `23505` when the role exists. `22023` when a name is both a role and a permission, or when `inherits` names an unknown role. `22004` when `role`, `permissions` or `inherits` is `null`. An empty array, `'{}'`, is valid for `permissions` and `inherits`.
+Errors: `rbac:role_exists` (`23505`) when the role exists. `rbac:name_overlap` (`22023`) when a name is both a role and a permission. `rbac:unknown_role` (`22023`) when `inherits` names an unknown role. `rbac:null_argument` (`22004`) when `role`, `permissions` or `inherits` is `null`. An empty array, `'{}'`, is valid for `permissions` and `inherits`.
 
 ```sql
 select permissions.rbac_create_role(role => 'viewer', permissions => '{documents.read}');
@@ -131,7 +131,7 @@ permissions.rbac_drop_role(role text) returns void
 
 Deletes a role and its assignments. You cannot drop a role that another role inherits.
 
-Errors: `22023` for an unknown role. `2BP01` when another role inherits the role.
+Errors: `rbac:unknown_role` (`22023`) for an unknown role. `rbac:role_in_use` (`2BP01`) when another role inherits the role.
 
 ```sql
 select permissions.rbac_create_role(role => 'temp', permissions => '{temp.use}');
@@ -146,7 +146,7 @@ permissions.rbac_assign_role(user_id text, role text, scope text default null) r
 
 Gives a user a role. When `scope` is `null`, the role applies app-wide. Otherwise it applies in that scope only. A repeated call changes nothing.
 
-Errors: `22023` for an unknown role. `22004` when `user_id` is `null`.
+Errors: `rbac:unknown_role` (`22023`) for an unknown role. `rbac:null_argument` (`22004`) when `user_id` is `null`.
 
 ```sql
 select permissions.rbac_assign_role(user_id => 'alice', role => 'editor');
@@ -162,7 +162,7 @@ permissions.rbac_unassign_role(user_id text, role text, scope text default null)
 
 Removes an assignment. The call changes nothing when the user does not have the role, or when the role does not exist. An app-wide call leaves the assignments in scopes unchanged.
 
-Errors: `22004` when `user_id` or `role` is `null`.
+Errors: `rbac:null_argument` (`22004`) when `user_id` or `role` is `null`.
 
 ```sql
 select permissions.rbac_unassign_role(user_id => 'bob', role => 'viewer', scope => 'acme');

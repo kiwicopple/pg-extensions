@@ -14,13 +14,15 @@ select permissions.fga_write_authorization_model(model => '{"schema_version": "1
 
 ## Error format
 
-Each error has a SQLSTATE and three text fields:
+Each error has a SQLSTATE and three text fields. Every error sets all three fields:
 
 | Field | Content |
 | --- | --- |
 | `MESSAGE` | What went wrong. It names the values that were wrong. |
-| `DETAIL` | The OpenFGA error code and name, in the form `openfga:<code> <name>`. Only the `fga_*` functions set it. |
+| `DETAIL` | A code that a program can read. It starts with a namespace: `openfga:<code> <name>` for the `fga_*` functions, and `rbac:<code>` for the `rbac_*` functions. |
 | `HINT` | How to fix the error. For a misspelled name, the hint gives the nearest name and the list of valid names. |
+
+The code in `DETAIL` is stable. Your code can match on it.
 
 This example has a typo in a relation name:
 
@@ -31,9 +33,31 @@ select permissions.fga_check(subject => 'user:anne', relation => 'viewr', object
 -- HINT:  Did you mean 'viewer'? Relations on type 'document': viewer.
 ```
 
+This example has a typo in a role name. No role exists yet, so the hint says how to create one:
+
+```sql
+select permissions.rbac_assign_role(user_id => 'anne', role => 'admn');
+-- ERROR:  unknown role 'admn'
+-- DETAIL:  rbac:unknown_role role='admn'
+-- HINT:  No roles exist yet: create it first, e.g. select permissions.rbac_create_role(role => 'admn', permissions => '{documents.read}').
+```
+
+### DETAIL namespaces
+
+The `DETAIL` code has two parts: a namespace and a code. A colon separates them.
+
+| Namespace | Raised by | Form | Meaning of the code |
+| --- | --- | --- | --- |
+| `openfga:` | The `fga_*` functions | `openfga:<number> <name>`, for example `openfga:2000 validation_error` | The number and the name are the OpenFGA API error code and its name. |
+| `rbac:` | The `rbac_*` functions | `rbac:<code>`, then optional context, for example `rbac:unknown_role role='admn'` | The code is a name in snake case. It names the cause. One cause has one code in every function. |
+
+The `rbac:` context is a list of `key=value` pairs. The value is a quoted literal. To get the code only, read the text before the first space.
+
+The shared functions `current_subject_id`, `current_subject_type` and `delete_subject` raise no error. They have no `DETAIL` code.
+
 A misspelled name is always an error. It is never a silent `false`. The only exceptions are the RBAC checks `rbac_has_permission` and `rbac_has_role`. They return `false` for an unknown permission or role. A policy that names a dropped permission then denies access. It does not break every query.
 
-The SQLSTATE is `22023` (`invalid_parameter_value`) for every OpenFGA code, with one exception. Code `2002` has SQLSTATE `54001` (`statement_too_complex`). The RBAC functions use other SQLSTATE values, which the table below lists.
+The SQLSTATE is `22023` (`invalid_parameter_value`) for every OpenFGA code, with one exception. Code `2002` has SQLSTATE `54001` (`statement_too_complex`). The RBAC functions use other SQLSTATE values, which the table in [RBAC errors](#rbac-errors) lists.
 
 To read the fields in PL/pgSQL, use `get stacked diagnostics`:
 
@@ -55,18 +79,15 @@ From a client, read the code from the `details` field of the error. PostgREST re
 
 ## RBAC errors
 
-| SQLSTATE | Raised by | Cause | Fix |
-| --- | --- | --- | --- |
-| `23505` | `rbac_create_role` | The role exists. | Use another name. To replace a role, drop it with `rbac_drop_role`, and create it again. |
-| `22023` | `rbac_create_role` | A name is both a role and a permission. A role cannot list itself as a permission. | Use different names for roles and permissions. |
-| `22023` | `rbac_create_role` | `inherits` names a role that does not exist. | Create the inherited role first. The hint gives the nearest role name. |
-| `22023` | `rbac_drop_role`, `rbac_assign_role` | The role does not exist. | Use a role from the list in the hint. |
-| `2BP01` | `rbac_drop_role` | Another role inherits the role. | Drop the roles that inherit it first. The hint names them. |
-| `22004` | `rbac_assign_role` | `user_id` is `null`. | Pass the id of the user as text. |
-| `22004` | `rbac_create_role` | `role` is `null`. | Pass the name of the role as text. |
-| `22004` | `rbac_create_role` | `permissions` is `null`. | Pass an array of permission names. Pass `'{}'` for a role that only inherits. |
-| `22004` | `rbac_create_role` | `inherits` is `null`. | Pass an array of role names, or do not pass `inherits`. |
-| `22004` | `rbac_unassign_role` | `user_id` or `role` is `null`. | Pass the id of the user and the name of the role as text. |
+Each row has one code, in the column `DETAIL`. The same code has the same cause in each function that raises it. The `DETAIL` column shows the form of the context after the code.
+
+| `DETAIL` | SQLSTATE | Raised by | Cause | Fix |
+| --- | --- | --- | --- | --- |
+| `rbac:role_exists role=<name>` | `23505` | `rbac_create_role` | The role exists. | Use another name. To replace a role, drop it with `rbac_drop_role`, and create it again. |
+| `rbac:name_overlap` | `22023` | `rbac_create_role` | A name is both a role and a permission. A role cannot list itself as a permission. | Use different names for roles and permissions. |
+| `rbac:unknown_role role=<name>` | `22023` | `rbac_create_role`, `rbac_drop_role`, `rbac_assign_role` | The role does not exist. In `rbac_create_role`, `inherits` names the role. | Create the role first, or use a role from the list in the hint. The hint gives the nearest role name. |
+| `rbac:role_in_use role=<name>` | `2BP01` | `rbac_drop_role` | Another role inherits the role. | Drop the roles that inherit it first. The hint names them. |
+| `rbac:null_argument argument=<name>` | `22004` | `rbac_create_role`, `rbac_assign_role`, `rbac_unassign_role` | An argument is `null`. The argument can be `role`, `permissions` or `inherits` in `rbac_create_role`, `user_id` in `rbac_assign_role`, and `user_id` or `role` in `rbac_unassign_role`. | Pass a value for the argument. For `permissions`, pass `'{}'` for a role that only inherits. For `inherits`, you can also omit it. |
 
 ## OpenFGA errors
 

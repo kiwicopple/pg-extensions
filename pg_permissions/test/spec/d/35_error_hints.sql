@@ -1,11 +1,15 @@
 -- Goal: every error the extension raises is descriptive (research/decision.md, end of
 -- session 4, point 5; research/designs/d-per-model.md section 7). One row per raise
 -- site, rbac_* and fga_* alike: the statement that triggers it, the SQLSTATE,
--- the DETAIL (OpenFGA's 'openfga:<code> <name>' on fga_* errors, none on
--- rbac_*), a pattern for the MESSAGE (it names the offending values) and the
--- HINT, which must never be empty and, where given, matches a pattern (the
--- nearest name, the allowed user types, the model ids, the call to make
--- first).
+-- the DETAIL (OpenFGA's 'openfga:<code> <name>' on fga_* errors, 'rbac:<code>'
+-- and the offending argument or role on rbac_* errors), a pattern for the
+-- MESSAGE (it names the offending values) and the HINT, which must never be
+-- empty and, where given, matches a pattern (the nearest name, the allowed
+-- user types, the model ids, the call to make first).
+--
+-- Every error has a DETAIL code. The rbac_* codes are stable snake_case names
+-- of the cause, one code per cause, shared by the functions that hit it:
+-- null_argument, role_exists, name_overlap, unknown_role, role_in_use.
 --
 -- Guard: a static scan of the extension's function bodies (pg_proc.prosrc)
 -- finds every raise site: each `raise`, and each call of the error helpers
@@ -63,29 +67,29 @@ create temp table sites (n serial, site text, stmt text, st text, detail text, m
 insert into sites (site, stmt, st, detail, msg, hint) values
 -- rbac_*
 ('rbac_create_role: exists', $$ select permissions.rbac_create_role('viewer', '{x.read}') $$,
- '23505', null, '^role ''viewer'' already exists$', 'rbac_drop_role\(role => ''viewer''\)'),
+ '23505', 'rbac:role_exists role=''viewer''', '^role ''viewer'' already exists$', 'rbac_drop_role\(role => ''viewer''\)'),
 ('rbac_create_role: overlap', $$ select permissions.rbac_create_role('documents.read', '{a.read}') $$,
- '22023', null, '^role and permission names must not overlap: ''documents.read'' is already a permission$', '^rbac_has_role and rbac_has_permission share one namespace'),
+ '22023', 'rbac:name_overlap', '^role and permission names must not overlap: ''documents.read'' is already a permission$', '^rbac_has_role and rbac_has_permission share one namespace'),
 ('rbac_create_role: unknown inherits', $$ select permissions.rbac_create_role('auditor', '{audit.read}', '{viewr}') $$,
- '22023', null, '^unknown role ''viewr'' in inherits of role ''auditor''$', '^Did you mean ''viewer''\? Existing roles: editor, viewer\.$'),
+ '22023', 'rbac:unknown_role role=''viewr''', '^unknown role ''viewr'' in inherits of role ''auditor''$', '^Did you mean ''viewer''\? Existing roles: editor, viewer\.$'),
 ('rbac_drop_role: unknown', $$ select permissions.rbac_drop_role('editr') $$,
- '22023', null, '^unknown role ''editr''$', '^Did you mean ''editor''\?'),
+ '22023', 'rbac:unknown_role role=''editr''', '^unknown role ''editr''$', '^Did you mean ''editor''\?'),
 ('rbac_drop_role: inherited', $$ select permissions.rbac_drop_role('viewer') $$,
- '2BP01', null, '^role ''viewer'' is inherited by ''editor''$', 'rbac_drop_role\(role => ''editor''\)'),
+ '2BP01', 'rbac:role_in_use role=''viewer''', '^role ''viewer'' is inherited by ''editor''$', 'rbac_drop_role\(role => ''editor''\)'),
 ('rbac_assign_role: unknown', $$ select permissions.rbac_assign_role('u1', 'admn') $$,
- '22023', null, '^unknown role ''admn''$', '^Existing roles: editor, viewer\.$'),
+ '22023', 'rbac:unknown_role role=''admn''', '^unknown role ''admn''$', '^Existing roles: editor, viewer\.$'),
 ('rbac_assign_role: null user', $$ select permissions.rbac_assign_role(null, 'viewer') $$,
- '22004', null, '^user_id is required to assign role ''viewer''$', 'rbac_assign_role\(user_id => id::text, role => ''viewer'', scope => org_id::text\)'),
+ '22004', 'rbac:null_argument argument=user_id', '^user_id is required to assign role ''viewer''$', 'rbac_assign_role\(user_id => id::text, role => ''viewer'', scope => org_id::text\)'),
 ('rbac_create_role: null role', $$ select permissions.rbac_create_role(null, '{x.read}') $$,
- '22004', null, '^role is required to create a role$', 'rbac_create_role\(role => ''editor'', permissions => ''\{documents.edit\}''\)'),
+ '22004', 'rbac:null_argument argument=role', '^role is required to create a role$', 'rbac_create_role\(role => ''editor'', permissions => ''\{documents.edit\}''\)'),
 ('rbac_create_role: null permissions', $$ select permissions.rbac_create_role('auditor', null) $$,
- '22004', null, '^permissions is required to create role ''auditor''$', '''\{\}'' for a role that only inherits'),
+ '22004', 'rbac:null_argument argument=permissions', '^permissions is required to create role ''auditor''$', '''\{\}'' for a role that only inherits'),
 ('rbac_create_role: null inherits', $$ select permissions.rbac_create_role('auditor', '{audit.read}', null) $$,
- '22004', null, '^inherits must not be null for role ''auditor''$', 'or omit inherits'),
+ '22004', 'rbac:null_argument argument=inherits', '^inherits must not be null for role ''auditor''$', 'or omit inherits'),
 ('rbac_unassign_role: null user', $$ select permissions.rbac_unassign_role(null, 'viewer') $$,
- '22004', null, '^user_id is required to unassign role ''viewer''$', 'rbac_unassign_role\(user_id => id::text, role => ''viewer'', scope => org_id::text\)'),
+ '22004', 'rbac:null_argument argument=user_id', '^user_id is required to unassign role ''viewer''$', 'rbac_unassign_role\(user_id => id::text, role => ''viewer'', scope => org_id::text\)'),
 ('rbac_unassign_role: null role', $$ select permissions.rbac_unassign_role('u1', null) $$,
- '22004', null, '^role is required to unassign a role$', 'rbac_unassign_role\(user_id => id::text, role => ''editor''\)'),
+ '22004', 'rbac:null_argument argument=role', '^role is required to unassign a role$', 'rbac_unassign_role\(user_id => id::text, role => ''editor''\)'),
 -- users and objects (validation.ValidateUser / ValidateObject)
 ('parse_user: malformed', $$ select permissions.fga_check('anne', 'viewer', 'document:1') $$,
  '22023', 'openfga:2000 validation_error', '^invalid ''user'' value: anne: ', '''user:anne'''),
@@ -228,7 +232,7 @@ from pg_proc p
 cross join lateral regexp_matches(p.prosrc, '(((?:\m_fga_error|\m_fga_unsupported)\s*\(|\mraise\M)[^;]*)', 'g') m
 where p.pronamespace = 'permissions'::regnamespace;
 
-select tap.plan((select count(*)::int from sites) + 4);
+select tap.plan((select count(*)::int from sites) + 8);
 
 select tap.is(
     (select array_agg(fn || ': ' || left(regexp_replace(stmt, '\s+', ' ', 'g'), 80) order by fn) from raise_sites
@@ -240,6 +244,21 @@ select tap.is((select count(*)::int from raise_sites where fn not in ('_fga_erro
 select tap.is((select count(distinct site)::int from sites), (select count(*)::int from sites), 'each row is a different site');
 select tap.is((select count(*)::int from raise_sites where fn in ('_fga_error', '_fga_unsupported')), 1,
               'the error helper raises once');
+
+-- every error carries a DETAIL code, and the rbac_* ones carry an rbac: code
+select tap.is((select array_agg(site order by n) from sites where detail is null), null::text[],
+              'guard: every row below expects a DETAIL');
+select tap.is((select array_agg(site order by n) from sites where site ~ '^rbac_' and detail !~ '^rbac:[a-z_]+( |$)'), null::text[],
+              'guard: every rbac_* row expects a DETAIL that starts with rbac:<code>');
+select tap.is((select array_agg(distinct substring(detail from '^rbac:([a-z_]+)') order by substring(detail from '^rbac:([a-z_]+)'))
+                 from sites where detail like 'rbac:%'),
+              array['name_overlap', 'null_argument', 'role_exists', 'role_in_use', 'unknown_role'],
+              'the rbac_* errors use five codes');
+-- a direct raise (that is, any raise outside the _fga_error helper) must set a DETAIL
+select tap.is(
+    (select array_agg(fn || ': ' || left(regexp_replace(stmt, '\s+', ' ', 'g'), 80) order by fn) from raise_sites
+      where fn not in ('_fga_error', '_fga_unsupported') and stmt ~* '^raise' and stmt !~* '\mdetail\s*='),
+    null::text[], 'guard: every direct raise in the extension sets a DETAIL');
 
 select tap.is(
     (select concat_ws('; ',
