@@ -1,0 +1,16 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": [
+    "src/index.ts",
+    "src/rbac/index.ts",
+    "src/fga/index.ts",
+    "src/transport/sql.ts",
+    "src/transport/postgrest.ts"
+  ],
+  "tsconfig": "tsconfig.json",
+  "out": "docs-api",
+  "name": "permissions",
+  "readme": "none",
+  "excludePrivate": true,
+  "excludeInternal": true
+}

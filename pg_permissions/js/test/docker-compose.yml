@@ -1,0 +1,44 @@
+# Postgres 17 with pg_permissions, and PostgREST, for the integration tests.
+#   pnpm db:up     (the integration global setup also runs this)
+#   pnpm db:down   (removes the containers; the database is not kept)
+# Ports bind to 127.0.0.1 and avoid the repo's docker/compose.yaml (54316-54318).
+name: permissions-js-test
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports: ["127.0.0.1:54420:5432"]
+    volumes:
+      # Runs in name order on the first start: install the extension, then roles and grants.
+      - ../../pg_permissions--0.0.1.sql:/docker-entrypoint-initdb.d/01-pg_permissions.sql:ro
+      - ./setup.sql:/docker-entrypoint-initdb.d/02-setup.sql:ro
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      # TCP, not the socket: the init server listens on the socket only, so this
+      # passes after the init scripts have run.
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "127.0.0.1"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+
+  rest:
+    image: postgrest/postgrest:v16.5
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      PGRST_DB_URI: postgres://authenticator:authenticator@db:5432/postgres
+      PGRST_DB_SCHEMAS: permissions
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: permissions-js-test-secret-at-least-32-chars
+      PGRST_ADMIN_SERVER_HOST: "127.0.0.1"
+      PGRST_ADMIN_SERVER_PORT: "3001"
+      PGRST_LOG_LEVEL: warn
+    ports: ["127.0.0.1:54421:3000"]
+    healthcheck:
+      test: ["CMD", "postgrest", "--ready"]
+      interval: 1s
+      timeout: 3s
+      retries: 60

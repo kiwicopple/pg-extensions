@@ -1,0 +1,1 @@
+export { FgaClient } from './FgaClient'
