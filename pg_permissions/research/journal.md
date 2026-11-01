@@ -1021,3 +1021,27 @@ Orchestrator choices: fixed constant caps (OpenFGA makes them configurable; here
 ### Angle for the post
 
 - STE as a forcing function: rewriting docs into a controlled language meant re-reading every claim, and running every example found more drift than the rewrite itself. The docs that had been "done" since session 5 still disagreed with the extension in six places.
+
+## Session 7 (2026-11-01): planning the `permissions` JS library
+
+- **The ask:** an npm package `permissions` (the user owns the name and permissions.dev) that talks to the extension, built like supabase-js: standalone sub-libraries composed by one `createClient`, with the API as close to Supabase's as possible.
+- **Research, in two parallel agents.** One mapped the extension surface: 26 public functions, only 9 granted to PUBLIC (the current-subject checks), identity from the JWT `sub` or `permissions.subject_id`, stable DETAIL codes. The other read supabase-js as it is now: an Nx and pnpm monorepo, tsdown dual builds, `{ data, error }`, `PostgrestError { message, details, hint, code }`, `auth.admin.*`, one fixed version, and some admitted inconsistencies (constructor shapes, `fetch` versus `customFetch`).
+- **The shape that fell out.** The extension has no HTTP server, so a "standalone library" here means a client plus a transport. The user chose: SQL for everything server side, PostgREST only for client-side checks. That maps cleanly onto the grants: the PostgREST client has no `admin` namespace at all, so no service key ever goes over HTTP.
+- **Naming constraint.** The user owns `permissions`, not an `@permissions` scope, so the "collection of libraries" became subpath exports (`permissions/rbac`, `permissions/fga`, `permissions/sql`, `permissions/postgrest`) in one package, with Vitest instead of Jest and no Nx.
+- The plan is in `pg_permissions/js/PLAN.md`.
+
+### Angle for the post
+
+- The grant list decided the client architecture. Nine PUBLIC functions is exactly the browser API; everything else is the server API. The library did not need its own permission model, only to respect the one the database already enforces.
+
+### Implementation, same session
+
+- **Six phases, five implementer agents, one reviewer.** Scaffold and transports first (one agent, because everything else depended on the `Transport` interface and the probe results). Then RBAC and FGA in parallel on disjoint files and disjoint tables of one shared test database: each suite reset only its own model's state. Then the umbrella, then docs and an independent review in parallel.
+- **Probing before building paid off.** The first agent ran every return shape through a real PostgREST and a real `pg` driver and wrote `test/NOTES.md`: void is a 204 with no body over HTTP and `''` over pg, `bigint` arrives as a string, `fga_read`'s OUT/INOUT record is one object, not an array, `plan_time_guard` stays hidden. The later agents built against facts, not guesses.
+- **Parallel agents diverge on taste.** RBAC and FGA both had to hide `admin` on PostgREST clients; one used constructor overloads and a second client type, the other a conditional type on the transport kind. Phase 5 unified them on the conditional type and added a third kind, `'subject'`, for `as()`: those calls run as the end user, so they get no `admin` either.
+- **The review found a real leak.** Two transports over one `pg.Client` each had their own serial queue, so `alice` and `bob` subject transactions interleaved on the wire (`begin, begin, set alice, set bob, query`) and both calls answered `bob`. The queue is now per connection (a `WeakMap`), a failed rollback poisons the connection, and Node errno codes like `EPIPE` no longer pass as SQLSTATEs.
+- **Numbers:** 133 unit tests, 45 integration tests (Postgres 17 + PostgREST 16.5 in Docker), ESM index 2.5 kB gzip, CDN bundle 5.5 kB gzip. Nothing published; `0.2.0` waits for the user.
+
+### Angle for the post
+
+- A client library for an authorization extension is mostly a translation layer, and its hard bugs are the same as the extension's: who is the subject right now. The leak lived in connection handling, not in any permission logic.
