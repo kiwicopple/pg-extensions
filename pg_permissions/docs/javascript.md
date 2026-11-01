@@ -29,10 +29,20 @@ On a server, create the client from a pool:
 import pg from 'pg'
 import { createServerClient } from 'permissions'
 
-const permissions = createServerClient(new pg.Pool({ connectionString: process.env.DATABASE_URL }))
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+})
+const permissions = createServerClient(pool)
 
-await permissions.rbac.admin.createRole({ role: 'editor', permissions: ['documents.edit'] })
-await permissions.rbac.admin.assignRole({ userId: 'alice', role: 'editor', scope: 'acme' })
+await permissions.rbac.admin.createRole({
+  role: 'editor',
+  permissions: ['documents.edit'],
+})
+await permissions.rbac.admin.assignRole({
+  userId: 'alice',
+  role: 'editor',
+  scope: 'acme',
+})
 ```
 
 In a browser, create the client with the URL and the anon key of the Supabase project:
@@ -40,11 +50,21 @@ In a browser, create the client with the URL and the anon key of the Supabase pr
 ```ts
 import { createClient } from 'permissions'
 
-const permissions = createClient('https://your-project.supabase.co', 'your-anon-key', {
-  accessToken: async () => 'the-jwt-of-the-signed-in-user',
+const SUPABASE_URL = 'https://your-project.supabase.co'
+const SUPABASE_ANON_KEY = 'your-anon-key'
+
+async function getAccessToken(): Promise<string> {
+  return 'the-jwt-of-the-signed-in-user'
+}
+
+const permissions = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  accessToken: getAccessToken,
 })
 
-const { data: canEdit } = await permissions.rbac.hasPermission({ permission: 'documents.edit', scope: 'acme' })
+const { data: canEdit } = await permissions.rbac.hasPermission({
+  permission: 'documents.edit',
+  scope: 'acme',
+})
 ```
 
 Before you use `createClient`, add `permissions` to **Exposed schemas** in the Supabase API settings.
@@ -61,7 +81,10 @@ const permissions = createClient(POSTGREST_URL, USER_JWT, {
   restUrl: POSTGREST_URL,
   accessToken: () => USER_JWT,
 })
-const { data } = await permissions.rbac.hasPermission({ permission: 'documents.read' })
+
+const { data } = await permissions.rbac.hasPermission({
+  permission: 'documents.read',
+})
 ```
 
 ## Methods
@@ -97,10 +120,17 @@ These methods answer for the current subject. They exist on both entry points. O
 import pg from 'pg'
 import { createServerClient } from 'permissions'
 
-const permissions = createServerClient(new pg.Pool({ connectionString: process.env.DATABASE_URL }))
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+})
+const permissions = createServerClient(pool)
 
 const alice = permissions.as({ id: 'alice', role: 'authenticated' })
-const { data: canView } = await alice.fga.check({ relation: 'viewer', object: 'document:1' })
+
+const { data: canView } = await alice.fga.check({
+  relation: 'viewer',
+  object: 'document:1',
+})
 ```
 
 To read the subject back, call `currentSubjectId()` and `currentSubjectType()`. `as({ id: 'eng', type: 'team' })` gives `'eng'` and `'team'`. A server client without `as()` has no subject, and `currentSubjectId()` returns `null`.
@@ -109,9 +139,13 @@ To read the subject back, call `currentSubjectId()` and `currentSubjectType()`. 
 import pg from 'pg'
 import { createServerClient } from 'permissions'
 
-const permissions = createServerClient(new pg.Pool({ connectionString: process.env.DATABASE_URL }))
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+})
+const permissions = createServerClient(pool)
 
 const team = permissions.as({ id: 'eng', type: 'team' })
+
 const { data: id } = await team.currentSubjectId() // 'eng'
 const { data: type } = await team.currentSubjectType() // 'team'
 ```
@@ -121,12 +155,22 @@ On a browser client, the subject is the user of the access token. With the anon 
 ```ts
 import { createClient } from 'permissions'
 
-const permissions = createClient('https://your-project.supabase.co', 'your-anon-key', {
-  accessToken: async () => 'the-jwt-of-the-signed-in-user',
+const SUPABASE_URL = 'https://your-project.supabase.co'
+const SUPABASE_ANON_KEY = 'your-anon-key'
+
+async function getAccessToken(): Promise<string> {
+  return 'the-jwt-of-the-signed-in-user'
+}
+
+const permissions = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  accessToken: getAccessToken,
 })
 
-const { data: id } = await permissions.currentSubjectId() // 'alice', or null
-const { data: type } = await permissions.currentSubjectType() // 'user'
+// The id of the subject: 'alice', or null.
+const { data: id } = await permissions.currentSubjectId()
+
+// The type of the subject: 'user'.
+const { data: type } = await permissions.currentSubjectType()
 ```
 
 ### Admin methods
@@ -197,9 +241,15 @@ Use the type guards `isPermissionsError`, `isRbacError` and `isFgaError` to test
 ```ts
 import { createClient, isFgaError, isRbacError } from 'permissions'
 
-const permissions = createClient('https://your-project.supabase.co', 'your-anon-key')
+const SUPABASE_URL = 'https://your-project.supabase.co'
+const SUPABASE_ANON_KEY = 'your-anon-key'
 
-const { error } = await permissions.fga.check({ relation: 'viewr', object: 'document:1' })
+const permissions = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+const { error } = await permissions.fga.check({
+  relation: 'viewr',
+  object: 'document:1',
+})
 
 if (isFgaError(error, 2000)) {
   console.log(error.hint) // Did you mean 'viewer'? ...
@@ -217,8 +267,17 @@ import pg from 'pg'
 import { RbacClient } from 'permissions/rbac'
 import { sqlTransport } from 'permissions/sql'
 
-const rbac = new RbacClient({ transport: sqlTransport(new pg.Pool({ connectionString: process.env.DATABASE_URL })) })
-await rbac.admin.assignRole({ userId: 'alice', role: 'editor', scope: 'acme' })
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+})
+const transport = sqlTransport(pool)
+const rbac = new RbacClient({ transport })
+
+await rbac.admin.assignRole({
+  userId: 'alice',
+  role: 'editor',
+  scope: 'acme',
+})
 ```
 
 To catch a wrong name at build time, pass a type argument, for example `createServerClient<{ roles: 'viewer' | 'editor' }>(pool)`.
@@ -228,10 +287,18 @@ To catch a wrong name at build time, pass a type argument, for example `createSe
 The package has a UMD bundle for a `<script>` tag. It sets the global `permissions`.
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/permissions@0.2/dist/umd/permissions.js"></script>
+<script
+  src="https://cdn.jsdelivr.net/npm/permissions@0.2/dist/umd/permissions.js"
+></script>
 <script>
-  const client = permissions.createClient('https://your-project.supabase.co', 'your-anon-key')
-  client.rbac.hasPermission({ permission: 'documents.read' }).then(({ data, error }) => {
+  const url = 'https://your-project.supabase.co'
+  const anonKey = 'your-anon-key'
+  const client = permissions.createClient(url, anonKey)
+
+  const check = client.rbac.hasPermission({
+    permission: 'documents.read',
+  })
+  check.then(({ data, error }) => {
     console.log(data, error)
   })
 </script>

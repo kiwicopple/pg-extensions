@@ -38,14 +38,24 @@ export interface FgaAdminApi {
    * @param model The body of the OpenFGA WriteAuthorizationModel request, as an object (or JSON text).
    * @example
    * ```ts
-   * const { data } = await fga.admin.writeAuthorizationModel({
+   * const model = {
    *   schema_version: '1.1',
    *   type_definitions: [
    *     { type: 'user' },
-   *     { type: 'document', relations: { viewer: { this: {} } },
-   *       metadata: { relations: { viewer: { directly_related_user_types: [{ type: 'user' }] } } } },
+   *     {
+   *       type: 'document',
+   *       relations: { viewer: { this: {} } },
+   *       metadata: {
+   *         relations: {
+   *           viewer: {
+   *             directly_related_user_types: [{ type: 'user' }],
+   *           },
+   *         },
+   *       },
+   *     },
    *   ],
-   * })
+   * }
+   * const { data } = await fga.admin.writeAuthorizationModel(model)
    * data?.authorizationModelId // '01J...'
    * ```
    */
@@ -60,7 +70,9 @@ export interface FgaAdminApi {
    * @example
    * ```ts
    * const { data: latest } = await fga.admin.readAuthorizationModel()
-   * const { data: model } = await fga.admin.readAuthorizationModel({ authorizationModelId: id })
+   * const { data: model } = await fga.admin.readAuthorizationModel({
+   *   authorizationModelId: id,
+   * })
    * ```
    */
   readAuthorizationModel(request?: ReadAuthorizationModelRequest): Promise<Result<StoredAuthorizationModel>>
@@ -84,8 +96,12 @@ export interface FgaAdminApi {
    * @example
    * ```ts
    * await fga.admin.write({
-   *   writes: [{ user: 'user:anne', relation: 'viewer', object: 'document:1' }],
-   *   deletes: [{ user: 'user:bob', relation: 'viewer', object: 'document:1' }],
+   *   writes: [
+   *     { user: 'user:anne', relation: 'viewer', object: 'document:1' },
+   *   ],
+   *   deletes: [
+   *     { user: 'user:bob', relation: 'viewer', object: 'document:1' },
+   *   ],
    *   onDuplicate: 'ignore',
    *   onMissing: 'ignore',
    * })
@@ -98,7 +114,11 @@ export interface FgaAdminApi {
    *
    * @example
    * ```ts
-   * await fga.admin.writeTuple({ user: 'user:anne', relation: 'viewer', object: 'document:1' })
+   * await fga.admin.writeTuple({
+   *   user: 'user:anne',
+   *   relation: 'viewer',
+   *   object: 'document:1',
+   * })
    * ```
    */
   writeTuple(tuple: TupleKeyWithoutCondition): Promise<Result<null>>
@@ -108,7 +128,11 @@ export interface FgaAdminApi {
    *
    * @example
    * ```ts
-   * await fga.admin.deleteTuple({ user: 'user:anne', relation: 'viewer', object: 'document:1' })
+   * await fga.admin.deleteTuple({
+   *   user: 'user:anne',
+   *   relation: 'viewer',
+   *   object: 'document:1',
+   * })
    * ```
    */
   deleteTuple(tuple: TupleKeyWithoutCondition): Promise<Result<null>>
@@ -121,7 +145,11 @@ export interface FgaAdminApi {
    * ```ts
    * let continuationToken = ''
    * do {
-   *   const { data, error } = await fga.admin.read({ object: 'document:', pageSize: 100, continuationToken })
+   *   const { data, error } = await fga.admin.read({
+   *     object: 'document:',
+   *     pageSize: 100,
+   *     continuationToken,
+   *   })
    *   if (error) throw error
    *   for (const tuple of data.tuples) console.log(tuple.key)
    *   continuationToken = data.continuationToken
@@ -151,7 +179,11 @@ export interface FgaAdminApi {
    *
    * @example
    * ```ts
-   * const { data } = await fga.admin.listObjects({ user: 'user:anne', type: 'document', relation: 'viewer' })
+   * const { data } = await fga.admin.listObjects({
+   *   user: 'user:anne',
+   *   type: 'document',
+   *   relation: 'viewer',
+   * })
    * // ['document:1', 'document:2']
    * ```
    */

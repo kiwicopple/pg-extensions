@@ -37,19 +37,48 @@ Publish the npm package `permissions`, owned by kiwicopple and currently at 0.1.
 ```ts
 import { createClient } from 'permissions'
 
+async function getAccessToken() {
+  const { data } = await supabase.auth.getSession()
+  return data.session?.access_token ?? null
+}
+
 const permissions = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  accessToken: async () => (await supabase.auth.getSession()).data.session?.access_token ?? null,
-  global: { fetch, headers },   // same shape as supabase-js
+  accessToken: getAccessToken,
+  global: { fetch, headers }, // same shape as supabase-js
   db: { schema: 'permissions' },
   throwOnError: false,
 })
 
-await permissions.rbac.hasPermission({ permission: 'documents.edit', scope: 'acme' }) // { data: boolean, error }
+// { data: boolean, error }
+await permissions.rbac.hasPermission({
+  permission: 'documents.edit',
+  scope: 'acme',
+})
 await permissions.rbac.hasRole({ role: 'editor', scope: 'acme' })
-await permissions.rbac.scopesWithPermission({ permission: 'documents.read' })         // string[]
-await permissions.fga.check({ relation: 'viewer', object: 'document:1' })            // boolean
-await permissions.fga.listObjects({ type: 'document', relation: 'viewer' })          // string[] ('document:1')
-await permissions.fga.listObjects({ type: 'document', relation: 'viewer', idsOnly: true }) // ('1')
+
+// string[]
+await permissions.rbac.scopesWithPermission({
+  permission: 'documents.read',
+})
+
+// boolean
+await permissions.fga.check({
+  relation: 'viewer',
+  object: 'document:1',
+})
+
+// string[] ('document:1')
+await permissions.fga.listObjects({
+  type: 'document',
+  relation: 'viewer',
+})
+
+// string[] ('1')
+await permissions.fga.listObjects({
+  type: 'document',
+  relation: 'viewer',
+  idsOnly: true,
+})
 ```
 
 - The URL is the Supabase project URL. `/rest/v1` is appended, as supabase-js does. To use plain PostgREST, pass `{ restUrl }` or use `new RbacClient(restUrl, …)`.
@@ -60,34 +89,88 @@ await permissions.fga.listObjects({ type: 'document', relation: 'viewer', idsOnl
 
 ```ts
 import { createServerClient } from 'permissions'
+
 const permissions = createServerClient(pool, { throwOnError: false })
 
 // Admin: an explicit subject, run as the pool's role
-await permissions.rbac.admin.createRole({ role: 'editor', permissions: ['documents.edit'], inherits: ['viewer'] })
+await permissions.rbac.admin.createRole({
+  role: 'editor',
+  permissions: ['documents.edit'],
+  inherits: ['viewer'],
+})
 await permissions.rbac.admin.dropRole({ role })
 await permissions.rbac.admin.assignRole({ userId, role, scope })
 await permissions.rbac.admin.unassignRole({ userId, role, scope })
-await permissions.rbac.admin.userPermissions({ userId, scope })       // string[]
-await permissions.rbac.admin.usersWithRole({ role, scope })           // string[]
 
-await permissions.fga.admin.writeAuthorizationModel(model)            // { authorizationModelId }
-await permissions.fga.admin.readAuthorizationModel({ authorizationModelId? })
-await permissions.fga.admin.readAuthorizationModels()                 // { id, createdAt }[]
-await permissions.fga.admin.write({ writes, deletes, onDuplicate, onMissing, authorizationModelId })
+// string[]
+await permissions.rbac.admin.userPermissions({ userId, scope })
+await permissions.rbac.admin.usersWithRole({ role, scope })
+
+// { authorizationModelId }
+await permissions.fga.admin.writeAuthorizationModel(model)
+await permissions.fga.admin.readAuthorizationModel({
+  authorizationModelId, // optional
+})
+
+// { id, createdAt }[]
+await permissions.fga.admin.readAuthorizationModels()
+
+await permissions.fga.admin.write({
+  writes,
+  deletes,
+  onDuplicate,
+  onMissing,
+  authorizationModelId,
+})
 await permissions.fga.admin.writeTuple({ user, relation, object })
 await permissions.fga.admin.deleteTuple({ user, relation, object })
-await permissions.fga.admin.read({ object, relation, user, pageSize, continuationToken }) // { tuples, continuationToken }
-await permissions.fga.admin.check({ user, relation, object, contextualTuples, context, authorizationModelId })
-await permissions.fga.admin.listObjects({ user, type, relation, contextualTuples, context, authorizationModelId })
-await permissions.fga.admin.listUsers({ object, relation, userFilters, contextualTuples, context, authorizationModelId })
+
+// { tuples, continuationToken }
+await permissions.fga.admin.read({
+  object,
+  relation,
+  user,
+  pageSize,
+  continuationToken,
+})
+
+await permissions.fga.admin.check({
+  user,
+  relation,
+  object,
+  contextualTuples,
+  context,
+  authorizationModelId,
+})
+await permissions.fga.admin.listObjects({
+  user,
+  type,
+  relation,
+  contextualTuples,
+  context,
+  authorizationModelId,
+})
+await permissions.fga.admin.listUsers({
+  object,
+  relation,
+  userFilters,
+  contextualTuples,
+  context,
+  authorizationModelId,
+})
 await permissions.fga.admin.deleteStore()
 
-await permissions.admin.deleteSubject({ type: 'user', id })           // number
+// number
+await permissions.admin.deleteSubject({ type: 'user', id })
 
-// Current-subject checks for a given subject. These run in a transaction
-// with set_config('permissions.subject_id', id, true).
-const alice = permissions.as({ id: 'alice' })     // { id, type?: 'user', role?: 'authenticated' }
-await alice.rbac.hasPermission({ permission: 'documents.edit', scope: 'acme' })
+// Current-subject checks for a given subject. These run in a
+// transaction with set_config('permissions.subject_id', id, true).
+// The subject is { id, type?: 'user', role?: 'authenticated' }.
+const alice = permissions.as({ id: 'alice' })
+await alice.rbac.hasPermission({
+  permission: 'documents.edit',
+  scope: 'acme',
+})
 await alice.fga.check({ relation: 'viewer', object: 'document:1' })
 ```
 
@@ -117,21 +200,32 @@ await alice.fga.check({ relation: 'viewer', object: 'document:1' })
 
 ```
 pg_permissions/js/
-  package.json  tsdown.config.ts  tsconfig.json  vitest.config.ts  typedoc.json
+  package.json
+  tsdown.config.ts
+  tsconfig.json
+  vitest.config.ts
+  typedoc.json
   src/
-    index.ts                 umbrella: createClient, createServerClient, re-exports
-    lib/errors.ts            PermissionsError, guards, DETAIL parser
+    index.ts                 umbrella: createClient,
+                             createServerClient, re-exports
+    lib/errors.ts            PermissionsError, guards,
+                             DETAIL parser
     lib/fetch.ts             fetchWithAuth, resolveFetch
-    lib/types.ts             Result<T>, options, Transport interface
-    transport/postgrest.ts   rpc over HTTP (PUBLIC functions only)
-    transport/sql.ts         rpc over query(); withSubject transaction
-    rbac/RbacClient.ts       client methods and RbacAdminApi
-    fga/FgaClient.ts         client methods and FgaAdminApi (name mapping)
+    lib/types.ts             Result<T>, options, Transport
+    transport/postgrest.ts   rpc over HTTP (PUBLIC only)
+    transport/sql.ts         rpc over query(); withSubject
+                             transaction
+    rbac/RbacClient.ts       client methods, RbacAdminApi
+    fga/FgaClient.ts         client methods, FgaAdminApi
+                             (name mapping)
   test/
-    unit/                    mocked fetch and fake query(): request shapes, mapping, errors
+    unit/                    mocked fetch and fake query():
+                             request shapes, mapping, errors
     integration/             same specs on both transports
-    docker-compose.yml       postgres:17 + postgrest/postgrest, mounts ../../pg_permissions--0.0.1.sql
-    setup.sql                roles anon/authenticated/service_role, grants, JWT secret
+    docker-compose.yml       postgres:17 + postgrest/postgrest,
+                             mounts ../../pg_permissions--0.0.1.sql
+    setup.sql                roles anon/authenticated/
+                             service_role, grants, JWT secret
 ```
 
 `Transport.rpc(fn, args, shape)` uses `shape` in `'scalar' | 'set' | 'record' | 'void'`. The SQL transport builds `select … from permissions.fn(name => $1, …)` with named arguments only.

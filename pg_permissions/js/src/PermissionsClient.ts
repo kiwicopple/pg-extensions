@@ -50,7 +50,8 @@ export class PermissionsClient<N extends RbacNames = RbacNames> {
    *
    * @example
    * ```ts
-   * const { data: id } = await permissions.currentSubjectId() // 'alice', or null
+   * // 'alice', or null
+   * const { data: id } = await permissions.currentSubjectId()
    * ```
    */
   currentSubjectId(): Promise<Result<string | null>> {
@@ -63,7 +64,8 @@ export class PermissionsClient<N extends RbacNames = RbacNames> {
    *
    * @example
    * ```ts
-   * const { data: type } = await permissions.currentSubjectType() // 'user'
+   * // 'user'
+   * const { data: type } = await permissions.currentSubjectType()
    * ```
    */
   currentSubjectType(): Promise<Result<string>> {
@@ -92,17 +94,30 @@ export class PermissionsClient<N extends RbacNames = RbacNames> {
  * ```ts
  * import { createClient } from 'permissions'
  *
+ * async function getAccessToken() {
+ *   const { data } = await supabase.auth.getSession()
+ *   return data.session?.access_token ?? null
+ * }
+ *
  * const permissions = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
- *   accessToken: async () => (await supabase.auth.getSession()).data.session?.access_token ?? null,
+ *   accessToken: getAccessToken,
  * })
- * const { data: canEdit } = await permissions.rbac.hasPermission({ permission: 'documents.edit', scope: 'acme' })
- * const { data: canView } = await permissions.fga.check({ relation: 'viewer', object: 'document:1' })
+ * const { data: canEdit } = await permissions.rbac.hasPermission({
+ *   permission: 'documents.edit',
+ *   scope: 'acme',
+ * })
+ * const { data: canView } = await permissions.fga.check({
+ *   relation: 'viewer',
+ *   object: 'document:1',
+ * })
  * ```
  *
  * @example
  * ```ts
  * // Plain PostgREST (no /rest/v1 prefix)
- * const permissions = createClient(POSTGREST_URL, ANON_JWT, { restUrl: POSTGREST_URL })
+ * const permissions = createClient(POSTGREST_URL, ANON_JWT, {
+ *   restUrl: POSTGREST_URL,
+ * })
  * ```
  */
 export function createClient<N extends RbacNames = RbacNames>(
@@ -143,7 +158,10 @@ export interface PermissionsAdminApi {
    * @returns The number of rows deleted.
    * @example
    * ```ts
-   * const { data: deleted } = await permissions.admin.deleteSubject({ type: 'user', id: userId })
+   * const { data: deleted } = await permissions.admin.deleteSubject({
+   *   type: 'user',
+   *   id: userId,
+   * })
    * ```
    */
   deleteSubject(subject: SubjectRef): Promise<Result<number>>
@@ -163,7 +181,8 @@ export interface PermissionsSubjectClient<N extends RbacNames = RbacNames> {
    *
    * @example
    * ```ts
-   * const { data: id } = await permissions.as({ id: 'alice' }).currentSubjectId() // 'alice'
+   * const alice = permissions.as({ id: 'alice' })
+   * const { data: id } = await alice.currentSubjectId() // 'alice'
    * ```
    */
   currentSubjectId(): Promise<Result<string | null>>
@@ -173,7 +192,8 @@ export interface PermissionsSubjectClient<N extends RbacNames = RbacNames> {
    *
    * @example
    * ```ts
-   * const { data: type } = await permissions.as({ id: 'eng', type: 'team' }).currentSubjectType() // 'team'
+   * const team = permissions.as({ id: 'eng', type: 'team' })
+   * const { data: type } = await team.currentSubjectType() // 'team'
    * ```
    */
   currentSubjectType(): Promise<Result<string>>
@@ -233,7 +253,8 @@ export class PermissionsServerClient<N extends RbacNames = RbacNames> {
    *
    * @example
    * ```ts
-   * const { data: type } = await permissions.currentSubjectType() // 'user'
+   * // 'user'
+   * const { data: type } = await permissions.currentSubjectType()
    * ```
    */
   currentSubjectType(): Promise<Result<string>> {
@@ -251,7 +272,12 @@ export class PermissionsServerClient<N extends RbacNames = RbacNames> {
    * @example
    * ```ts
    * const alice = permissions.as({ id: 'alice', role: 'authenticated' })
-   * await alice.rbac.hasPermission({ permission: 'documents.edit', scope: 'acme' }) // { data: true, error: null }
+   *
+   * // { data: true, error: null }
+   * await alice.rbac.hasPermission({
+   *   permission: 'documents.edit',
+   *   scope: 'acme',
+   * })
    * await alice.fga.check({ relation: 'viewer', object: 'document:1' })
    * ```
    */
@@ -284,10 +310,27 @@ export class PermissionsServerClient<N extends RbacNames = RbacNames> {
  * import pg from 'pg'
  * import { createServerClient } from 'permissions'
  *
- * const permissions = createServerClient(new pg.Pool({ connectionString: process.env.DATABASE_URL }))
- * await permissions.rbac.admin.createRole({ role: 'editor', permissions: ['documents.edit'] })
- * await permissions.rbac.admin.assignRole({ userId: 'alice', role: 'editor', scope: 'acme' })
- * await permissions.as({ id: 'alice' }).rbac.hasPermission({ permission: 'documents.edit', scope: 'acme' })
+ * const pool = new pg.Pool({
+ *   connectionString: process.env.DATABASE_URL,
+ * })
+ * const permissions = createServerClient(pool)
+ *
+ * await permissions.rbac.admin.createRole({
+ *   role: 'editor',
+ *   permissions: ['documents.edit'],
+ * })
+ * await permissions.rbac.admin.assignRole({
+ *   userId: 'alice',
+ *   role: 'editor',
+ *   scope: 'acme',
+ * })
+ *
+ * // Check as alice.
+ * const alice = permissions.as({ id: 'alice' })
+ * await alice.rbac.hasPermission({
+ *   permission: 'documents.edit',
+ *   scope: 'acme',
+ * })
  * ```
  */
 export function createServerClient<N extends RbacNames = RbacNames>(

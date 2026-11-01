@@ -23,7 +23,10 @@ export interface FgaClientMethods {
    *
    * @example
    * ```ts
-   * const { data: canView } = await fga.check({ relation: 'viewer', object: 'document:1' })
+   * const { data: canView } = await fga.check({
+   *   relation: 'viewer',
+   *   object: 'document:1',
+   * })
    * ```
    */
   check(request: CurrentCheckRequest): Promise<Result<boolean>>
@@ -35,8 +38,15 @@ export interface FgaClientMethods {
    *
    * @example
    * ```ts
-   * await fga.listObjects({ type: 'document', relation: 'viewer' })                // { data: ['document:1'] }
-   * await fga.listObjects({ type: 'document', relation: 'viewer', idsOnly: true }) // { data: ['1'] }
+   * // { data: ['document:1'] }
+   * await fga.listObjects({ type: 'document', relation: 'viewer' })
+   *
+   * // { data: ['1'] }
+   * await fga.listObjects({
+   *   type: 'document',
+   *   relation: 'viewer',
+   *   idsOnly: true,
+   * })
    * ```
    */
   listObjects(request: CurrentListObjectsRequest): Promise<Result<string[]>>
@@ -74,10 +84,16 @@ export interface FgaClientConstructor {
    * @param restUrl The PostgREST URL, for example `https://<project>.supabase.co/rest/v1`.
    * @example
    * ```ts
-   * const fga = new FgaClient('https://<project>.supabase.co/rest/v1', {
-   *   headers: { apikey: ANON_KEY, Authorization: `Bearer ${accessToken}` },
+   * const REST_URL = 'https://<project>.supabase.co/rest/v1'
+   * const headers = {
+   *   apikey: ANON_KEY,
+   *   Authorization: `Bearer ${accessToken}`,
+   * }
+   * const fga = new FgaClient(REST_URL, { headers })
+   * const { data } = await fga.check({
+   *   relation: 'viewer',
+   *   object: 'document:1',
    * })
-   * const { data } = await fga.check({ relation: 'viewer', object: 'document:1' })
    * ```
    */
   new (restUrl: string, options?: FgaPostgrestClientOptions): FgaClient<'postgrest'>
@@ -88,12 +104,20 @@ export interface FgaClientConstructor {
    * @example
    * ```ts
    * import { sqlTransport } from 'permissions/sql'
-   * const fga = new FgaClient({ transport: sqlTransport(pool) })
-   * await fga.admin.writeTuple({ user: 'user:anne', relation: 'viewer', object: 'document:1' })
+   *
+   * const transport = sqlTransport(pool)
+   * const fga = new FgaClient({ transport })
+   * await fga.admin.writeTuple({
+   *   user: 'user:anne',
+   *   relation: 'viewer',
+   *   object: 'document:1',
+   * })
    *
    * // A subject-scoped transport: client methods only, no admin.
-   * const anne = new FgaClient({ transport: sqlTransport(pool).withSubject({ id: 'anne' }) })
-   * await anne.check({ relation: 'viewer', object: 'document:1' }) // { data: true, error: null }
+   * const anneTransport = transport.withSubject({ id: 'anne' })
+   * const anne = new FgaClient({ transport: anneTransport })
+   * // { data: true, error: null }
+   * await anne.check({ relation: 'viewer', object: 'document:1' })
    * ```
    */
   new <K extends TransportKind>(options: FgaTransportClientOptions<Transport<K>>): FgaClient<K>
@@ -159,12 +183,18 @@ class FgaClientImpl implements FgaClientMethods {
  * @example
  * ```ts
  * // Browser: PostgREST, current subject from the JWT.
- * const fga = new FgaClient(restUrl, { headers: { Authorization: `Bearer ${jwt}` } })
+ * const headers = { Authorization: `Bearer ${jwt}` }
+ * const fga = new FgaClient(restUrl, { headers })
  * await fga.listObjects({ type: 'document', relation: 'viewer' })
  *
  * // Server: SQL, with admin.
- * const server = new FgaClient({ transport: sqlTransport(pool) })
- * await server.admin.check({ user: 'user:anne', relation: 'viewer', object: 'document:1' })
+ * const transport = sqlTransport(pool)
+ * const server = new FgaClient({ transport })
+ * await server.admin.check({
+ *   user: 'user:anne',
+ *   relation: 'viewer',
+ *   object: 'document:1',
+ * })
  * ```
  */
 export const FgaClient: FgaClientConstructor = FgaClientImpl as unknown as FgaClientConstructor

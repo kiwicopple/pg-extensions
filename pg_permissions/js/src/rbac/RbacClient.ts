@@ -61,7 +61,10 @@ export interface RbacClientMethods<N extends RbacNames = RbacNames> {
    * Checks whether the current subject has a permission, directly or through an inherited role.
    *
    * @example
-   * const { data, error } = await rbac.hasPermission({ permission: 'documents.edit', scope: 'acme' })
+   * const { data, error } = await rbac.hasPermission({
+   *   permission: 'documents.edit',
+   *   scope: 'acme',
+   * })
    */
   hasPermission(args: { permission: PermissionName<N>; scope?: Scope }): Promise<Result<boolean>>
 
@@ -69,7 +72,10 @@ export interface RbacClientMethods<N extends RbacNames = RbacNames> {
    * Checks whether the current subject has a role, directly or through a role that inherits it.
    *
    * @example
-   * const { data, error } = await rbac.hasRole({ role: 'editor', scope: 'acme' })
+   * const { data, error } = await rbac.hasRole({
+   *   role: 'editor',
+   *   scope: 'acme',
+   * })
    */
   hasRole(args: { role: RoleName<N>; scope?: Scope }): Promise<Result<boolean>>
 
@@ -77,7 +83,9 @@ export interface RbacClientMethods<N extends RbacNames = RbacNames> {
    * Lists the scopes in which the current subject has a permission. App-wide assignments have no scope and do not count.
    *
    * @example
-   * const { data: scopes } = await rbac.scopesWithPermission({ permission: 'documents.read' })
+   * const { data: scopes } = await rbac.scopesWithPermission({
+   *   permission: 'documents.read',
+   * })
    */
   scopesWithPermission(args: { permission: PermissionName<N> }): Promise<Result<string[]>>
 }
@@ -91,7 +99,11 @@ export interface RbacAdminApi<N extends RbacNames = RbacNames> {
    * Creates a role with permissions and inherited roles. A role cannot change after creation.
    *
    * @example
-   * await rbac.admin.createRole({ role: 'editor', permissions: ['documents.edit'], inherits: ['viewer'] })
+   * await rbac.admin.createRole({
+   *   role: 'editor',
+   *   permissions: ['documents.edit'],
+   *   inherits: ['viewer'],
+   * })
    */
   createRole(args: {
     role: RoleName<N>
@@ -111,7 +123,11 @@ export interface RbacAdminApi<N extends RbacNames = RbacNames> {
    * Gives a user a role, in a scope or app-wide. It does nothing when the user already has the role there.
    *
    * @example
-   * await rbac.admin.assignRole({ userId: 'alice', role: 'editor', scope: 'acme' })
+   * await rbac.admin.assignRole({
+   *   userId: 'alice',
+   *   role: 'editor',
+   *   scope: 'acme',
+   * })
    */
   assignRole(args: { userId: string; role: RoleName<N>; scope?: Scope }): Promise<Result<null>>
 
@@ -119,7 +135,11 @@ export interface RbacAdminApi<N extends RbacNames = RbacNames> {
    * Removes a role from a user in a scope, or app-wide. It does nothing when the user does not have the role there.
    *
    * @example
-   * await rbac.admin.unassignRole({ userId: 'alice', role: 'editor', scope: 'acme' })
+   * await rbac.admin.unassignRole({
+   *   userId: 'alice',
+   *   role: 'editor',
+   *   scope: 'acme',
+   * })
    */
   unassignRole(args: { userId: string; role: RoleName<N>; scope?: Scope }): Promise<Result<null>>
 
@@ -127,7 +147,10 @@ export interface RbacAdminApi<N extends RbacNames = RbacNames> {
    * Lists the permissions of a user in a scope, or app-wide, sorted by name. Inherited permissions are included.
    *
    * @example
-   * const { data } = await rbac.admin.userPermissions({ userId: 'alice', scope: 'acme' })
+   * const { data } = await rbac.admin.userPermissions({
+   *   userId: 'alice',
+   *   scope: 'acme',
+   * })
    */
   userPermissions(args: { userId: string; scope?: Scope }): Promise<Result<string[]>>
 
@@ -135,7 +158,10 @@ export interface RbacAdminApi<N extends RbacNames = RbacNames> {
    * Lists the users that have a role in a scope, or app-wide, directly or through a role that inherits it.
    *
    * @example
-   * const { data } = await rbac.admin.usersWithRole({ role: 'editor', scope: 'acme' })
+   * const { data } = await rbac.admin.usersWithRole({
+   *   role: 'editor',
+   *   scope: 'acme',
+   * })
    */
   usersWithRole(args: { role: RoleName<N>; scope?: Scope }): Promise<Result<string[]>>
 }
@@ -253,19 +279,34 @@ function createAdminApi<N extends RbacNames>(transport: Transport, throwOnError:
  *
  * @example
  * // Client side: PostgREST, with the user's JWT
- * const rbac = new RbacClient('https://project.supabase.co/rest/v1', {
- *   headers: { apikey: ANON_KEY, Authorization: `Bearer ${jwt}` },
+ * const REST_URL = 'https://project.supabase.co/rest/v1'
+ * const headers = {
+ *   apikey: ANON_KEY,
+ *   Authorization: `Bearer ${jwt}`,
+ * }
+ * const rbac = new RbacClient(REST_URL, { headers })
+ * await rbac.hasPermission({
+ *   permission: 'documents.edit',
+ *   scope: 'acme',
  * })
- * await rbac.hasPermission({ permission: 'documents.edit', scope: 'acme' })
  *
  * @example
  * // Server side: SQL, with admin calls
- * const rbac = new RbacClient({ transport: sqlTransport(pool) })
- * await rbac.admin.assignRole({ userId: 'alice', role: 'editor', scope: 'acme' })
+ * const transport = sqlTransport(pool)
+ * const rbac = new RbacClient({ transport })
+ * await rbac.admin.assignRole({
+ *   userId: 'alice',
+ *   role: 'editor',
+ *   scope: 'acme',
+ * })
  *
  * @example
  * // Server side, as a subject: the checks only, no admin
- * const alice = new RbacClient({ transport: sqlTransport(pool).withSubject({ id: 'alice' }) })
- * await alice.hasPermission({ permission: 'documents.edit', scope: 'acme' })
+ * const transport = sqlTransport(pool).withSubject({ id: 'alice' })
+ * const alice = new RbacClient({ transport })
+ * await alice.hasPermission({
+ *   permission: 'documents.edit',
+ *   scope: 'acme',
+ * })
  */
 export const RbacClient: RbacClientConstructor = RbacClientImpl as unknown as RbacClientConstructor

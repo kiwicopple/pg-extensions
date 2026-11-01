@@ -45,11 +45,16 @@ The role of the connection must have `execute` on the admin functions. See the p
 import pg from 'pg'
 import { createServerClient } from 'permissions'
 
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL })
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+})
 const permissions = createServerClient(pool)
 
 // Create the roles once, for example in a migration.
-await permissions.rbac.admin.createRole({ role: 'viewer', permissions: ['documents.read'] })
+await permissions.rbac.admin.createRole({
+  role: 'viewer',
+  permissions: ['documents.read'],
+})
 await permissions.rbac.admin.createRole({
   role: 'editor',
   permissions: ['documents.edit'],
@@ -57,9 +62,17 @@ await permissions.rbac.admin.createRole({
 })
 
 // Give alice the editor role in the scope 'acme'.
-await permissions.rbac.admin.assignRole({ userId: 'alice', role: 'editor', scope: 'acme' })
+await permissions.rbac.admin.assignRole({
+  userId: 'alice',
+  role: 'editor',
+  scope: 'acme',
+})
 
-const { data, error } = await permissions.rbac.admin.userPermissions({ userId: 'alice', scope: 'acme' })
+// List what alice can do in 'acme'.
+const { data, error } = await permissions.rbac.admin.userPermissions({
+  userId: 'alice',
+  scope: 'acme',
+})
 if (error) throw error
 console.log(data) // ['documents.edit', 'documents.read']
 ```
@@ -70,21 +83,40 @@ The `fga` namespace works in the same way. This example writes a model and a tup
 import pg from 'pg'
 import { createServerClient } from 'permissions'
 
-const permissions = createServerClient(new pg.Pool({ connectionString: process.env.DATABASE_URL }))
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+})
+const permissions = createServerClient(pool)
 
-await permissions.fga.admin.writeAuthorizationModel({
+// The model: a document has a viewer relation, and a user can be
+// a viewer.
+const model = {
   schema_version: '1.1',
   type_definitions: [
     { type: 'user' },
     {
       type: 'document',
       relations: { viewer: { this: {} } },
-      metadata: { relations: { viewer: { directly_related_user_types: [{ type: 'user' }] } } },
+      metadata: {
+        relations: {
+          viewer: {
+            directly_related_user_types: [{ type: 'user' }],
+          },
+        },
+      },
     },
   ],
-})
-await permissions.fga.admin.writeTuple({ user: 'user:anne', relation: 'viewer', object: 'document:1' })
+}
+await permissions.fga.admin.writeAuthorizationModel(model)
 
+// Anne can view document 1.
+await permissions.fga.admin.writeTuple({
+  user: 'user:anne',
+  relation: 'viewer',
+  object: 'document:1',
+})
+
+// Check access.
 const { data: allowed } = await permissions.fga.admin.check({
   user: 'user:anne',
   relation: 'viewer',
@@ -104,20 +136,42 @@ Use `createClient` in a browser or in an edge function. It has the same argument
 3. Create the client in the app. Pass the access token of the session.
 
 ```ts
-import { createClient as createSupabaseClient } from '@supabase/supabase-js'
+import {
+  createClient as createSupabaseClient,
+} from '@supabase/supabase-js'
 import { createClient } from 'permissions'
 
 const SUPABASE_URL = 'https://your-project.supabase.co'
 const SUPABASE_ANON_KEY = 'your-anon-key'
 
+// The Supabase client holds the session of the signed-in user.
 const supabase = createSupabaseClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+// The access token of the session, or null when there is no session.
+async function getAccessToken(): Promise<string | null> {
+  const { data } = await supabase.auth.getSession()
+  return data.session?.access_token ?? null
+}
+
+// The same arguments as supabase-js.
 const permissions = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  accessToken: async () => (await supabase.auth.getSession()).data.session?.access_token ?? null,
+  accessToken: getAccessToken,
 })
 
-const { data: canEdit } = await permissions.rbac.hasPermission({ permission: 'documents.edit', scope: 'acme' })
-const { data: canView } = await permissions.fga.check({ relation: 'viewer', object: 'document:1' })
-const { data: ids } = await permissions.fga.listObjects({ type: 'document', relation: 'viewer', idsOnly: true })
+// Check as the signed-in user.
+const { data: canEdit } = await permissions.rbac.hasPermission({
+  permission: 'documents.edit',
+  scope: 'acme',
+})
+const { data: canView } = await permissions.fga.check({
+  relation: 'viewer',
+  object: 'document:1',
+})
+const { data: ids } = await permissions.fga.listObjects({
+  type: 'document',
+  relation: 'viewer',
+  idsOnly: true,
+})
 ```
 
 Each request has the headers `apikey` and `Authorization: Bearer <token>`. When `accessToken` returns `null`, the client sends the anon key. Then no subject exists, and each check is `false`.
@@ -138,7 +192,10 @@ const permissions = createClient(POSTGREST_URL, USER_JWT, {
   restUrl: POSTGREST_URL,
   accessToken: () => USER_JWT,
 })
-const { data } = await permissions.rbac.hasPermission({ permission: 'documents.read' })
+
+const { data } = await permissions.rbac.hasPermission({
+  permission: 'documents.read',
+})
 ```
 
 PostgREST must list the schema `permissions` in `db-schemas`. To use another schema name, pass `db: { schema: 'my_schema' }`.
@@ -151,11 +208,22 @@ On a server, `as()` runs the checks for one subject. It gives the same answers a
 import pg from 'pg'
 import { createServerClient } from 'permissions'
 
-const permissions = createServerClient(new pg.Pool({ connectionString: process.env.DATABASE_URL }))
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+})
+const permissions = createServerClient(pool)
 
+// Run the checks as alice, with the privileges of a signed-in user.
 const alice = permissions.as({ id: 'alice', role: 'authenticated' })
-const { data: canEdit } = await alice.rbac.hasPermission({ permission: 'documents.edit', scope: 'acme' })
-const { data: canView } = await alice.fga.check({ relation: 'viewer', object: 'document:1' })
+
+const { data: canEdit } = await alice.rbac.hasPermission({
+  permission: 'documents.edit',
+  scope: 'acme',
+})
+const { data: canView } = await alice.fga.check({
+  relation: 'viewer',
+  object: 'document:1',
+})
 ```
 
 Each call runs in its own transaction. The transaction sets `permissions.subject_id` to the id. When you set `role`, it also runs `set local role`.
@@ -173,12 +241,22 @@ The methods exist on `createClient`, on `createServerClient` and on the client t
 ```ts
 import { createClient } from 'permissions'
 
-const permissions = createClient('https://your-project.supabase.co', 'your-anon-key', {
-  accessToken: async () => 'the-jwt-of-the-signed-in-user',
+const SUPABASE_URL = 'https://your-project.supabase.co'
+const SUPABASE_ANON_KEY = 'your-anon-key'
+
+async function getAccessToken(): Promise<string> {
+  return 'the-jwt-of-the-signed-in-user'
+}
+
+const permissions = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  accessToken: getAccessToken,
 })
 
-const { data: id } = await permissions.currentSubjectId() // 'alice', or null
-const { data: type } = await permissions.currentSubjectType() // 'user'
+// The id of the subject: 'alice', or null.
+const { data: id } = await permissions.currentSubjectId()
+
+// The type of the subject: 'user'.
+const { data: type } = await permissions.currentSubjectType()
 ```
 
 On a server, the connection has no subject, so `currentSubjectId()` returns `null`. Use `as()` to set the subject.
@@ -187,9 +265,13 @@ On a server, the connection has no subject, so `currentSubjectId()` returns `nul
 import pg from 'pg'
 import { createServerClient } from 'permissions'
 
-const permissions = createServerClient(new pg.Pool({ connectionString: process.env.DATABASE_URL }))
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+})
+const permissions = createServerClient(pool)
 
 const team = permissions.as({ id: 'eng', type: 'team' })
+
 const { data: id } = await team.currentSubjectId() // 'eng'
 const { data: type } = await team.currentSubjectType() // 'team'
 ```
@@ -201,9 +283,14 @@ Each method returns `{ data, error }`. Exactly one of the two is `null`.
 ```ts
 import { createClient } from 'permissions'
 
-const permissions = createClient('https://your-project.supabase.co', 'your-anon-key')
+const SUPABASE_URL = 'https://your-project.supabase.co'
+const SUPABASE_ANON_KEY = 'your-anon-key'
 
-const { data, error } = await permissions.rbac.hasRole({ role: 'editor' })
+const permissions = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+const { data, error } = await permissions.rbac.hasRole({
+  role: 'editor',
+})
 if (error) {
   console.error(error.message)
 } else {
@@ -216,9 +303,17 @@ To throw the error instead, set `throwOnError: true`. You can set it in `createC
 ```ts
 import { createClient } from 'permissions'
 
-const permissions = createClient('https://your-project.supabase.co', 'your-anon-key', { throwOnError: true })
+const SUPABASE_URL = 'https://your-project.supabase.co'
+const SUPABASE_ANON_KEY = 'your-anon-key'
 
-const canEdit = (await permissions.rbac.hasPermission({ permission: 'documents.edit' })).data
+const permissions = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  throwOnError: true,
+})
+
+const result = await permissions.rbac.hasPermission({
+  permission: 'documents.edit',
+})
+const canEdit = result.data
 ```
 
 A mistake in your code always throws. For example, an unknown function name or an unknown argument name throws a plain `Error`.
@@ -245,12 +340,23 @@ Two subclasses cover failures that have no error body. `PermissionsFetchError` m
 Use the type guards to test an error:
 
 ```ts
-import { createServerClient, isFgaError, isPermissionsError, isRbacError } from 'permissions'
 import pg from 'pg'
+import {
+  createServerClient,
+  isFgaError,
+  isPermissionsError,
+  isRbacError,
+} from 'permissions'
 
-const permissions = createServerClient(new pg.Pool({ connectionString: process.env.DATABASE_URL }))
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+})
+const permissions = createServerClient(pool)
 
-const { error } = await permissions.rbac.admin.createRole({ role: 'editor', permissions: ['documents.edit'] })
+const { error } = await permissions.rbac.admin.createRole({
+  role: 'editor',
+  permissions: ['documents.edit'],
+})
 
 if (isRbacError(error, 'role_exists')) {
   console.log('The role exists:', error.reason.context.role)
@@ -283,20 +389,37 @@ import { FgaClient } from 'permissions/fga'
 import { RbacClient } from 'permissions/rbac'
 import { sqlTransport } from 'permissions/sql'
 
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL })
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+})
 
 // Browser: PostgREST, with the JWT of the user.
-const rbac = new RbacClient('https://your-project.supabase.co/rest/v1', {
-  headers: { apikey: 'your-anon-key', Authorization: 'Bearer your-user-jwt' },
+const REST_URL = 'https://your-project.supabase.co/rest/v1'
+const headers = {
+  apikey: 'your-anon-key',
+  Authorization: 'Bearer your-user-jwt',
+}
+const rbac = new RbacClient(REST_URL, { headers })
+
+await rbac.hasPermission({
+  permission: 'documents.edit',
+  scope: 'acme',
 })
-await rbac.hasPermission({ permission: 'documents.edit', scope: 'acme' })
 
 // Server: SQL, with admin.
-const fga = new FgaClient({ transport: sqlTransport(pool) })
-await fga.admin.writeTuple({ user: 'user:anne', relation: 'viewer', object: 'document:1' })
+const transport = sqlTransport(pool)
+const fga = new FgaClient({ transport })
+
+await fga.admin.writeTuple({
+  user: 'user:anne',
+  relation: 'viewer',
+  object: 'document:1',
+})
 
 // Server, as one subject: the checks only.
-const anne = new FgaClient({ transport: sqlTransport(pool).withSubject({ id: 'anne' }) })
+const anneTransport = transport.withSubject({ id: 'anne' })
+const anne = new FgaClient({ transport: anneTransport })
+
 await anne.check({ relation: 'viewer', object: 'document:1' })
 ```
 
@@ -313,11 +436,22 @@ type Names = {
   roles: 'viewer' | 'editor'
 }
 
-const permissions = createServerClient<Names>(new pg.Pool({ connectionString: process.env.DATABASE_URL }))
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+})
+const permissions = createServerClient<Names>(pool)
 
-await permissions.rbac.admin.assignRole({ userId: 'alice', role: 'editor' }) // ok
-// @ts-expect-error 'owner' is not in Names
-await permissions.rbac.admin.assignRole({ userId: 'alice', role: 'owner' })
+// ok: 'editor' is in Names
+await permissions.rbac.admin.assignRole({
+  userId: 'alice',
+  role: 'editor',
+})
+
+await permissions.rbac.admin.assignRole({
+  userId: 'alice',
+  // @ts-expect-error 'owner' is not in Names
+  role: 'owner',
+})
 ```
 
 `createClient<Names>()` and `new RbacClient<Names>()` take the same type argument.
@@ -327,10 +461,18 @@ await permissions.rbac.admin.assignRole({ userId: 'alice', role: 'owner' })
 The package has a UMD bundle for a `<script>` tag. It sets the global `permissions`.
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/permissions@0.2/dist/umd/permissions.js"></script>
+<script
+  src="https://cdn.jsdelivr.net/npm/permissions@0.2/dist/umd/permissions.js"
+></script>
 <script>
-  const client = permissions.createClient('https://your-project.supabase.co', 'your-anon-key')
-  client.rbac.hasPermission({ permission: 'documents.read' }).then(({ data, error }) => {
+  const url = 'https://your-project.supabase.co'
+  const anonKey = 'your-anon-key'
+  const client = permissions.createClient(url, anonKey)
+
+  const check = client.rbac.hasPermission({
+    permission: 'documents.read',
+  })
+  check.then(({ data, error }) => {
     console.log(data, error)
   })
 </script>
