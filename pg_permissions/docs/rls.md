@@ -39,8 +39,15 @@ create role anon nologin;
 create role authenticated nologin;
 create role service_role nologin;
 
-select permissions.rbac_create_role(role => 'viewer', permissions => '{documents.read}');
-select permissions.rbac_create_role(role => 'editor', permissions => '{documents.edit}', inherits => '{viewer}');
+select permissions.rbac_create_role(
+  role => 'viewer',
+  permissions => '{documents.read}'
+);
+select permissions.rbac_create_role(
+  role => 'editor',
+  permissions => '{documents.edit}',
+  inherits => '{viewer}'
+);
 ```
 
 ## Policies for RBAC
@@ -50,7 +57,15 @@ select permissions.rbac_create_role(role => 'editor', permissions => '{documents
 For a table with a tenant column, write a read policy in exactly this form:
 
 ```text
-org_id = any (array(select unnest(permissions.rbac_scopes_with_permission(permission => 'documents.read'))::uuid))
+org_id = any (
+  array(
+    select unnest(
+      permissions.rbac_scopes_with_permission(
+        permission => 'documents.read'
+      )
+    )::uuid
+  )
+)
 ```
 
 Postgres computes the list of scopes of the user once for each query, as an InitPlan. Then it uses the index on `org_id`. `EXPLAIN` shows an InitPlan and no per-row SubPlan.
@@ -59,14 +74,32 @@ Three other forms look correct, but they are worse. These are fragments:
 
 ```text
 -- 1. Does not work
-org_id = any ((select permissions.rbac_scopes_with_permission(permission => 'documents.read')))
+org_id = any (
+  (
+    select permissions.rbac_scopes_with_permission(
+      permission => 'documents.read'
+    )
+  )
+)
 -- ERROR:  operator does not exist: uuid = text[]
 
 -- 2. Works, but is slower on a big table
-org_id = any ((select permissions.rbac_scopes_with_permission(permission => 'documents.read'))::uuid[])
+org_id = any (
+  (
+    select permissions.rbac_scopes_with_permission(
+      permission => 'documents.read'
+    )
+  )::uuid[]
+)
 
 -- 3. Works, but the index of the table is not used
-org_id in (select unnest(permissions.rbac_scopes_with_permission(permission => 'documents.read'))::uuid)
+org_id in (
+  select unnest(
+    permissions.rbac_scopes_with_permission(
+      permission => 'documents.read'
+    )
+  )::uuid
+)
 ```
 
 - Form 1: Postgres reads `any ((select ...))` as a subquery comparison. It fails even with the double parentheses.
@@ -80,8 +113,20 @@ Forms 2 and 3 return the same rows as the fast path. They cost more.
 For UPDATE, DELETE and INSERT, check the one row that the statement writes. Use the per-row form. These are fragments:
 
 ```text
-using (permissions.rbac_has_permission(permission => 'documents.edit', scope => org_id::text))       -- update, delete
-with check (permissions.rbac_has_permission(permission => 'documents.edit', scope => org_id::text))  -- insert
+using (
+  permissions.rbac_has_permission(
+    permission => 'documents.edit',
+    scope => org_id::text
+  )
+)
+-- update, delete
+with check (
+  permissions.rbac_has_permission(
+    permission => 'documents.edit',
+    scope => org_id::text
+  )
+)
+-- insert
 ```
 
 A write touches few rows, so one call for each row is cheap. The policy then reads like the rule. The fast path would build the whole list of scopes of the user for each statement. For UPDATE, `with check` defaults to the `using` expression.
@@ -96,32 +141,76 @@ This example uses a `projects` table. The role assignments below give each user 
 
 ```sql
 create table public.projects (
-    id     uuid primary key default gen_random_uuid(),
-    org_id uuid not null,
-    name   text not null
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null,
+  name text not null
 );
 create index on public.projects (org_id);
-insert into public.projects (org_id, name) values (:'acme', 'apollo'), (:'globex', 'gemini');
+insert into public.projects (org_id, name)
+values (:'acme', 'apollo'), (:'globex', 'gemini');
 
 alter table public.projects enable row level security;
 grant select, update on public.projects to authenticated;
 
-create policy projects_select on public.projects for select to authenticated
-    using (
-        (select permissions.rbac_has_permission(permission => 'documents.read'))
-        or org_id = any (array(select unnest(permissions.rbac_scopes_with_permission(permission => 'documents.read'))::uuid))
-    );
-create policy projects_update on public.projects for update to authenticated
-    using (
-        (select permissions.rbac_has_permission(permission => 'documents.edit'))
-        or permissions.rbac_has_permission(permission => 'documents.edit', scope => org_id::text)
-    );
+create policy projects_select
+  on public.projects
+  for select
+  to authenticated
+  using (
+    (
+      select permissions.rbac_has_permission(
+        permission => 'documents.read'
+      )
+    )
+    or org_id = any (
+      array(
+        select unnest(
+          permissions.rbac_scopes_with_permission(
+            permission => 'documents.read'
+          )
+        )::uuid
+      )
+    )
+  );
+create policy projects_update
+  on public.projects
+  for update
+  to authenticated
+  using (
+    (
+      select permissions.rbac_has_permission(
+        permission => 'documents.edit'
+      )
+    )
+    or permissions.rbac_has_permission(
+      permission => 'documents.edit',
+      scope => org_id::text
+    )
+  );
 
-select permissions.rbac_assign_role(user_id => :'gina', role => 'viewer');
-select permissions.rbac_assign_role(user_id => :'hugo', role => 'viewer', scope => :'globex');
-select permissions.rbac_assign_role(user_id => :'ivan', role => 'editor', scope => :'acme');
-select permissions.rbac_assign_role(user_id => :'ivan', role => 'viewer', scope => :'globex');
-select permissions.rbac_assign_role(user_id => :'jane', role => 'editor');
+select permissions.rbac_assign_role(
+  user_id => :'gina',
+  role => 'viewer'
+);
+select permissions.rbac_assign_role(
+  user_id => :'hugo',
+  role => 'viewer',
+  scope => :'globex'
+);
+select permissions.rbac_assign_role(
+  user_id => :'ivan',
+  role => 'editor',
+  scope => :'acme'
+);
+select permissions.rbac_assign_role(
+  user_id => :'ivan',
+  role => 'viewer',
+  scope => :'globex'
+);
+select permissions.rbac_assign_role(
+  user_id => :'jane',
+  role => 'editor'
+);
 ```
 
 The policy wraps the app-wide check in `(select ...)`. The check does not depend on the row, so it runs once. This table shows what each user can do:
@@ -138,15 +227,22 @@ The policy wraps the app-wide check in `(select ...)`. The check does not depend
 begin;
 set local role authenticated;
 select set_config('permissions.subject_id', :'hugo', true);
-select name from public.projects;                                                          -- gemini
-select permissions.rbac_has_permission(permission => 'documents.read');                    -- false: Hugo has no app-wide role
-select permissions.rbac_has_permission(permission => 'documents.read', scope => :'globex');  -- true
+select name from public.projects;
+-- gemini
+select permissions.rbac_has_permission(permission => 'documents.read');
+-- false: Hugo has no app-wide role
+select permissions.rbac_has_permission(
+  permission => 'documents.read',
+  scope => :'globex'
+);
+-- true
 commit;
 
 begin;
 set local role authenticated;
 select set_config('permissions.subject_id', :'ivan', true);
-update public.projects set name = upper(name);                                             -- UPDATE 1: apollo only
+update public.projects set name = upper(name);
+-- UPDATE 1: apollo only
 commit;
 ```
 
@@ -190,7 +286,11 @@ type document
     define published: [user:*]
     define reader: (viewer and published) or editor
 
-condition non_expired_grant(current_time: timestamp, grant_time: timestamp, grant_duration: duration) {
+condition non_expired_grant(
+  current_time: timestamp,
+  grant_time: timestamp,
+  grant_duration: duration
+) {
   current_time < grant_time + grant_duration
 }
 ```
@@ -198,41 +298,110 @@ condition non_expired_grant(current_time: timestamp, grant_time: timestamp, gran
 Write the model as JSON. This JSON is the output of `fga model transform` for the model above:
 
 ```sql
-select permissions.fga_write_authorization_model(model => $json$
-{"schema_version":"1.1","type_definitions":[
- {"type":"user"},
- {"type":"team",
-  "relations":{
-   "member":{"this":{}}
-  },
-  "metadata":{"relations":{
-   "member":{"directly_related_user_types":[{"type":"user"}]}
-  }}},
- {"type":"org",
-  "relations":{
-   "banned":{"this":{}}
-  },
-  "metadata":{"relations":{
-   "banned":{"directly_related_user_types":[{"type":"user"}]}
-  }}},
- {"type":"document",
-  "relations":{
-   "editor":{"union":{"child":[{"this":{}},{"computedUserset":{"relation":"owner"}}]}},
-   "owner":{"this":{}},
-   "published":{"this":{}},
-   "reader":{"union":{"child":[{"intersection":{"child":[{"computedUserset":{"relation":"viewer"}},{"computedUserset":{"relation":"published"}}]}},{"computedUserset":{"relation":"editor"}}]}},
-   "viewer":{"union":{"child":[{"this":{}},{"computedUserset":{"relation":"editor"}}]}}
-  },
-  "metadata":{"relations":{
-   "editor":{"directly_related_user_types":[{"type":"user"}]},
-   "owner":{"directly_related_user_types":[{"type":"user"}]},
-   "published":{"directly_related_user_types":[{"type":"user","wildcard":{}}]},
-   "reader":{},
-   "viewer":{"directly_related_user_types":[{"type":"user"},{"condition":"non_expired_grant","type":"user"},{"relation":"member","type":"team"}]}
-  }}}
-],
-"conditions":{"non_expired_grant":{"expression":"current_time < grant_time + grant_duration","name":"non_expired_grant","parameters":{"current_time":{"type_name":"TYPE_NAME_TIMESTAMP"},"grant_duration":{"type_name":"TYPE_NAME_DURATION"},"grant_time":{"type_name":"TYPE_NAME_TIMESTAMP"}}}}}
-$json$::jsonb);
+select permissions.fga_write_authorization_model(
+  model => $json$
+    {
+      "schema_version": "1.1",
+      "type_definitions": [
+        {"type": "user"},
+        {
+          "type": "team",
+          "relations": {"member": {"this": {}}},
+          "metadata": {
+            "relations": {
+              "member": {
+                "directly_related_user_types": [{"type": "user"}]
+              }
+            }
+          }
+        },
+        {
+          "type": "org",
+          "relations": {"banned": {"this": {}}},
+          "metadata": {
+            "relations": {
+              "banned": {
+                "directly_related_user_types": [{"type": "user"}]
+              }
+            }
+          }
+        },
+        {
+          "type": "document",
+          "relations": {
+            "editor": {
+              "union": {
+                "child": [
+                  {"this": {}},
+                  {"computedUserset": {"relation": "owner"}}
+                ]
+              }
+            },
+            "owner": {"this": {}},
+            "published": {"this": {}},
+            "reader": {
+              "union": {
+                "child": [
+                  {
+                    "intersection": {
+                      "child": [
+                        {"computedUserset": {"relation": "viewer"}},
+                        {"computedUserset": {"relation": "published"}}
+                      ]
+                    }
+                  },
+                  {"computedUserset": {"relation": "editor"}}
+                ]
+              }
+            },
+            "viewer": {
+              "union": {
+                "child": [
+                  {"this": {}},
+                  {"computedUserset": {"relation": "editor"}}
+                ]
+              }
+            }
+          },
+          "metadata": {
+            "relations": {
+              "editor": {
+                "directly_related_user_types": [{"type": "user"}]
+              },
+              "owner": {
+                "directly_related_user_types": [{"type": "user"}]
+              },
+              "published": {
+                "directly_related_user_types": [
+                  {"type": "user", "wildcard": {}}
+                ]
+              },
+              "reader": {},
+              "viewer": {
+                "directly_related_user_types": [
+                  {"type": "user"},
+                  {"condition": "non_expired_grant", "type": "user"},
+                  {"relation": "member", "type": "team"}
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "conditions": {
+        "non_expired_grant": {
+          "expression": "current_time < grant_time + grant_duration",
+          "name": "non_expired_grant",
+          "parameters": {
+            "current_time": {"type_name": "TYPE_NAME_TIMESTAMP"},
+            "grant_duration": {"type_name": "TYPE_NAME_DURATION"},
+            "grant_time": {"type_name": "TYPE_NAME_TIMESTAMP"}
+          }
+        }
+      }
+    }
+  $json$::jsonb
+);
 ```
 
 ### Create the table and the data
@@ -261,19 +430,63 @@ Now add the roles and the tuples. The IDs in tuples are text. A UUID goes in as 
 
 ```sql
 -- RBAC: Alice reads acme, Carol edits acme, Dave reads acme
-select permissions.rbac_assign_role(user_id => :'alice', role => 'viewer', scope => :'acme');
-select permissions.rbac_assign_role(user_id => :'carol', role => 'editor', scope => :'acme');
-select permissions.rbac_assign_role(user_id => :'dave',  role => 'viewer', scope => :'acme');
--- FGA: team eng (Bob) views the globex notes and the draft, Bob edits the acme
--- readme, Dave owns his diary, views the globex notes and is banned from acme
-select permissions.fga_write(writes => jsonb_build_array(
-    jsonb_build_object('user', 'user:' || :'bob',  'relation', 'member', 'object', 'team:' || :'eng'),
-    jsonb_build_object('user', 'team:' || :'eng' || '#member', 'relation', 'viewer', 'object', 'document:' || :'notes'),
-    jsonb_build_object('user', 'team:' || :'eng' || '#member', 'relation', 'viewer', 'object', 'document:' || :'draft'),
-    jsonb_build_object('user', 'user:' || :'bob',  'relation', 'editor', 'object', 'document:' || :'readme'),
-    jsonb_build_object('user', 'user:' || :'dave', 'relation', 'owner',  'object', 'document:' || :'diary'),
-    jsonb_build_object('user', 'user:' || :'dave', 'relation', 'viewer', 'object', 'document:' || :'notes'),
-    jsonb_build_object('user', 'user:' || :'dave', 'relation', 'banned', 'object', 'org:' || :'acme')));
+select permissions.rbac_assign_role(
+  user_id => :'alice',
+  role => 'viewer',
+  scope => :'acme'
+);
+select permissions.rbac_assign_role(
+  user_id => :'carol',
+  role => 'editor',
+  scope => :'acme'
+);
+select permissions.rbac_assign_role(
+  user_id => :'dave',
+  role => 'viewer',
+  scope => :'acme'
+);
+-- FGA: team eng (Bob) views the globex notes and the draft, Bob
+-- edits the acme readme, Dave owns his diary, views the globex notes
+-- and is banned from acme
+select permissions.fga_write(
+  writes => jsonb_build_array(
+    jsonb_build_object(
+      'user', 'user:' || :'bob',
+      'relation', 'member',
+      'object', 'team:' || :'eng'
+    ),
+    jsonb_build_object(
+      'user', 'team:' || :'eng' || '#member',
+      'relation', 'viewer',
+      'object', 'document:' || :'notes'
+    ),
+    jsonb_build_object(
+      'user', 'team:' || :'eng' || '#member',
+      'relation', 'viewer',
+      'object', 'document:' || :'draft'
+    ),
+    jsonb_build_object(
+      'user', 'user:' || :'bob',
+      'relation', 'editor',
+      'object', 'document:' || :'readme'
+    ),
+    jsonb_build_object(
+      'user', 'user:' || :'dave',
+      'relation', 'owner',
+      'object', 'document:' || :'diary'
+    ),
+    jsonb_build_object(
+      'user', 'user:' || :'dave',
+      'relation', 'viewer',
+      'object', 'document:' || :'notes'
+    ),
+    jsonb_build_object(
+      'user', 'user:' || :'dave',
+      'relation', 'banned',
+      'object', 'org:' || :'acme'
+    )
+  )
+);
 ```
 
 ### Current-subject functions
@@ -291,9 +504,21 @@ The [function reference](reference.md) has the full signatures. This example run
 ```sql
 begin;
 select set_config('permissions.subject_id', :'bob', true);
-select permissions.fga_check_current(relation => 'editor', object => 'document:' || :'readme');  -- true
-select permissions.fga_list_object_ids_current(type => 'document', relation => 'viewer');        -- the IDs of the readme, notes and draft
-select permissions.fga_list_objects_current(type => 'document', relation => 'viewer');           -- the same, as document:<id>
+select permissions.fga_check_current(
+  relation => 'editor',
+  object => 'document:' || :'readme'
+);
+-- true
+select permissions.fga_list_object_ids_current(
+  type => 'document',
+  relation => 'viewer'
+);
+-- the IDs of the readme, notes and draft
+select permissions.fga_list_objects_current(
+  type => 'document',
+  relation => 'viewer'
+);
+-- the same, as document:<id>
 commit;
 ```
 
@@ -305,18 +530,74 @@ The list functions have no limit of 1,000 rows. `fga_list_objects` has that limi
 
 ```sql
 -- reads: permissive policies combine with OR
-create policy documents_select_rbac on public.documents for select to authenticated
-    using (org_id = any (array(select unnest(permissions.rbac_scopes_with_permission(permission => 'documents.read'))::uuid)));
-create policy documents_select_fga on public.documents for select to authenticated
-    using (id = any (array(select permissions.fga_list_object_ids_current(type => 'document', relation => 'viewer')::uuid)));
--- a restrictive policy combines with AND: nobody sees the documents of an org that bans them
-create policy documents_not_banned on public.documents as restrictive for select to authenticated
-    using (org_id is null or org_id <> all (array(select permissions.fga_list_object_ids_current(type => 'org', relation => 'banned')::uuid)));
+create policy documents_select_rbac
+  on public.documents
+  for select
+  to authenticated
+  using (
+    org_id = any (
+      array(
+        select unnest(
+          permissions.rbac_scopes_with_permission(
+            permission => 'documents.read'
+          )
+        )::uuid
+      )
+    )
+  );
+create policy documents_select_fga
+  on public.documents
+  for select
+  to authenticated
+  using (
+    id = any (
+      array(
+        select permissions.fga_list_object_ids_current(
+          type => 'document',
+          relation => 'viewer'
+        )::uuid
+      )
+    )
+  );
+-- a restrictive policy combines with AND: nobody sees the documents
+-- of an org that bans them
+create policy documents_not_banned
+  on public.documents
+  as restrictive
+  for select
+  to authenticated
+  using (
+    org_id is null
+    or org_id <> all (
+      array(
+        select permissions.fga_list_object_ids_current(
+          type => 'org',
+          relation => 'banned'
+        )::uuid
+      )
+    )
+  );
 -- writes: check the row
-create policy documents_update_rbac on public.documents for update to authenticated
-    using (permissions.rbac_has_permission(permission => 'documents.edit', scope => org_id::text));
-create policy documents_update_fga on public.documents for update to authenticated
-    using (permissions.fga_check_current(relation => 'editor', object => 'document:' || id));
+create policy documents_update_rbac
+  on public.documents
+  for update
+  to authenticated
+  using (
+    permissions.rbac_has_permission(
+      permission => 'documents.edit',
+      scope => org_id::text
+    )
+  );
+create policy documents_update_fga
+  on public.documents
+  for update
+  to authenticated
+  using (
+    permissions.fga_check_current(
+      relation => 'editor',
+      object => 'document:' || id
+    )
+  );
 ```
 
 This table shows what each user sees:
@@ -339,13 +620,15 @@ To check the table, run a count as each user:
 begin;
 set local role authenticated;
 select set_config('permissions.subject_id', :'dave', true);
-select title from public.documents order by title;   -- dave's diary, globex notes
+select title from public.documents order by title;
+-- dave's diary, globex notes
 commit;
 
 begin;
 set local role authenticated;
 select set_config('permissions.subject_id', :'carol', true);
-select title from public.documents order by title;   -- acme plan, acme readme
+select title from public.documents order by title;
+-- acme plan, acme readme
 update public.documents set title = title;           -- UPDATE 2
 commit;
 ```
@@ -383,7 +666,10 @@ In an OpenFGA call, a misspelled relation or type is an error. It is not a silen
 ```sql
 begin;
 select set_config('permissions.subject_id', :'bob', true);
-select permissions.fga_check_current(relation => 'editr', object => 'document:x');
+select permissions.fga_check_current(
+  relation => 'editr',
+  object => 'document:x'
+);
 -- ERROR:  relation 'document#editr' not found
 -- DETAIL:  openfga:2000 validation_error
 -- HINT:  Did you mean 'editor'? Relations on type 'document': editor, owner, published, reader, viewer.
@@ -391,7 +677,10 @@ rollback;
 
 begin;
 select set_config('permissions.subject_id', :'bob', true);
-select permissions.fga_list_object_ids_current(type => 'documnt', relation => 'viewer');
+select permissions.fga_list_object_ids_current(
+  type => 'documnt',
+  relation => 'viewer'
+);
 -- ERROR:  type 'documnt' not found
 -- DETAIL:  openfga:2000 validation_error
 rollback;
@@ -400,7 +689,8 @@ rollback;
 RBAC works the other way. An unknown permission gives false. A policy that names a dropped permission denies access, and does not break each query:
 
 ```sql
-select permissions.rbac_has_permission(permission => 'documents.reed');   -- false
+select permissions.rbac_has_permission(permission => 'documents.reed');
+-- false
 ```
 
 ### Row attributes that only RLS sees
@@ -408,8 +698,22 @@ select permissions.rbac_has_permission(permission => 'documents.reed');   -- fal
 A rule on a column of the row belongs in RLS. For example: drafts are visible to editors only.
 
 ```sql
-create policy documents_published on public.documents as restrictive for select to authenticated
-    using (status = 'published' or id = any (array(select permissions.fga_list_object_ids_current(type => 'document', relation => 'editor')::uuid)));
+create policy documents_published
+  on public.documents
+  as restrictive
+  for select
+  to authenticated
+  using (
+    status = 'published'
+    or id = any (
+      array(
+        select permissions.fga_list_object_ids_current(
+          type => 'document',
+          relation => 'editor'
+        )::uuid
+      )
+    )
+  );
 ```
 
 The check functions do not read your tables, so they do not know this rule. Bob views the draft through his team. RLS hides the draft, but `fga_check_current` still returns true:
@@ -418,8 +722,13 @@ The check functions do not read your tables, so they do not know this rule. Bob 
 begin;
 set local role authenticated;
 select set_config('permissions.subject_id', :'bob', true);
-select title from public.documents order by title;                                              -- acme readme, globex notes: no draft
-select permissions.fga_check_current(relation => 'viewer', object => 'document:' || :'draft');  -- true
+select title from public.documents order by title;
+-- acme readme, globex notes: no draft
+select permissions.fga_check_current(
+  relation => 'viewer',
+  object => 'document:' || :'draft'
+);
+-- true
 commit;
 ```
 
@@ -428,12 +737,26 @@ Treat the check functions as advisory and RLS as final. Use a check to decide wh
 If a check must use the attribute, pass the attribute in. The model has the relations `published` and `reader`. A backend sends the status of the row as a contextual tuple. The extension never writes a contextual tuple:
 
 ```sql
-select permissions.fga_check(subject => 'user:' || :'bob', relation => 'reader', object => 'document:' || d.id,
-    contextual_tuples => case when d.status = 'published'
-        then jsonb_build_array(jsonb_build_object('user', 'user:*', 'relation', 'published', 'object', 'document:' || d.id))
-    end)
-from public.documents d where d.id = :'notes';   -- true
--- the same query for :'draft' is false: no published tuple, and Bob does not edit it
+select permissions.fga_check(
+  subject => 'user:' || :'bob',
+  relation => 'reader',
+  object => 'document:' || d.id,
+  contextual_tuples => case
+    when d.status = 'published' then
+      jsonb_build_array(
+        jsonb_build_object(
+          'user', 'user:*',
+          'relation', 'published',
+          'object', 'document:' || d.id
+        )
+      )
+  end
+)
+from public.documents d
+where d.id = :'notes';
+-- true
+-- the same query for :'draft' is false: no published tuple, and Bob
+-- does not edit it
 ```
 
 This needs `fga_check`, which is admin-only. The current-subject functions take no contextual tuples, because a client could pass any tuple. An attribute on a relationship, such as an expiry or an IP range, is an [OpenFGA condition](conditions.md). The next section shows conditions in policies.
@@ -447,38 +770,72 @@ The policy denies a tuple whose condition needs a request value. It also denies 
 Erin gets 30 days of access to the acme plan. The condition `non_expired_grant` needs `current_time`. The tuple stores `grant_time` and `grant_duration`, but not `current_time`:
 
 ```sql
-select permissions.fga_write(writes => jsonb_build_array(jsonb_build_object(
-    'user', 'user:' || :'erin', 'relation', 'viewer', 'object', 'document:' || :'plan',
-    'condition', jsonb_build_object('name', 'non_expired_grant',
-        'context', jsonb_build_object('grant_time', now() - interval '1 day', 'grant_duration', '720h')))));
+select permissions.fga_write(
+  writes => jsonb_build_array(
+    jsonb_build_object(
+      'user', 'user:' || :'erin',
+      'relation', 'viewer',
+      'object', 'document:' || :'plan',
+      'condition', jsonb_build_object(
+        'name', 'non_expired_grant',
+        'context', jsonb_build_object(
+          'grant_time', now() - interval '1 day',
+          'grant_duration', '720h'
+        )
+      )
+    )
+  )
+);
 
 begin;
 set local role authenticated;
 select set_config('permissions.subject_id', :'erin', true);
-select id from public.documents;                                                               -- no rows: the policies have no current_time
-select permissions.fga_check_current(relation => 'viewer', object => 'document:' || :'plan');  -- false, not an error
+select id from public.documents;
+-- no rows: the policies have no current_time
+select permissions.fga_check_current(
+  relation => 'viewer',
+  object => 'document:' || :'plan'
+);
+-- false, not an error
 commit;
 ```
 
 A value that the server can trust, such as the time, can come from a function of your own. The function calls `fga_check` and adds the value. `fga_check` is admin-only, so the function is `security definer`, like the trigger in [RBAC](rbac.md#clean-up-with-delete_subject):
 
 ```sql
-create function public.fga_check_now(relation text, object text) returns boolean
+create function public.fga_check_now(
+  relation text,
+  object text
+) returns boolean
 language plpgsql stable security definer set search_path = ''
 as $$
 begin
-    return permissions.fga_check(subject => 'user:' || permissions.current_subject_id(),
-                                 relation => relation, object => object,
-                                 context => jsonb_build_object('current_time', now()));
+  return permissions.fga_check(
+    subject => 'user:' || permissions.current_subject_id(),
+    relation => relation,
+    object => object,
+    context => jsonb_build_object('current_time', now())
+  );
 exception when invalid_parameter_value then
-    return false;   -- no subject, or a condition that still cannot be evaluated (openfga:2000): deny
+  return false;
+  -- no subject, or a condition that still cannot be evaluated
+  -- (openfga:2000): deny
 end;
 $$;
 revoke all on function public.fga_check_now(text, text) from public;
-grant execute on function public.fga_check_now(text, text) to authenticated;
+grant execute on function public.fga_check_now(text, text)
+  to authenticated;
 
-create policy documents_select_timed on public.documents for select to authenticated
-    using (public.fga_check_now(relation => 'viewer', object => 'document:' || id));
+create policy documents_select_timed
+  on public.documents
+  for select
+  to authenticated
+  using (
+    public.fga_check_now(
+      relation => 'viewer',
+      object => 'document:' || id
+    )
+  );
 
 begin;
 set local role authenticated;

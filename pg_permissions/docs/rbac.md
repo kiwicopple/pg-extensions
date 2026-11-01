@@ -45,9 +45,12 @@ The ID comes from the first source that has a value:
 3. If neither source has a value, the ID is null. Then each check returns false.
 
 ```sql
-select permissions.current_subject_id();                                 -- null: no JWT, no parameter
-select permissions.current_subject_type();                               -- user
-select permissions.rbac_has_permission(permission => 'documents.read');  -- false: no subject, no access
+select permissions.current_subject_id();
+-- null: no JWT, no parameter
+select permissions.current_subject_type();
+-- user
+select permissions.rbac_has_permission(permission => 'documents.read');
+-- false: no subject, no access
 ```
 
 ### Plain Postgres
@@ -56,10 +59,13 @@ Set `permissions.subject_id` at the start of each request, in the transaction th
 
 ```sql
 begin;
-select set_config('permissions.subject_id', :'alice', true);   -- true: local to this transaction
-select permissions.current_subject_id();                       -- the ID of Alice
+select set_config('permissions.subject_id', :'alice', true);
+-- true: local to this transaction
+select permissions.current_subject_id();
+-- the ID of Alice
 commit;
-select permissions.current_subject_id();                       -- null again
+select permissions.current_subject_id();
+-- null again
 ```
 
 Do not set the third argument of `set_config` to `false`. The value then stays for the whole session. Behind a pooler in transaction mode, the next client gets the same server connection and acts as the previous user. A transaction-local value disappears at commit or rollback.
@@ -70,8 +76,12 @@ In an application, add one statement at the start of the transaction. This examp
 const client = await pool.connect();
 try {
   await client.query('begin');
-  await client.query('set local role app_user');   // a role without BYPASSRLS, so policies apply
-  await client.query("select set_config('permissions.subject_id', $1, true)", [userId]);
+  await client.query('set local role app_user');
+  // a role without BYPASSRLS, so policies apply
+  await client.query(
+    "select set_config('permissions.subject_id', $1, true)",
+    [userId]
+  );
   // ... the queries of this request ...
   await client.query('commit');
 } catch (e) {
@@ -90,10 +100,19 @@ PostgREST sets `request.jwt.claims`. A client that sends the JWT of a user is al
 
 ```sql
 begin;
-select set_config('request.jwt.claims', json_build_object('sub', :'alice', 'role', 'authenticated')::text, true);
-select permissions.current_subject_id();                      -- the ID of Alice
+select set_config(
+  'request.jwt.claims',
+  json_build_object(
+    'sub', :'alice',
+    'role', 'authenticated'
+  )::text,
+  true
+);
+select permissions.current_subject_id();
+-- the ID of Alice
 select set_config('permissions.subject_id', :'bob', true);
-select permissions.current_subject_id();                      -- still the ID of Alice: the JWT wins
+select permissions.current_subject_id();
+-- still the ID of Alice: the JWT wins
 commit;
 ```
 
@@ -131,9 +150,15 @@ The admin functions are admin-only for a reason. `rbac_user_permissions` and `rb
 
 ```sql
 set role authenticated;
-select permissions.rbac_has_permission(permission => 'documents.read');   -- false: no subject, but no error
-select permissions.rbac_assign_role(user_id => :'bob', role => 'admin');  -- ERROR:  permission denied for function rbac_assign_role
-select permissions.rbac_user_permissions(user_id => :'alice');            -- ERROR:  permission denied for function rbac_user_permissions
+select permissions.rbac_has_permission(permission => 'documents.read');
+-- false: no subject, but no error
+select permissions.rbac_assign_role(
+  user_id => :'bob',
+  role => 'admin'
+);
+-- ERROR:  permission denied for function rbac_assign_role
+select permissions.rbac_user_permissions(user_id => :'alice');
+-- ERROR:  permission denied for function rbac_user_permissions
 reset role;
 ```
 
@@ -158,9 +183,20 @@ On Supabase, `service_role` bypasses RLS but not function privileges. This is wh
 Define each role once, as the admin. A role has a name, a list of permissions, and a list of roles that it inherits. Here `editor` inherits `viewer`, and `admin` inherits `editor`:
 
 ```sql
-select permissions.rbac_create_role(role => 'viewer', permissions => '{documents.read}');
-select permissions.rbac_create_role(role => 'editor', permissions => '{documents.edit}', inherits => '{viewer}');
-select permissions.rbac_create_role(role => 'admin',  permissions => '{documents.delete,users.manage}', inherits => '{editor}');
+select permissions.rbac_create_role(
+  role => 'viewer',
+  permissions => '{documents.read}'
+);
+select permissions.rbac_create_role(
+  role => 'editor',
+  permissions => '{documents.edit}',
+  inherits => '{viewer}'
+);
+select permissions.rbac_create_role(
+  role => 'admin',
+  permissions => '{documents.delete,users.manage}',
+  inherits => '{editor}'
+);
 ```
 
 A permission name is a free-form string, for example `documents.read`. A role works both app-wide and in any scope. Inheritance is transitive: `admin` has the permissions of `editor`, and the permissions that `editor` inherits from `viewer`.
@@ -168,16 +204,27 @@ A permission name is a free-form string, for example `documents.read`. A role wo
 Then assign the roles to users. These assignments are app-wide:
 
 ```sql
-select permissions.rbac_assign_role(user_id => :'alice', role => 'admin');
-select permissions.rbac_assign_role(user_id => :'bob',   role => 'editor');
-select permissions.rbac_assign_role(user_id => :'carol', role => 'viewer');
+select permissions.rbac_assign_role(
+  user_id => :'alice',
+  role => 'admin'
+);
+select permissions.rbac_assign_role(
+  user_id => :'bob',
+  role => 'editor'
+);
+select permissions.rbac_assign_role(
+  user_id => :'carol',
+  role => 'viewer'
+);
 ```
 
 Ask what a user can do. The result lists each permission that the user holds, directly or through inheritance. The order is not defined:
 
 ```sql
-select permissions.rbac_user_permissions(user_id => :'alice');   -- {documents.delete,documents.edit,documents.read,users.manage}
-select permissions.rbac_user_permissions(user_id => :'dave');    -- {}: Dave has no role
+select permissions.rbac_user_permissions(user_id => :'alice');
+-- {documents.delete,documents.edit,documents.read,users.manage}
+select permissions.rbac_user_permissions(user_id => :'dave');
+-- {}: Dave has no role
 ```
 
 ## Scenario 1: app-wide roles
@@ -186,20 +233,48 @@ Alice is an `admin`, Bob is an `editor` and Carol is a `viewer`, all app-wide. T
 
 ```sql
 create table public.documents (
-    id    uuid primary key default gen_random_uuid(),
-    title text not null
+  id uuid primary key default gen_random_uuid(),
+  title text not null
 );
-insert into public.documents (title) values ('welcome'), ('holidays'), ('expenses');
+insert into public.documents (title)
+values ('welcome'), ('holidays'), ('expenses');
 
 alter table public.documents enable row level security;
 grant select, update, delete on public.documents to authenticated;
 
-create policy documents_select on public.documents for select to authenticated
-    using ((select permissions.rbac_has_permission(permission => 'documents.read')));
-create policy documents_update on public.documents for update to authenticated
-    using ((select permissions.rbac_has_permission(permission => 'documents.edit')));
-create policy documents_delete on public.documents for delete to authenticated
-    using ((select permissions.rbac_has_permission(permission => 'documents.delete')));
+create policy documents_select
+  on public.documents
+  for select
+  to authenticated
+  using (
+    (
+      select permissions.rbac_has_permission(
+        permission => 'documents.read'
+      )
+    )
+  );
+create policy documents_update
+  on public.documents
+  for update
+  to authenticated
+  using (
+    (
+      select permissions.rbac_has_permission(
+        permission => 'documents.edit'
+      )
+    )
+  );
+create policy documents_delete
+  on public.documents
+  for delete
+  to authenticated
+  using (
+    (
+      select permissions.rbac_has_permission(
+        permission => 'documents.delete'
+      )
+    )
+  );
 ```
 
 The check does not depend on the row, so the policy wraps it in `(select ...)`. Postgres then runs the check once for each query, as an InitPlan, and not once for each row. `EXPLAIN` shows an `InitPlan` and no `SubPlan`.
@@ -210,29 +285,37 @@ Each block below starts with the same two statements. The first statement starts
 begin;
 set local role authenticated;
 select set_config('permissions.subject_id', :'carol', true);
-select count(*) from public.documents;                                   -- 3: viewers read all documents
-update public.documents set title = upper(title);                        -- UPDATE 0: Carol cannot edit
-select permissions.rbac_has_permission(permission => 'documents.edit');  -- false
+select count(*) from public.documents;
+-- 3: viewers read all documents
+update public.documents set title = upper(title);
+-- UPDATE 0: Carol cannot edit
+select permissions.rbac_has_permission(permission => 'documents.edit');
+-- false
 commit;
 
 begin;
 set local role authenticated;
 select set_config('permissions.subject_id', :'bob', true);
-update public.documents set title = upper(title);             -- UPDATE 3: editors can update
-delete from public.documents where title = 'EXPENSES';        -- DELETE 0: editors cannot delete
+update public.documents set title = upper(title);
+-- UPDATE 3: editors can update
+delete from public.documents where title = 'EXPENSES';
+-- DELETE 0: editors cannot delete
 commit;
 
 begin;
 set local role authenticated;
 select set_config('permissions.subject_id', :'alice', true);
-delete from public.documents where title = 'EXPENSES';        -- DELETE 1: admins can delete
+delete from public.documents where title = 'EXPENSES';
+-- DELETE 1: admins can delete
 commit;
 
 begin;
 set local role authenticated;
-select set_config('permissions.subject_id', :'dave', true);   -- Dave has no role
+select set_config('permissions.subject_id', :'dave', true);
+-- Dave has no role
 select count(*) from public.documents;                        -- 0
-select set_config('permissions.subject_id', '', true);        -- no subject
+select set_config('permissions.subject_id', '', true);
+-- no subject
 select count(*) from public.documents;                        -- 0
 commit;
 ```
@@ -244,30 +327,72 @@ In production, the `set_config` statement is part of your request setup (see [Id
 This scenario uses the same roles, but assigns them for each organization. Alice is an admin of `acme`. Bob is an editor of `acme` and a viewer of `globex`. The table has an `org_id` column, and the policies use it:
 
 ```sql
-select permissions.rbac_assign_role(user_id => :'alice', role => 'admin',  scope => :'acme');
-select permissions.rbac_assign_role(user_id => :'bob',   role => 'editor', scope => :'acme');
-select permissions.rbac_assign_role(user_id => :'bob',   role => 'viewer', scope => :'globex');
+select permissions.rbac_assign_role(
+  user_id => :'alice',
+  role => 'admin',
+  scope => :'acme'
+);
+select permissions.rbac_assign_role(
+  user_id => :'bob',
+  role => 'editor',
+  scope => :'acme'
+);
+select permissions.rbac_assign_role(
+  user_id => :'bob',
+  role => 'viewer',
+  scope => :'globex'
+);
 
 create table public.org_documents (
-    id     uuid primary key default gen_random_uuid(),
-    org_id uuid not null,
-    title  text not null
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null,
+  title text not null
 );
 create index on public.org_documents (org_id);
-insert into public.org_documents (org_id, title) values
-    (:'acme',   'acme plan'),
-    (:'acme',   'acme readme'),
-    (:'globex', 'globex notes');
+insert into public.org_documents (org_id, title)
+values
+  (:'acme', 'acme plan'),
+  (:'acme', 'acme readme'),
+  (:'globex', 'globex notes');
 
 alter table public.org_documents enable row level security;
 grant select, insert, update on public.org_documents to authenticated;
 
-create policy org_documents_select on public.org_documents for select to authenticated
-    using (org_id = any (array(select unnest(permissions.rbac_scopes_with_permission(permission => 'documents.read'))::uuid)));
-create policy org_documents_update on public.org_documents for update to authenticated
-    using (permissions.rbac_has_permission(permission => 'documents.edit', scope => org_id::text));
-create policy org_documents_insert on public.org_documents for insert to authenticated
-    with check (permissions.rbac_has_permission(permission => 'documents.edit', scope => org_id::text));
+create policy org_documents_select
+  on public.org_documents
+  for select
+  to authenticated
+  using (
+    org_id = any (
+      array(
+        select unnest(
+          permissions.rbac_scopes_with_permission(
+            permission => 'documents.read'
+          )
+        )::uuid
+      )
+    )
+  );
+create policy org_documents_update
+  on public.org_documents
+  for update
+  to authenticated
+  using (
+    permissions.rbac_has_permission(
+      permission => 'documents.edit',
+      scope => org_id::text
+    )
+  );
+create policy org_documents_insert
+  on public.org_documents
+  for insert
+  to authenticated
+  with check (
+    permissions.rbac_has_permission(
+      permission => 'documents.edit',
+      scope => org_id::text
+    )
+  );
 ```
 
 The SELECT policy uses the fast path. It lists the scopes of the user once for each query. The UPDATE and INSERT policies check the one row that the statement writes. [RLS policies](rls.md) explains the two forms.
@@ -279,19 +404,45 @@ Ask the questions of the scenario as Bob. Run each statement in a transaction th
 ```sql
 begin;
 select set_config('permissions.subject_id', :'bob', true);
-select permissions.rbac_has_permission(permission => 'documents.edit', scope => :'acme');    -- true
-select permissions.rbac_has_permission(permission => 'documents.edit', scope => :'globex');  -- false
-select permissions.rbac_has_permission(permission => 'documents.read', scope => :'globex');  -- true
-select permissions.rbac_scopes_with_permission(permission => 'documents.read');              -- {acme,globex}, as IDs
-select permissions.rbac_scopes_with_permission(permission => 'documents.edit');              -- {acme}
+select permissions.rbac_has_permission(
+  permission => 'documents.edit',
+  scope => :'acme'
+);
+-- true
+select permissions.rbac_has_permission(
+  permission => 'documents.edit',
+  scope => :'globex'
+);
+-- false
+select permissions.rbac_has_permission(
+  permission => 'documents.read',
+  scope => :'globex'
+);
+-- true
+select permissions.rbac_scopes_with_permission(
+  permission => 'documents.read'
+);
+-- {acme,globex}, as IDs
+select permissions.rbac_scopes_with_permission(
+  permission => 'documents.edit'
+);
+-- {acme}
 commit;
 ```
 
 For Carol, who holds a role app-wide only, `rbac_scopes_with_permission(permission => 'documents.read')` returns `{}`. The admin can ask about any user:
 
 ```sql
-select permissions.rbac_user_permissions(user_id => :'bob', scope => :'globex');    -- {documents.read}: what can Bob do in globex?
-select * from permissions.rbac_users_with_role(role => 'admin', scope => :'acme');  -- Alice: who are the admins of acme?
+select permissions.rbac_user_permissions(
+  user_id => :'bob',
+  scope => :'globex'
+);
+-- {documents.read}: what can Bob do in globex?
+select * from permissions.rbac_users_with_role(
+  role => 'admin',
+  scope => :'acme'
+);
+-- Alice: who are the admins of acme?
 ```
 
 Now use the policies. As Bob:
@@ -300,15 +451,20 @@ Now use the policies. As Bob:
 begin;
 set local role authenticated;
 select set_config('permissions.subject_id', :'bob', true);
-select count(*) from public.org_documents;                                      -- 3: acme and globex
-update public.org_documents set title = upper(title);                           -- UPDATE 2: only acme
-insert into public.org_documents (org_id, title) values (:'acme', 'budget');    -- INSERT 0 1
+select count(*) from public.org_documents;
+-- 3: acme and globex
+update public.org_documents set title = upper(title);
+-- UPDATE 2: only acme
+insert into public.org_documents (org_id, title)
+values (:'acme', 'budget');
+-- INSERT 0 1
 commit;
 
 begin;
 set local role authenticated;
 select set_config('permissions.subject_id', :'bob', true);
-insert into public.org_documents (org_id, title) values (:'globex', 'nope');
+insert into public.org_documents (org_id, title)
+values (:'globex', 'nope');
 -- ERROR:  new row violates row-level security policy for table "org_documents"
 commit;
 ```
@@ -329,18 +485,28 @@ Examples of the answers, for Carol (a viewer) and Bob (an editor):
 ```sql
 begin;
 select set_config('permissions.subject_id', :'carol', true);
-select permissions.rbac_has_permission(permission => 'documents.read');         -- true
-select permissions.rbac_has_permission(permission => 'documents.edit');         -- false
-select permissions.rbac_has_permission(permission => 'documents.nonexistent');  -- false, not an error
-select permissions.rbac_has_role(role => 'viewer');                             -- true
-select permissions.rbac_has_role(role => 'documents.read');                     -- false: a permission name is not a role
-select permissions.rbac_has_role(role => 'nonexistent');                        -- false
+select permissions.rbac_has_permission(permission => 'documents.read');
+-- true
+select permissions.rbac_has_permission(permission => 'documents.edit');
+-- false
+select permissions.rbac_has_permission(
+  permission => 'documents.nonexistent'
+);
+-- false, not an error
+select permissions.rbac_has_role(role => 'viewer');
+-- true
+select permissions.rbac_has_role(role => 'documents.read');
+-- false: a permission name is not a role
+select permissions.rbac_has_role(role => 'nonexistent');
+-- false
 commit;
 
 begin;
 select set_config('permissions.subject_id', :'bob', true);
-select permissions.rbac_has_role(role => 'viewer');                             -- true: inherited through editor
-select permissions.rbac_has_role(role => 'admin');                              -- false
+select permissions.rbac_has_role(role => 'viewer');
+-- true: inherited through editor
+select permissions.rbac_has_role(role => 'admin');
+-- false
 commit;
 ```
 
@@ -351,28 +517,51 @@ A role cannot change after you create it. To change the permissions of a role, d
 `rbac_assign_role` has no effect if the user already holds the role in that scope. `rbac_unassign_role` has no effect if the user does not hold the role. To remove a scoped assignment, pass the same `scope`. An app-wide unassignment does not remove the same role in a scope.
 
 ```sql
-select permissions.rbac_assign_role(user_id => :'bob', role => 'editor');          -- already held: no change
-select permissions.rbac_unassign_role(user_id => :'dave', role => 'editor');       -- Dave does not hold the role: no change
-select permissions.rbac_unassign_role(user_id => :'dave', role => 'nonexistent');  -- no change, no error
+select permissions.rbac_assign_role(
+  user_id => :'bob',
+  role => 'editor'
+);
+-- already held: no change
+select permissions.rbac_unassign_role(
+  user_id => :'dave',
+  role => 'editor'
+);
+-- Dave does not hold the role: no change
+select permissions.rbac_unassign_role(
+  user_id => :'dave',
+  role => 'nonexistent'
+);
+-- no change, no error
 ```
 
 You cannot drop a role that another role inherits. When you drop a role, the extension deletes its assignments. You can reuse the name of a dropped role at once.
 
 ```sql
-select permissions.rbac_create_role(role => 'auditor', permissions => '{audit.read}', inherits => '{viewer}');
-select permissions.rbac_assign_role(user_id => :'dave', role => 'auditor');
-select permissions.rbac_user_permissions(user_id => :'dave');    -- {audit.read,documents.read}
+select permissions.rbac_create_role(
+  role => 'auditor',
+  permissions => '{audit.read}',
+  inherits => '{viewer}'
+);
+select permissions.rbac_assign_role(
+  user_id => :'dave',
+  role => 'auditor'
+);
+select permissions.rbac_user_permissions(user_id => :'dave');
+-- {audit.read,documents.read}
 
-select permissions.rbac_drop_role(role => 'viewer');             -- ERROR:  role 'viewer' is inherited by 'auditor', 'editor'
+select permissions.rbac_drop_role(role => 'viewer');
+-- ERROR:  role 'viewer' is inherited by 'auditor', 'editor'
 
 select permissions.rbac_drop_role(role => 'auditor');
-select permissions.rbac_user_permissions(user_id => :'dave');    -- {}: the assignment went with the role
+select permissions.rbac_user_permissions(user_id => :'dave');
+-- {}: the assignment went with the role
 ```
 
 `rbac_users_with_role` lists user IDs. It includes users who hold the role through a role that inherits it:
 
 ```sql
-select * from permissions.rbac_users_with_role(role => 'editor');   -- Alice (through admin) and Bob
+select * from permissions.rbac_users_with_role(role => 'editor');
+-- Alice (through admin) and Bob
 ```
 
 ## Errors
@@ -392,19 +581,35 @@ The RBAC functions raise these errors. Each error has a `DETAIL` code and a `HIN
 | `rbac_drop_role` | Another role inherits the role | `rbac:role_in_use` | `2BP01` |
 
 ```sql
-select permissions.rbac_create_role(role => 'viewer', permissions => '{documents.read}');
+select permissions.rbac_create_role(
+  role => 'viewer',
+  permissions => '{documents.read}'
+);
 -- ERROR:  role 'viewer' already exists
 -- DETAIL:  rbac:role_exists role='viewer'
-select permissions.rbac_create_role(role => 'reviewer', permissions => '{audit.read}', inherits => '{nonexistent}');
+select permissions.rbac_create_role(
+  role => 'reviewer',
+  permissions => '{audit.read}',
+  inherits => '{nonexistent}'
+);
 -- ERROR:  unknown role 'nonexistent' in inherits of role 'reviewer'
 -- DETAIL:  rbac:unknown_role role='nonexistent'
-select permissions.rbac_create_role(role => 'documents.read', permissions => '{x.y}');
+select permissions.rbac_create_role(
+  role => 'documents.read',
+  permissions => '{x.y}'
+);
 -- ERROR:  role and permission names must not overlap: 'documents.read' is already a permission
 -- DETAIL:  rbac:name_overlap
-select permissions.rbac_create_role(role => 'moderator', permissions => '{viewer}');
+select permissions.rbac_create_role(
+  role => 'moderator',
+  permissions => '{viewer}'
+);
 -- ERROR:  role and permission names must not overlap: 'viewer' is already a role
 -- DETAIL:  rbac:name_overlap
-select permissions.rbac_assign_role(user_id => :'bob', role => 'nonexistent');
+select permissions.rbac_assign_role(
+  user_id => :'bob',
+  role => 'nonexistent'
+);
 -- ERROR:  unknown role 'nonexistent'
 -- DETAIL:  rbac:unknown_role role='nonexistent'
 select permissions.rbac_drop_role(role => 'nonexistent');
@@ -419,10 +624,22 @@ The extension does not know your users table. When you delete a user, the role a
 `delete_subject` removes a subject from both models in one call. It removes the role assignments of the subject, scoped assignments too. It also removes each OpenFGA tuple that names the subject, as user, as userset or as object. It returns the number of rows that it removed.
 
 ```sql
-select permissions.rbac_assign_role(user_id => :'frank', role => 'viewer');
-select permissions.rbac_assign_role(user_id => :'frank', role => 'viewer', scope => :'acme');
-select permissions.delete_subject(subject_type => 'user', subject_id => :'frank');   -- 2
-select permissions.rbac_user_permissions(user_id => :'frank');                       -- {}
+select permissions.rbac_assign_role(
+  user_id => :'frank',
+  role => 'viewer'
+);
+select permissions.rbac_assign_role(
+  user_id => :'frank',
+  role => 'viewer',
+  scope => :'acme'
+);
+select permissions.delete_subject(
+  subject_type => 'user',
+  subject_id => :'frank'
+);
+-- 2
+select permissions.rbac_user_permissions(user_id => :'frank');
+-- {}
 ```
 
 Call `delete_subject` from a trigger on your users table. `delete_subject` is admin-only, so the trigger function is `security definer`:
@@ -435,15 +652,19 @@ create function public.forget_user() returns trigger
 language plpgsql security definer set search_path = ''
 as $$
 begin
-    perform permissions.delete_subject(subject_type => 'user', subject_id => old.id::text);
-    return old;
+  perform permissions.delete_subject(
+    subject_type => 'user',
+    subject_id => old.id::text
+  );
+  return old;
 end;
 $$;
 create trigger forget_user after delete on public.users
     for each row execute function public.forget_user();
 
 delete from public.users where id = :'carol';
-select permissions.rbac_user_permissions(user_id => :'carol');   -- {}: the role of Carol is gone
+select permissions.rbac_user_permissions(user_id => :'carol');
+-- {}: the role of Carol is gone
 ```
 
 `delete_subject` works for each subject type. For the OpenFGA model, `delete_subject(subject_type => 'team', subject_id => 'eng')` removes each tuple that names `team:eng`. See [the OpenFGA model](fga.md).

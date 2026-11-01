@@ -22,7 +22,11 @@ type document
   relations
     define viewer: [user, user with non_expired_grant, user with in_office_network]
 
-condition non_expired_grant(current_time: timestamp, grant_time: timestamp, grant_duration: duration) {
+condition non_expired_grant(
+  current_time: timestamp,
+  grant_time: timestamp,
+  grant_duration: duration
+) {
   current_time < grant_time + grant_duration
 }
 
@@ -46,23 +50,37 @@ This fragment shows the `conditions` key:
 
 ```json
 "conditions": {
-  "non_expired_grant": {"name": "non_expired_grant",
+  "non_expired_grant": {
+    "name": "non_expired_grant",
     "expression": "current_time < grant_time + grant_duration",
-    "parameters": {"current_time": {"type_name": "TYPE_NAME_TIMESTAMP"},
-                   "grant_time": {"type_name": "TYPE_NAME_TIMESTAMP"},
-                   "grant_duration": {"type_name": "TYPE_NAME_DURATION"}}},
-  "in_office_network": {"name": "in_office_network",
+    "parameters": {
+      "current_time": {"type_name": "TYPE_NAME_TIMESTAMP"},
+      "grant_time": {"type_name": "TYPE_NAME_TIMESTAMP"},
+      "grant_duration": {"type_name": "TYPE_NAME_DURATION"}
+    }
+  },
+  "in_office_network": {
+    "name": "in_office_network",
     "expression": "user_ip.in_cidr(cidr)",
-    "parameters": {"user_ip": {"type_name": "TYPE_NAME_IPADDRESS"},
-                   "cidr": {"type_name": "TYPE_NAME_STRING"}}}}
+    "parameters": {
+      "user_ip": {"type_name": "TYPE_NAME_IPADDRESS"},
+      "cidr": {"type_name": "TYPE_NAME_STRING"}
+    }
+  }
+}
 ```
 
 The extension parses and type-checks each expression when you write the model, as OpenFGA does. You find a mistake at that time. CEL has no implicit conversions, so a comparison of a timestamp with a string is not valid:
 
 ```sql
 \set model `cat model.json`
-select permissions.fga_write_authorization_model(model => jsonb_set(:'model'::jsonb,
-    '{conditions,non_expired_grant,expression}', '"current_time < \"2030-01-01\""'));
+select permissions.fga_write_authorization_model(
+  model => jsonb_set(
+    :'model'::jsonb,
+    '{conditions,non_expired_grant,expression}',
+    '"current_time < \"2030-01-01\""'
+  )
+);
 -- ERROR:  failed to compile expression on condition 'non_expired_grant' - found no matching overload for '_<_' applied to '(timestamp, string)' (column 14)
 -- DETAIL:  openfga:2056 invalid_authorization_model
 -- HINT:  CEL has no implicit conversions: both operands of an operator need the same type ...
@@ -139,27 +157,55 @@ Write each value as a JSON value of the type of the parameter:
 The tuple stores the start of the grant and its duration. The request says the time:
 
 ```sql
-select permissions.fga_write(writes => '[{"user": "user:anne", "relation": "viewer", "object": "document:roadmap",
-  "condition": {"name": "non_expired_grant",
-                "context": {"grant_time": "2026-01-01T00:00:00Z", "grant_duration": "720h"}}}]');
+select permissions.fga_write(
+  writes => '[
+    {
+      "user": "user:anne",
+      "relation": "viewer",
+      "object": "document:roadmap",
+      "condition": {
+        "name": "non_expired_grant",
+        "context": {
+          "grant_time": "2026-01-01T00:00:00Z",
+          "grant_duration": "720h"
+        }
+      }
+    }
+  ]'
+);
 
-select permissions.fga_check(subject => 'user:anne', relation => 'viewer', object => 'document:roadmap',
-                             context => '{"current_time": "2026-01-15T00:00:00Z"}');   -- true
-select permissions.fga_check(subject => 'user:anne', relation => 'viewer', object => 'document:roadmap',
-                             context => '{"current_time": "2026-03-01T00:00:00Z"}');   -- false: 30 days have passed
+select permissions.fga_check(
+  subject => 'user:anne',
+  relation => 'viewer',
+  object => 'document:roadmap',
+  context => '{"current_time": "2026-01-15T00:00:00Z"}'
+);
+-- true
+select permissions.fga_check(
+  subject => 'user:anne',
+  relation => 'viewer',
+  object => 'document:roadmap',
+  context => '{"current_time": "2026-03-01T00:00:00Z"}'
+);
+-- false: 30 days have passed
 ```
 
 `fga_read` returns the condition with the tuple key. You can write a page of Read back with `fga_write`:
 
 ```sql
-select r.tuples #> '{0,key,condition}' from permissions.fga_read(object => 'document:roadmap') r;
+select r.tuples #> '{0,key,condition}'
+from permissions.fga_read(object => 'document:roadmap') r;
 -- {"name": "non_expired_grant", "context": {"grant_time": "2026-01-01T00:00:00Z", "grant_duration": "720h"}}
 ```
 
 Without `current_time`, the extension cannot evaluate the condition. Check raises an error:
 
 ```sql
-select permissions.fga_check(subject => 'user:anne', relation => 'viewer', object => 'document:roadmap');
+select permissions.fga_check(
+  subject => 'user:anne',
+  relation => 'viewer',
+  object => 'document:roadmap'
+);
 -- ERROR:  failed to evaluate relationship condition: 'non_expired_grant' - context is missing parameters '[current_time]' (tuple context {...})
 -- DETAIL:  openfga:2000 validation_error
 -- HINT:  Pass every parameter the condition declares, in the request's context argument or in the tuple's condition context, ...
@@ -168,8 +214,12 @@ select permissions.fga_check(subject => 'user:anne', relation => 'viewer', objec
 When the database is the clock, use `now()` as `current_time`:
 
 ```sql
-select permissions.fga_check(subject => 'user:anne', relation => 'viewer', object => 'document:roadmap',
-                             context => jsonb_build_object('current_time', now()));
+select permissions.fga_check(
+  subject => 'user:anne',
+  relation => 'viewer',
+  object => 'document:roadmap',
+  context => jsonb_build_object('current_time', now())
+);
 ```
 
 ## An IP range
@@ -177,11 +227,34 @@ select permissions.fga_check(subject => 'user:anne', relation => 'viewer', objec
 The tuple stores the network. The request says where the subject is:
 
 ```sql
-select permissions.fga_write(writes => '[{"user": "user:bob", "relation": "viewer", "object": "document:roadmap",
-  "condition": {"name": "in_office_network", "context": {"cidr": "10.20.0.0/16"}}}]');
+select permissions.fga_write(
+  writes => '[
+    {
+      "user": "user:bob",
+      "relation": "viewer",
+      "object": "document:roadmap",
+      "condition": {
+        "name": "in_office_network",
+        "context": {"cidr": "10.20.0.0/16"}
+      }
+    }
+  ]'
+);
 
-select permissions.fga_check(subject => 'user:bob', relation => 'viewer', object => 'document:roadmap', context => '{"user_ip": "10.20.3.4"}');    -- true
-select permissions.fga_check(subject => 'user:bob', relation => 'viewer', object => 'document:roadmap', context => '{"user_ip": "192.168.1.9"}');  -- false
+select permissions.fga_check(
+  subject => 'user:bob',
+  relation => 'viewer',
+  object => 'document:roadmap',
+  context => '{"user_ip": "10.20.3.4"}'
+);
+-- true
+select permissions.fga_check(
+  subject => 'user:bob',
+  relation => 'viewer',
+  object => 'document:roadmap',
+  context => '{"user_ip": "192.168.1.9"}'
+);
+-- false
 ```
 
 ## Lists
@@ -189,12 +262,33 @@ select permissions.fga_check(subject => 'user:bob', relation => 'viewer', object
 ListObjects and ListUsers accept the same `context`. One request context serves every condition. Pass all the parameters that the search can meet:
 
 ```sql
-select permissions.fga_write(writes => '[{"user": "user:carl", "relation": "viewer", "object": "document:handbook"}]');
+select permissions.fga_write(
+  writes => '[
+    {
+      "user": "user:carl",
+      "relation": "viewer",
+      "object": "document:handbook"
+    }
+  ]'
+);
 
-select permissions.fga_list_users(object => 'document:roadmap', relation => 'viewer', user_filters => '{user}',
-    context => '{"current_time": "2026-01-15T00:00:00Z", "user_ip": "10.20.3.4"}');   -- user:anne, user:bob
-select permissions.fga_list_objects(subject => 'user:bob', type => 'document', relation => 'viewer',
-    context => '{"user_ip": "10.20.3.4"}');                                           -- document:roadmap
+select permissions.fga_list_users(
+  object => 'document:roadmap',
+  relation => 'viewer',
+  user_filters => '{user}',
+  context => '{
+    "current_time": "2026-01-15T00:00:00Z",
+    "user_ip": "10.20.3.4"
+  }'
+);
+-- user:anne, user:bob
+select permissions.fga_list_objects(
+  subject => 'user:bob',
+  type => 'document',
+  relation => 'viewer',
+  context => '{"user_ip": "10.20.3.4"}'
+);
+-- document:roadmap
 ```
 
 A list fails with error `openfga:2000` when it meets a condition that it cannot evaluate. Without `user_ip`, ListUsers on the roadmap fails at the tuple of Bob. It fails even though the tuple of Anne is correct. ListObjects for Carl needs no context, because his search meets no condition.
@@ -204,8 +298,16 @@ A list fails with error `openfga:2000` when it meets a condition that it cannot 
 The values in the tuple win over the values in the request. A request cannot extend a grant with its own `grant_duration`:
 
 ```sql
-select permissions.fga_check(subject => 'user:anne', relation => 'viewer', object => 'document:roadmap',
-    context => '{"current_time": "2026-03-01T00:00:00Z", "grant_duration": "9000h"}');   -- false
+select permissions.fga_check(
+  subject => 'user:anne',
+  relation => 'viewer',
+  object => 'document:roadmap',
+  context => '{
+    "current_time": "2026-03-01T00:00:00Z",
+    "grant_duration": "9000h"
+  }'
+);
+-- false
 ```
 
 ## Contextual tuples
@@ -213,10 +315,24 @@ select permissions.fga_check(subject => 'user:anne', relation => 'viewer', objec
 A contextual tuple can carry a condition. The extension validates it as it validates a written tuple. An invalid condition on a contextual tuple is error `openfga:2027` for Check. For ListObjects and ListUsers it is error `openfga:2000`.
 
 ```sql
-select permissions.fga_check(subject => 'user:dana', relation => 'viewer', object => 'document:roadmap',
-    contextual_tuples => '[{"user": "user:dana", "relation": "viewer", "object": "document:roadmap",
-                            "condition": {"name": "in_office_network", "context": {"cidr": "10.20.0.0/16"}}}]',
-    context => '{"user_ip": "10.20.9.9"}');   -- true
+select permissions.fga_check(
+  subject => 'user:dana',
+  relation => 'viewer',
+  object => 'document:roadmap',
+  contextual_tuples => '[
+    {
+      "user": "user:dana",
+      "relation": "viewer",
+      "object": "document:roadmap",
+      "condition": {
+        "name": "in_office_network",
+        "context": {"cidr": "10.20.0.0/16"}
+      }
+    }
+  ]',
+  context => '{"user_ip": "10.20.9.9"}'
+);
+-- true
 ```
 
 ## Write conditioned tuples
@@ -231,8 +347,22 @@ A condition on a tuple must meet these rules:
 When a rule fails, the write fails with error `openfga:2000`:
 
 ```sql
-select permissions.fga_write(writes => '[{"user": "user:erin", "relation": "viewer", "object": "document:roadmap",
-  "condition": {"name": "in_office_network", "context": {"cidr": "10.20.0.0/16", "region": "eu"}}}]');
+select permissions.fga_write(
+  writes => '[
+    {
+      "user": "user:erin",
+      "relation": "viewer",
+      "object": "document:roadmap",
+      "condition": {
+        "name": "in_office_network",
+        "context": {
+          "cidr": "10.20.0.0/16",
+          "region": "eu"
+        }
+      }
+    }
+  ]'
+);
 -- ERROR:  Invalid tuple 'document:roadmap#viewer@user:erin'. Reason: found invalid context parameter: region
 -- DETAIL:  openfga:2000 validation_error
 ```
@@ -243,9 +373,28 @@ To change the condition, delete the tuple, then write it again. A delete does no
 
 ```sql
 begin;
-select permissions.fga_write(deletes => '[{"user": "user:bob", "relation": "viewer", "object": "document:roadmap"}]');
-select permissions.fga_write(writes => '[{"user": "user:bob", "relation": "viewer", "object": "document:roadmap",
-  "condition": {"name": "in_office_network", "context": {"cidr": "10.0.0.0/8"}}}]');
+select permissions.fga_write(
+  deletes => '[
+    {
+      "user": "user:bob",
+      "relation": "viewer",
+      "object": "document:roadmap"
+    }
+  ]'
+);
+select permissions.fga_write(
+  writes => '[
+    {
+      "user": "user:bob",
+      "relation": "viewer",
+      "object": "document:roadmap",
+      "condition": {
+        "name": "in_office_network",
+        "context": {"cidr": "10.0.0.0/8"}
+      }
+    }
+  ]'
+);
 commit;
 ```
 
@@ -281,12 +430,34 @@ In the first example, the tuple of Bob needs `user_ip` from the request. The fun
 
 ```sql
 select set_config('permissions.subject_id', 'bob', false);
-select permissions.fga_check_current(relation => 'viewer', object => 'document:roadmap');   -- false: the condition needs user_ip
+select permissions.fga_check_current(
+  relation => 'viewer',
+  object => 'document:roadmap'
+);
+-- false: the condition needs user_ip
 
-select permissions.fga_write(writes => '[{"user": "user:fay", "relation": "viewer", "object": "document:lab",
-  "condition": {"name": "in_office_network", "context": {"cidr": "10.0.0.0/8", "user_ip": "10.1.2.3"}}}]');
+select permissions.fga_write(
+  writes => '[
+    {
+      "user": "user:fay",
+      "relation": "viewer",
+      "object": "document:lab",
+      "condition": {
+        "name": "in_office_network",
+        "context": {
+          "cidr": "10.0.0.0/8",
+          "user_ip": "10.1.2.3"
+        }
+      }
+    }
+  ]'
+);
 select set_config('permissions.subject_id', 'fay', false);
-select permissions.fga_check_current(relation => 'viewer', object => 'document:lab');       -- true: the tuple holds every parameter
+select permissions.fga_check_current(
+  relation => 'viewer',
+  object => 'document:lab'
+);
+-- true: the tuple holds every parameter
 select set_config('permissions.subject_id', '', false);
 ```
 
@@ -297,31 +468,95 @@ To use a value that the server can trust, such as the time, write a function of 
 This example uses a list parameter and a time zone. The model has two conditions. The condition `in_region` takes a list. The condition `office_hours` reads the hour in Paris:
 
 ```sql
-select permissions.fga_write_authorization_model(model => '{
-  "schema_version": "1.1",
-  "type_definitions": [
-    {"type": "user"},
-    {"type": "folder",
-     "relations": {"viewer": {"this": {}}},
-     "metadata": {"relations": {"viewer": {"directly_related_user_types": [
-       {"type": "user", "condition": "in_region"},
-       {"type": "user", "condition": "office_hours"}]}}}}],
-  "conditions": {
-    "in_region": {"name": "in_region", "expression": "region in allowed",
-      "parameters": {"region": {"type_name": "TYPE_NAME_STRING"},
-                     "allowed": {"type_name": "TYPE_NAME_LIST", "generic_types": [{"type_name": "TYPE_NAME_STRING"}]}}},
-    "office_hours": {"name": "office_hours",
-      "expression": "current_time.getHours(\"Europe/Paris\") >= 9 && current_time.getHours(\"Europe/Paris\") < 17",
-      "parameters": {"current_time": {"type_name": "TYPE_NAME_TIMESTAMP"}}}}}');
+select permissions.fga_write_authorization_model(
+  model => '{
+    "schema_version": "1.1",
+    "type_definitions": [
+      {"type": "user"},
+      {
+        "type": "folder",
+        "relations": {"viewer": {"this": {}}},
+        "metadata": {
+          "relations": {
+            "viewer": {
+              "directly_related_user_types": [
+                {"type": "user", "condition": "in_region"},
+                {"type": "user", "condition": "office_hours"}
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "conditions": {
+      "in_region": {
+        "name": "in_region",
+        "expression": "region in allowed",
+        "parameters": {
+          "region": {"type_name": "TYPE_NAME_STRING"},
+          "allowed": {
+            "type_name": "TYPE_NAME_LIST",
+            "generic_types": [{"type_name": "TYPE_NAME_STRING"}]
+          }
+        }
+      },
+      "office_hours": {
+        "name": "office_hours",
+        "expression": "current_time.getHours(\"Europe/Paris\") >= 9 && current_time.getHours(\"Europe/Paris\") < 17",
+        "parameters": {
+          "current_time": {"type_name": "TYPE_NAME_TIMESTAMP"}
+        }
+      }
+    }
+  }'
+);
 
-select permissions.fga_write(writes => '[
-  {"user": "user:gus",  "relation": "viewer", "object": "folder:eu", "condition": {"name": "in_region", "context": {"allowed": ["eu", "uk"]}}},
-  {"user": "user:hana", "relation": "viewer", "object": "folder:eu", "condition": {"name": "office_hours"}}]');
+select permissions.fga_write(
+  writes => '[
+    {
+      "user": "user:gus",
+      "relation": "viewer",
+      "object": "folder:eu",
+      "condition": {
+        "name": "in_region",
+        "context": {"allowed": ["eu", "uk"]}
+      }
+    },
+    {
+      "user": "user:hana",
+      "relation": "viewer",
+      "object": "folder:eu",
+      "condition": {"name": "office_hours"}
+    }
+  ]'
+);
 
-select permissions.fga_check(subject => 'user:gus', relation => 'viewer', object => 'folder:eu', context => '{"region": "eu"}');   -- true
-select permissions.fga_check(subject => 'user:gus', relation => 'viewer', object => 'folder:eu', context => '{"region": "us"}');   -- false
-select permissions.fga_check(subject => 'user:hana', relation => 'viewer', object => 'folder:eu',
-                             context => '{"current_time": "2026-01-15T10:00:00Z"}');   -- true: 11:00 in Paris
-select permissions.fga_check(subject => 'user:hana', relation => 'viewer', object => 'folder:eu',
-                             context => '{"current_time": "2026-01-15T20:00:00Z"}');   -- false: 21:00 in Paris
+select permissions.fga_check(
+  subject => 'user:gus',
+  relation => 'viewer',
+  object => 'folder:eu',
+  context => '{"region": "eu"}'
+);
+-- true
+select permissions.fga_check(
+  subject => 'user:gus',
+  relation => 'viewer',
+  object => 'folder:eu',
+  context => '{"region": "us"}'
+);
+-- false
+select permissions.fga_check(
+  subject => 'user:hana',
+  relation => 'viewer',
+  object => 'folder:eu',
+  context => '{"current_time": "2026-01-15T10:00:00Z"}'
+);
+-- true: 11:00 in Paris
+select permissions.fga_check(
+  subject => 'user:hana',
+  relation => 'viewer',
+  object => 'folder:eu',
+  context => '{"current_time": "2026-01-15T20:00:00Z"}'
+);
+-- false: 21:00 in Paris
 ```

@@ -75,3 +75,13 @@ Exceptions: `research/journal.md` is the raw build record and keeps its original
 1. Each SQL example must run on the current extension file without change, unless the text says it is a fragment.
 2. Use named arguments in examples: `permissions.fga_check(subject => 'user:anne', relation => 'viewer', object => 'document:1')`.
 3. Show the result when it helps the reader.
+4. Keep each line of a code block to 72 characters or less. A line can be longer only if you cannot break it: a long name, a URL, a result, or a psql command such as `\set`.
+5. Write SQL keywords in lowercase. Put one clause on each line: `select`, `from`, `where`, `using`, `with check`, `on`, `for`, `to`.
+6. Write a call with more than one named argument on many lines. Put one `name => value` on each line, with a two-space indent. Put the `)` on its own line.
+7. Write a call that is too long for one line in the same way.
+8. Break a long `array[...]` or `'{...}'` value. Put one element on each line, where the syntax lets you.
+9. Write JSON in a string with a two-space indent. Keep short JSON on one line if it fits.
+10. Break nested calls. Put each level on its own indented line.
+11. In `create policy`, put the name, `on`, `for`, `to`, `using (` and `with check (` each on its own line. Indent the expression.
+12. Do not change the text of a result or an error message. Put a comment that shows a result on the line after the statement.
+13. Break a long shell command with a `\` at the end of the line. Put one group of flags on each line.

@@ -27,14 +27,17 @@ Install the extension with one of two methods.
 **database.dev (dbdev).** The package is `kiwicopple@pg_permissions`. It is not published yet. Enable pg_tle, generate a migration with the `dbdev` command line tool, and run it:
 
 ```bash
-dbdev add -o "./migrations/" -v 0.0.1 package -n kiwicopple@pg_permissions
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "./migrations/<generated file>"
+dbdev add -o "./migrations/" -v 0.0.1 \
+  package -n kiwicopple@pg_permissions
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -f "./migrations/<generated file>"
 ```
 
 **Direct.** Run the SQL file once in each database:
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f pg_permissions--0.0.1.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -f pg_permissions--0.0.1.sql
 ```
 
 [Install](docs/install.md) has the full steps for both methods, and for a non-superuser install, pg_tle and Docker. The extension creates its own schema `permissions`. Do not use `with schema`.
@@ -42,28 +45,49 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f pg_permissions--0.0.1.sql
 Define two roles, and give a user the `editor` role in one organization. The role `editor` inherits `viewer`:
 
 ```sql
-select permissions.rbac_create_role(role => 'viewer', permissions => '{documents.read}');
-select permissions.rbac_create_role(role => 'editor', permissions => '{documents.edit}', inherits => '{viewer}');
+select permissions.rbac_create_role(
+  role => 'viewer',
+  permissions => '{documents.read}'
+);
+select permissions.rbac_create_role(
+  role => 'editor',
+  permissions => '{documents.edit}',
+  inherits => '{viewer}'
+);
 select permissions.rbac_assign_role(
-    user_id => '11111111-1111-1111-1111-111111111111',
-    role    => 'editor',
-    scope   => 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa');
+  user_id => '11111111-1111-1111-1111-111111111111',
+  role => 'editor',
+  scope => 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+);
 ```
 
 Add an RLS policy. The policy lets a user read the rows of each organization where the user has `documents.read`:
 
 ```sql
 create table public.documents (
-    id     uuid primary key default gen_random_uuid(),
-    org_id uuid not null,
-    title  text not null
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null,
+  title text not null
 );
 create index on public.documents (org_id);
 alter table public.documents enable row level security;
 grant select on public.documents to authenticated;
 
-create policy documents_select on public.documents for select to authenticated
-    using (org_id = any (array(select unnest(permissions.rbac_scopes_with_permission(permission => 'documents.read'))::uuid)));
+create policy documents_select
+  on public.documents
+  for select
+  to authenticated
+  using (
+    org_id = any (
+      array(
+        select unnest(
+          permissions.rbac_scopes_with_permission(
+            permission => 'documents.read'
+          )
+        )::uuid
+      )
+    )
+  );
 ```
 
 The example uses the role `authenticated` of Supabase. On plain Postgres, create it first. The extension finds the current user in the JWT of the request (Supabase and PostgREST). On plain Postgres, set `permissions.subject_id` at the start of each transaction. See [RBAC](docs/rbac.md#identity).
@@ -93,8 +117,14 @@ npm install permissions
 ```ts
 import { createClient } from 'permissions'
 
-const permissions = createClient('https://your-project.supabase.co', 'your-anon-key')
-const { data: canEdit } = await permissions.rbac.hasPermission({ permission: 'documents.edit', scope: 'acme' })
+const permissions = createClient(
+  'https://your-project.supabase.co',
+  'your-anon-key'
+)
+const { data: canEdit } = await permissions.rbac.hasPermission({
+  permission: 'documents.edit',
+  scope: 'acme'
+})
 ```
 
 See [JavaScript client](docs/javascript.md) for the methods and the errors.

@@ -41,13 +41,15 @@ Then install the package:
 1. Make the migration file. The command writes a file to the folder `migrations`:
 
    ```bash
-   dbdev add -o "./migrations/" -v 0.0.1 package -n kiwicopple@pg_permissions
+   dbdev add -o "./migrations/" -v 0.0.1 \
+     package -n kiwicopple@pg_permissions
    ```
 
 2. Run the file in the database. Use `psql`, or the migration tool that you already use:
 
    ```bash
-   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "./migrations/<generated file>"
+   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+     -f "./migrations/<generated file>"
    ```
 
 The file calls `pgtle.install_extension` with the SQL of the package. It then runs this statement:
@@ -89,10 +91,12 @@ The role that installs the extension does not need superuser rights. It needs `C
 The role owns everything that the file creates. This role is the admin in these docs. For example, create the role and a database for it, then install as that role:
 
 ```bash
-psql -U postgres -c "create role app_owner nosuperuser createdb nologin" \
-                 -c "create database app owner app_owner"
+psql -U postgres \
+  -c "create role app_owner nosuperuser createdb nologin" \
+  -c "create database app owner app_owner"
 psql -U postgres -d app -v ON_ERROR_STOP=1 \
-     -c "set session authorization app_owner" -f pg_permissions--0.0.1.sql
+  -c "set session authorization app_owner" \
+  -f pg_permissions--0.0.1.sql
 ```
 
 The second command is a fragment. It needs the role and the database from the first command, and your own connection options. The test suite checks this install on each supported Postgres version. A non-superuser that owns the database installs the file. Each object belongs to that role. No function is written in C.
@@ -110,7 +114,12 @@ Then, as that role in psql, install the file as a pg_tle extension and create th
 
 ```sql
 \set body `cat pg_permissions--0.0.1.sql`
-select pgtle.install_extension('pg_permissions', '0.0.1', 'pg_permissions', :'body');
+select pgtle.install_extension(
+  'pg_permissions',
+  '0.0.1',
+  'pg_permissions',
+  :'body'
+);
 create extension pg_permissions;
 ```
 
@@ -125,7 +134,8 @@ cd docker
 docker compose build
 docker compose up -d --wait pg17
 cd ..
-psql -h localhost -p 54317 -U postgres -v ON_ERROR_STOP=1 -f pg_permissions--0.0.1.sql
+psql -h localhost -p 54317 -U postgres -v ON_ERROR_STOP=1 \
+  -f pg_permissions--0.0.1.sql
 ```
 
 The containers use `trust` authentication on 127.0.0.1. Use them for local tests only.
@@ -135,8 +145,12 @@ The containers use `trust` authentication on 127.0.0.1. Use them for local tests
 Connect to the database and call two functions. With no subject set, the first returns `user` and the second returns `false`:
 
 ```sql
-select permissions.current_subject_type();                               -- user
-select permissions.rbac_has_permission(permission => 'documents.read');  -- false
+select permissions.current_subject_type();
+-- user
+select permissions.rbac_has_permission(
+  permission => 'documents.read'
+);
+-- false
 ```
 
 To list the RBAC functions, use this psql command:

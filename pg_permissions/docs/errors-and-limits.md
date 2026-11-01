@@ -5,11 +5,27 @@ This page describes how `pg_permissions` reports an error. It lists every error 
 The examples run in order. This example writes a small model for them:
 
 ```sql
-select permissions.fga_write_authorization_model(model => '{"schema_version": "1.1", "type_definitions": [
-  {"type": "user"},
-  {"type": "document",
-   "relations": {"viewer": {"this": {}}},
-   "metadata": {"relations": {"viewer": {"directly_related_user_types": [{"type": "user"}]}}}}]}');
+select permissions.fga_write_authorization_model(
+  model => '{
+    "schema_version": "1.1",
+    "type_definitions": [
+      {"type": "user"},
+      {
+        "type": "document",
+        "relations": {"viewer": {"this": {}}},
+        "metadata": {
+          "relations": {
+            "viewer": {
+              "directly_related_user_types": [
+                {"type": "user"}
+              ]
+            }
+          }
+        }
+      }
+    ]
+  }'
+);
 ```
 
 ## Error format
@@ -27,7 +43,11 @@ The code in `DETAIL` is stable. Your code can match on it.
 This example has a typo in a relation name:
 
 ```sql
-select permissions.fga_check(subject => 'user:anne', relation => 'viewr', object => 'document:1');
+select permissions.fga_check(
+  subject => 'user:anne',
+  relation => 'viewr',
+  object => 'document:1'
+);
 -- ERROR:  relation 'document#viewr' not found
 -- DETAIL:  openfga:2000 validation_error
 -- HINT:  Did you mean 'viewer'? Relations on type 'document': viewer.
@@ -36,7 +56,10 @@ select permissions.fga_check(subject => 'user:anne', relation => 'viewr', object
 This example has a typo in a role name. No role exists yet, so the hint says how to create one:
 
 ```sql
-select permissions.rbac_assign_role(user_id => 'anne', role => 'admn');
+select permissions.rbac_assign_role(
+  user_id => 'anne',
+  role => 'admn'
+);
 -- ERROR:  unknown role 'admn'
 -- DETAIL:  rbac:unknown_role role='admn'
 -- HINT:  No roles exist yet: create it first, e.g. select permissions.rbac_create_role(role => 'admn', permissions => '{documents.read}').
@@ -64,13 +87,19 @@ To read the fields in PL/pgSQL, use `get stacked diagnostics`:
 ```sql
 do $$
 declare
-    code text;
-    fix  text;
+  code text;
+  fix text;
 begin
-    perform permissions.fga_check(subject => 'user:anne', relation => 'viewr', object => 'document:1');
+  perform permissions.fga_check(
+    subject => 'user:anne',
+    relation => 'viewr',
+    object => 'document:1'
+  );
 exception when invalid_parameter_value then
-    get stacked diagnostics code = pg_exception_detail, fix = pg_exception_hint;
-    raise notice 'code: %, hint: %', code, fix;
+  get stacked diagnostics
+    code = pg_exception_detail,
+    fix = pg_exception_hint;
+  raise notice 'code: %, hint: %', code, fix;
 end $$;
 -- NOTICE:  code: openfga:2000 validation_error, hint: Did you mean 'viewer'? Relations on type 'document': viewer.
 ```
@@ -167,18 +196,48 @@ To write more than 100 tuples, write them in batches. The batches can share a tr
 
 ```sql
 begin;
-select permissions.fga_write(writes => (select jsonb_agg(jsonb_build_object('user', 'user:u' || g, 'relation', 'viewer', 'object', 'document:big'))
-                                        from generate_series(1, 100) g));
-select permissions.fga_write(writes => (select jsonb_agg(jsonb_build_object('user', 'user:u' || g, 'relation', 'viewer', 'object', 'document:big'))
-                                        from generate_series(101, 200) g));
+select permissions.fga_write(
+  writes => (
+    select jsonb_agg(
+      jsonb_build_object(
+        'user', 'user:u' || g,
+        'relation', 'viewer',
+        'object', 'document:big'
+      )
+    )
+    from generate_series(1, 100) g
+  )
+);
+select permissions.fga_write(
+  writes => (
+    select jsonb_agg(
+      jsonb_build_object(
+        'user', 'user:u' || g,
+        'relation', 'viewer',
+        'object', 'document:big'
+      )
+    )
+    from generate_series(101, 200) g
+  )
+);
 commit;
 ```
 
 A call with 101 tuple keys fails:
 
 ```sql
-select permissions.fga_write(writes => (select jsonb_agg(jsonb_build_object('user', 'user:v' || g, 'relation', 'viewer', 'object', 'document:big'))
-                                        from generate_series(1, 101) g));
+select permissions.fga_write(
+  writes => (
+    select jsonb_agg(
+      jsonb_build_object(
+        'user', 'user:v' || g,
+        'relation', 'viewer',
+        'object', 'document:big'
+      )
+    )
+    from generate_series(1, 101) g
+  )
+);
 -- ERROR:  The number of write operations exceeds the allowed limit of 100: got 101 tuple keys (101 writes, 0 deletes)
 -- DETAIL:  openfga:2053 exceeded_entity_limit
 -- HINT:  Split the tuple keys into batches of at most 100 and call fga_write once per batch: calls in one transaction commit or roll back together.

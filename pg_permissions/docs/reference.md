@@ -30,7 +30,11 @@ A client that can call an admin function can ask what anyone can do, or can give
 
 ```sql
 set role authenticated;
-select permissions.rbac_assign_role(user_id => 'mallory', role => 'admin');   -- ERROR:  permission denied for function rbac_assign_role
+select permissions.rbac_assign_role(
+  user_id => 'mallory',
+  role => 'admin'
+);
+-- ERROR:  permission denied for function rbac_assign_role
 reset role;
 ```
 
@@ -66,9 +70,11 @@ Returns the id of the current subject, or `null` when there is none. The id come
 Errors: none.
 
 ```sql
-select permissions.current_subject_id();                          -- null: no JWT, no setting
+select permissions.current_subject_id();
+-- null: no JWT, no setting
 select set_config('permissions.subject_id', 'alice', false);
-select permissions.current_subject_id();                          -- alice
+select permissions.current_subject_id();
+-- alice
 select set_config('permissions.subject_id', '', false);
 ```
 
@@ -91,7 +97,10 @@ select permissions.current_subject_type();   -- user
 ### `delete_subject`
 
 ```text
-permissions.delete_subject(subject_type text, subject_id text) returns bigint
+permissions.delete_subject(
+  subject_type text,
+  subject_id text
+) returns bigint
 ```
 
 Removes a subject from every model. For the type `user`, it deletes the RBAC assignments of the subject. For every type, it deletes each tuple that names the subject as the subject, as a userset of the subject, or as the object. It returns the number of rows that it deleted. Admin only.
@@ -99,9 +108,19 @@ Removes a subject from every model. For the type `user`, it deletes the RBAC ass
 Errors: none.
 
 ```sql
-select permissions.rbac_create_role(role => 'reader', permissions => '{docs.read}');
-select permissions.rbac_assign_role(user_id => 'zoe', role => 'reader');
-select permissions.delete_subject(subject_type => 'user', subject_id => 'zoe');   -- 1
+select permissions.rbac_create_role(
+  role => 'reader',
+  permissions => '{docs.read}'
+);
+select permissions.rbac_assign_role(
+  user_id => 'zoe',
+  role => 'reader'
+);
+select permissions.delete_subject(
+  subject_type => 'user',
+  subject_id => 'zoe'
+);
+-- 1
 ```
 
 ## RBAC functions
@@ -111,7 +130,11 @@ These functions manage roles and assignments. Admin only. A role grants permissi
 ### `rbac_create_role`
 
 ```text
-permissions.rbac_create_role(role text, permissions text[], inherits text[] default '{}') returns void
+permissions.rbac_create_role(
+  role text,
+  permissions text[],
+  inherits text[] default '{}'
+) returns void
 ```
 
 Creates a role with the permissions that it grants and the roles that it inherits. A role cannot change after you create it.
@@ -119,8 +142,15 @@ Creates a role with the permissions that it grants and the roles that it inherit
 Errors: `rbac:role_exists` (`23505`) when the role exists. `rbac:name_overlap` (`22023`) when a name is both a role and a permission. `rbac:unknown_role` (`22023`) when `inherits` names an unknown role. `rbac:null_argument` (`22004`) when `role`, `permissions` or `inherits` is `null`. An empty array, `'{}'`, is valid for `permissions` and `inherits`.
 
 ```sql
-select permissions.rbac_create_role(role => 'viewer', permissions => '{documents.read}');
-select permissions.rbac_create_role(role => 'editor', permissions => '{documents.edit}', inherits => '{viewer}');
+select permissions.rbac_create_role(
+  role => 'viewer',
+  permissions => '{documents.read}'
+);
+select permissions.rbac_create_role(
+  role => 'editor',
+  permissions => '{documents.edit}',
+  inherits => '{viewer}'
+);
 ```
 
 ### `rbac_drop_role`
@@ -134,14 +164,21 @@ Deletes a role and its assignments. You cannot drop a role that another role inh
 Errors: `rbac:unknown_role` (`22023`) for an unknown role. `rbac:role_in_use` (`2BP01`) when another role inherits the role.
 
 ```sql
-select permissions.rbac_create_role(role => 'temp', permissions => '{temp.use}');
+select permissions.rbac_create_role(
+  role => 'temp',
+  permissions => '{temp.use}'
+);
 select permissions.rbac_drop_role(role => 'temp');
 ```
 
 ### `rbac_assign_role`
 
 ```text
-permissions.rbac_assign_role(user_id text, role text, scope text default null) returns void
+permissions.rbac_assign_role(
+  user_id text,
+  role text,
+  scope text default null
+) returns void
 ```
 
 Gives a user a role. When `scope` is `null`, the role applies app-wide. Otherwise it applies in that scope only. A repeated call changes nothing.
@@ -149,15 +186,30 @@ Gives a user a role. When `scope` is `null`, the role applies app-wide. Otherwis
 Errors: `rbac:unknown_role` (`22023`) for an unknown role. `rbac:null_argument` (`22004`) when `user_id` is `null`.
 
 ```sql
-select permissions.rbac_assign_role(user_id => 'alice', role => 'editor');
-select permissions.rbac_assign_role(user_id => 'alice', role => 'viewer', scope => 'acme');
-select permissions.rbac_assign_role(user_id => 'bob', role => 'viewer', scope => 'acme');
+select permissions.rbac_assign_role(
+  user_id => 'alice',
+  role => 'editor'
+);
+select permissions.rbac_assign_role(
+  user_id => 'alice',
+  role => 'viewer',
+  scope => 'acme'
+);
+select permissions.rbac_assign_role(
+  user_id => 'bob',
+  role => 'viewer',
+  scope => 'acme'
+);
 ```
 
 ### `rbac_unassign_role`
 
 ```text
-permissions.rbac_unassign_role(user_id text, role text, scope text default null) returns void
+permissions.rbac_unassign_role(
+  user_id text,
+  role text,
+  scope text default null
+) returns void
 ```
 
 Removes an assignment. The call changes nothing when the user does not have the role, or when the role does not exist. An app-wide call leaves the assignments in scopes unchanged.
@@ -165,13 +217,20 @@ Removes an assignment. The call changes nothing when the user does not have the 
 Errors: `rbac:null_argument` (`22004`) when `user_id` or `role` is `null`.
 
 ```sql
-select permissions.rbac_unassign_role(user_id => 'bob', role => 'viewer', scope => 'acme');
+select permissions.rbac_unassign_role(
+  user_id => 'bob',
+  role => 'viewer',
+  scope => 'acme'
+);
 ```
 
 ### `rbac_user_permissions`
 
 ```text
-permissions.rbac_user_permissions(user_id text, scope text default null) returns text[]
+permissions.rbac_user_permissions(
+  user_id text,
+  scope text default null
+) returns text[]
 ```
 
 Returns the permissions of a user, sorted, with inherited permissions. When `scope` is `null`, it returns the app-wide permissions. Otherwise it returns the permissions in that scope. The result is `{}` when the user has none.
@@ -179,14 +238,22 @@ Returns the permissions of a user, sorted, with inherited permissions. When `sco
 Errors: none.
 
 ```sql
-select permissions.rbac_user_permissions(user_id => 'alice');                       -- {documents.edit,documents.read}
-select permissions.rbac_user_permissions(user_id => 'alice', scope => 'acme');      -- {documents.read}
+select permissions.rbac_user_permissions(user_id => 'alice');
+-- {documents.edit,documents.read}
+select permissions.rbac_user_permissions(
+  user_id => 'alice',
+  scope => 'acme'
+);
+-- {documents.read}
 ```
 
 ### `rbac_users_with_role`
 
 ```text
-permissions.rbac_users_with_role(role text, scope text default null) returns setof text
+permissions.rbac_users_with_role(
+  role text,
+  scope text default null
+) returns setof text
 ```
 
 Returns the ids of the users that have the role. The result includes users that have the role through a role that inherits it.
@@ -194,8 +261,13 @@ Returns the ids of the users that have the role. The result includes users that 
 Errors: none.
 
 ```sql
-select permissions.rbac_users_with_role(role => 'viewer');                          -- alice: through editor
-select permissions.rbac_users_with_role(role => 'viewer', scope => 'acme');         -- alice
+select permissions.rbac_users_with_role(role => 'viewer');
+-- alice: through editor
+select permissions.rbac_users_with_role(
+  role => 'viewer',
+  scope => 'acme'
+);
+-- alice
 ```
 
 ## FGA functions
@@ -213,17 +285,35 @@ Validates a model in the JSON format of the OpenFGA WriteAuthorizationModel requ
 Errors: `openfga:2000`, `2047`, `2050`, `2056` and `2057`.
 
 ```sql
-select permissions.fga_write_authorization_model(model => '{"schema_version": "1.1", "type_definitions": [
-  {"type": "user"},
-  {"type": "document",
-   "relations": {"viewer": {"this": {}}},
-   "metadata": {"relations": {"viewer": {"directly_related_user_types": [{"type": "user"}]}}}}]}') as model_id \gset
+select permissions.fga_write_authorization_model(
+  model => '{
+    "schema_version": "1.1",
+    "type_definitions": [
+      {"type": "user"},
+      {
+        "type": "document",
+        "relations": {"viewer": {"this": {}}},
+        "metadata": {
+          "relations": {
+            "viewer": {
+              "directly_related_user_types": [
+                {"type": "user"}
+              ]
+            }
+          }
+        }
+      }
+    ]
+  }'
+) as model_id \gset
 ```
 
 ### `fga_read_authorization_model`
 
 ```text
-permissions.fga_read_authorization_model(model_id text default null) returns jsonb
+permissions.fga_read_authorization_model(
+  model_id text default null
+) returns jsonb
 ```
 
 Returns one model as JSON, with the key `id`. Without `model_id`, it returns the latest model.
@@ -231,13 +321,18 @@ Returns one model as JSON, with the key `id`. Without `model_id`, it returns the
 Errors: `openfga:2001` for an unknown id. `2020` when no model exists.
 
 ```sql
-select permissions.fga_read_authorization_model(model_id => :'model_id') ->> 'id' = :'model_id';   -- true
+select permissions.fga_read_authorization_model(
+  model_id => :'model_id'
+) ->> 'id' = :'model_id';
+-- true
 ```
 
 ### `fga_read_authorization_models`
 
 ```text
-permissions.fga_read_authorization_models() returns table (id text, created_at timestamptz)
+permissions.fga_read_authorization_models(
+  
+) returns table (id text, created_at timestamptz)
 ```
 
 Lists every model, newest first.
@@ -270,7 +365,11 @@ rollback;
 ### `fga_write`
 
 ```text
-permissions.fga_write(writes jsonb default null, deletes jsonb default null, model_id text default null) returns void
+permissions.fga_write(
+  writes jsonb default null,
+  deletes jsonb default null,
+  model_id text default null
+) returns void
 ```
 
 Writes and deletes tuples in one transaction. Each of `writes` and `deletes` is an array of tuple keys, or an object `{"tuple_keys": [...]}` with the option `on_duplicate` (writes) or `on_missing` (deletes). Pass at least one of them. The call accepts at most 100 tuple keys.
@@ -279,15 +378,39 @@ Errors: `openfga:2000`, `2001`, `2003`, `2004`, `2017`, `2020`, `2027` and `2053
 
 ```sql
 select permissions.fga_write(
-    writes  => '[{"user": "user:alice", "relation": "viewer", "object": "document:1"},
-                 {"user": "user:bob",   "relation": "viewer", "object": "document:1"}]',
-    deletes => '{"tuple_keys": [{"user": "user:zed", "relation": "viewer", "object": "document:1"}], "on_missing": "ignore"}');
+  writes => '[
+    {
+      "user": "user:alice",
+      "relation": "viewer",
+      "object": "document:1"
+    },
+    {
+      "user": "user:bob",
+      "relation": "viewer",
+      "object": "document:1"
+    }
+  ]',
+  deletes => '{
+    "tuple_keys": [
+      {
+        "user": "user:zed",
+        "relation": "viewer",
+        "object": "document:1"
+      }
+    ],
+    "on_missing": "ignore"
+  }'
+);
 ```
 
 ### `fga_write_tuple`
 
 ```text
-permissions.fga_write_tuple(subject text, relation text, object text) returns void
+permissions.fga_write_tuple(
+  subject text,
+  relation text,
+  object text
+) returns void
 ```
 
 Writes one tuple. It does nothing when the tuple exists. The extension validates the tuple against the latest model.
@@ -295,13 +418,21 @@ Writes one tuple. It does nothing when the tuple exists. The extension validates
 Errors: `openfga:2000`, `2017`, `2020` and `2027`.
 
 ```sql
-select permissions.fga_write_tuple(subject => 'user:carol', relation => 'viewer', object => 'document:2');
+select permissions.fga_write_tuple(
+  subject => 'user:carol',
+  relation => 'viewer',
+  object => 'document:2'
+);
 ```
 
 ### `fga_delete_tuple`
 
 ```text
-permissions.fga_delete_tuple(subject text, relation text, object text) returns void
+permissions.fga_delete_tuple(
+  subject text,
+  relation text,
+  object text
+) returns void
 ```
 
 Deletes one tuple. It does nothing when the tuple does not exist. The tuple key must be well formed. The latest model does not need to accept it.
@@ -309,14 +440,24 @@ Deletes one tuple. It does nothing when the tuple does not exist. The tuple key 
 Errors: `openfga:2000` and `2020`.
 
 ```sql
-select permissions.fga_delete_tuple(subject => 'user:carol', relation => 'viewer', object => 'document:2');
+select permissions.fga_delete_tuple(
+  subject => 'user:carol',
+  relation => 'viewer',
+  object => 'document:2'
+);
 ```
 
 ### `fga_read`
 
 ```text
-permissions.fga_read(object text default null, relation text default null, subject text default null,
-                     page_size integer default null, out tuples jsonb, inout continuation_token text default null) returns record
+permissions.fga_read(
+  object text default null,
+  relation text default null,
+  subject text default null,
+  page_size integer default null,
+  out tuples jsonb,
+  inout continuation_token text default null
+) returns record
 ```
 
 Returns one page of stored tuples, in the order of the writes. The `object` filter is `type:id` or `type:`. `page_size` is 1 to 100, and the default is 50. The column `continuation_token` is `''` on the last page. To get the next page, pass the token back as the argument `continuation_token`.
@@ -324,7 +465,14 @@ Returns one page of stored tuples, in the order of the writes. The `object` filt
 Errors: `openfga:2000` for a `page_size` outside the range or a token with an invalid format. `2007` for a token that the extension does not know.
 
 ```sql
-select jsonb_array_length(tuples), continuation_token <> '' from permissions.fga_read(object => 'document:', page_size => 1);   -- 1, true
+select
+  jsonb_array_length(tuples),
+  continuation_token <> ''
+from permissions.fga_read(
+  object => 'document:',
+  page_size => 1
+);
+-- 1, true
 ```
 
 In the catalog, `continuation_token` is one `inout` argument. Use it as an input argument and as an output column.
@@ -332,8 +480,14 @@ In the catalog, `continuation_token` is one `inout` argument. Use it as an input
 ### `fga_check`
 
 ```text
-permissions.fga_check(subject text, relation text, object text, contextual_tuples jsonb default null,
-                      model_id text default null, context jsonb default null) returns boolean
+permissions.fga_check(
+  subject text,
+  relation text,
+  object text,
+  contextual_tuples jsonb default null,
+  model_id text default null,
+  context jsonb default null
+) returns boolean
 ```
 
 Returns `true` when the subject has the relation to the object. `contextual_tuples` is an array of tuple keys that count for this call only. `context` is a JSON object with the parameters of the conditions.
@@ -341,14 +495,25 @@ Returns `true` when the subject has the relation to the object. `contextual_tupl
 Errors: `openfga:2000`, `2001`, `2002`, `2020` and `2027`.
 
 ```sql
-select permissions.fga_check(subject => 'user:alice', relation => 'viewer', object => 'document:1');   -- true
+select permissions.fga_check(
+  subject => 'user:alice',
+  relation => 'viewer',
+  object => 'document:1'
+);
+-- true
 ```
 
 ### `fga_list_objects`
 
 ```text
-permissions.fga_list_objects(subject text, type text, relation text, contextual_tuples jsonb default null,
-                             model_id text default null, context jsonb default null) returns setof text
+permissions.fga_list_objects(
+  subject text,
+  type text,
+  relation text,
+  contextual_tuples jsonb default null,
+  model_id text default null,
+  context jsonb default null
+) returns setof text
 ```
 
 Returns the objects of one type that the subject has the relation to, as `type:id` strings. At most 1,000 results. The order is not defined.
@@ -356,14 +521,25 @@ Returns the objects of one type that the subject has the relation to, as `type:i
 Errors: `openfga:2000`, `2001`, `2002`, `2020`, `2021`, `2022` and `2027`.
 
 ```sql
-select permissions.fga_list_objects(subject => 'user:alice', type => 'document', relation => 'viewer');   -- document:1
+select permissions.fga_list_objects(
+  subject => 'user:alice',
+  type => 'document',
+  relation => 'viewer'
+);
+-- document:1
 ```
 
 ### `fga_list_users`
 
 ```text
-permissions.fga_list_users(object text, relation text, user_filters text[], contextual_tuples jsonb default null,
-                           model_id text default null, context jsonb default null) returns setof text
+permissions.fga_list_users(
+  object text,
+  relation text,
+  user_filters text[],
+  contextual_tuples jsonb default null,
+  model_id text default null,
+  context jsonb default null
+) returns setof text
 ```
 
 Returns the subjects that have the relation to the object. Each filter in `user_filters` is a type (`user`) or a userset type (`team#member`). At most 1,000 results. The order is not defined.
@@ -371,7 +547,12 @@ Returns the subjects that have the relation to the object. Each filter in `user_
 Errors: `openfga:2000`, `2001`, `2002`, `2020`, `2021`, `2022` and `2027`.
 
 ```sql
-select permissions.fga_list_users(object => 'document:1', relation => 'viewer', user_filters => '{user}');   -- user:alice, user:bob
+select permissions.fga_list_users(
+  object => 'document:1',
+  relation => 'viewer',
+  user_filters => '{user}'
+);
+-- user:alice, user:bob
 ```
 
 ## RLS helpers
@@ -381,7 +562,10 @@ These functions answer for the current subject ([`current_subject_id`](#current_
 ### `rbac_has_permission`
 
 ```text
-permissions.rbac_has_permission(permission text, scope text default null) returns boolean
+permissions.rbac_has_permission(
+  permission text,
+  scope text default null
+) returns boolean
 ```
 
 Returns `true` when the current subject has the permission, through a role that it holds directly or by inheritance. When `scope` is `null`, only app-wide assignments count. Otherwise only the assignments in that scope count. An unknown permission gives `false`.
@@ -390,14 +574,22 @@ Errors: none.
 
 ```sql
 select set_config('permissions.subject_id', 'alice', false);
-select permissions.rbac_has_permission(permission => 'documents.edit');                      -- true
-select permissions.rbac_has_permission(permission => 'documents.edit', scope => 'acme');     -- false: alice is a viewer in acme
+select permissions.rbac_has_permission(permission => 'documents.edit');
+-- true
+select permissions.rbac_has_permission(
+  permission => 'documents.edit',
+  scope => 'acme'
+);
+-- false: alice is a viewer in acme
 ```
 
 ### `rbac_has_role`
 
 ```text
-permissions.rbac_has_role(role text, scope text default null) returns boolean
+permissions.rbac_has_role(
+  role text,
+  scope text default null
+) returns boolean
 ```
 
 Returns `true` when the current subject has the role, directly or through a role that inherits it. The scope rule is the same as for `rbac_has_permission`. An unknown role gives `false`.
@@ -405,14 +597,22 @@ Returns `true` when the current subject has the role, directly or through a role
 Errors: none.
 
 ```sql
-select permissions.rbac_has_role(role => 'viewer');                      -- true: editor inherits viewer
-select permissions.rbac_has_role(role => 'viewer', scope => 'acme');     -- true
+select permissions.rbac_has_role(role => 'viewer');
+-- true: editor inherits viewer
+select permissions.rbac_has_role(
+  role => 'viewer',
+  scope => 'acme'
+);
+-- true
 ```
 
 ### `rbac_scopes_with_permission`
 
 ```text
-permissions.rbac_scopes_with_permission(permission text, plan_time_guard boolean default permissions._unfolded_null()) returns text[]
+permissions.rbac_scopes_with_permission(
+  permission text,
+  plan_time_guard boolean default permissions._unfolded_null()
+) returns text[]
 ```
 
 Returns the scopes in which the current subject has the permission. App-wide assignments do not appear. The result is `{}` when there is none. The order is not defined. This is the fast function for policies on tables with a tenant column.
@@ -422,13 +622,19 @@ Do not pass `plan_time_guard`. The extension ignores it. Its default value makes
 Errors: none.
 
 ```sql
-select permissions.rbac_scopes_with_permission(permission => 'documents.read');   -- {acme}
+select permissions.rbac_scopes_with_permission(
+  permission => 'documents.read'
+);
+-- {acme}
 ```
 
 ### `fga_check_current`
 
 ```text
-permissions.fga_check_current(relation text, object text) returns boolean
+permissions.fga_check_current(
+  relation text,
+  object text
+) returns boolean
 ```
 
 The same as `fga_check`, for the current subject. It takes no contextual tuples and no `context`. It returns `false` when there is no subject, no model, or the subject type is not in the model.
@@ -436,13 +642,20 @@ The same as `fga_check`, for the current subject. It takes no contextual tuples 
 Errors: `openfga:2000` for a malformed object, an unknown type or an unknown relation. `2002` when the answer needs 25 levels or more.
 
 ```sql
-select permissions.fga_check_current(relation => 'viewer', object => 'document:1');   -- true
+select permissions.fga_check_current(
+  relation => 'viewer',
+  object => 'document:1'
+);
+-- true
 ```
 
 ### `fga_list_objects_current`
 
 ```text
-permissions.fga_list_objects_current(type text, relation text) returns setof text
+permissions.fga_list_objects_current(
+  type text,
+  relation text
+) returns setof text
 ```
 
 The same as `fga_list_objects`, for the current subject. It has no cap on the number of results.
@@ -450,13 +663,20 @@ The same as `fga_list_objects`, for the current subject. It has no cap on the nu
 Errors: `openfga:2000` and `2002`.
 
 ```sql
-select permissions.fga_list_objects_current(type => 'document', relation => 'viewer');   -- document:1
+select permissions.fga_list_objects_current(
+  type => 'document',
+  relation => 'viewer'
+);
+-- document:1
 ```
 
 ### `fga_list_object_ids_current`
 
 ```text
-permissions.fga_list_object_ids_current(type text, relation text) returns setof text
+permissions.fga_list_object_ids_current(
+  type text,
+  relation text
+) returns setof text
 ```
 
 The same as `fga_list_objects_current`, but each result is the id without the type. Use it to compare with the id column of a table. It has no cap on the number of results.
@@ -464,7 +684,11 @@ The same as `fga_list_objects_current`, but each result is the id without the ty
 Errors: `openfga:2000` and `2002`.
 
 ```sql
-select permissions.fga_list_object_ids_current(type => 'document', relation => 'viewer');   -- 1
+select permissions.fga_list_object_ids_current(
+  type => 'document',
+  relation => 'viewer'
+);
+-- 1
 select set_config('permissions.subject_id', '', false);
 ```
 
