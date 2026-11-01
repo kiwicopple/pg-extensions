@@ -178,7 +178,7 @@ describe('createServerClient', () => {
   })
 
   it('deleteSubject returns or throws a database error', async () => {
-    const pgError = Object.assign(new Error('permission denied for function delete_subject'), { code: '42501' })
+    const pgError = Object.assign(new Error('permission denied for function delete_subject'), { code: '42501', severity: 'ERROR' })
     const db: Queryable = {
       query: async () => {
         throw pgError
@@ -227,7 +227,7 @@ describe('createServerClient', () => {
   })
 
   it('as() keeps throwOnError and the names', async () => {
-    const pgError = Object.assign(new Error('boom'), { code: '57014' })
+    const pgError = Object.assign(new Error('boom'), { code: '57014', severity: 'ERROR' })
     let n = 0
     const db: Queryable = {
       query: async (text: string) => {

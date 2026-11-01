@@ -37,6 +37,20 @@ describe('postgrestTransport', () => {
     expect(h.get('apikey')).toBe('k')
   })
 
+  it('lets the profile headers win over user headers in any case', async () => {
+    const { calls, fetch } = mockFetch(() => json(true))
+    const t = postgrestTransport('http://localhost:3000', {
+      fetch,
+      headers: { 'content-profile': 'other', 'accept-profile': 'other', 'content-type': 'text/plain', apikey: 'k' },
+    })
+    await t.rpc('rbac_has_permission', { permission: 'p' }, 'scalar')
+    const h = new Headers(calls[0]?.init.headers)
+    expect(h.get('Content-Profile')).toBe('permissions')
+    expect(h.get('Accept-Profile')).toBe('permissions')
+    expect(h.get('Content-Type')).toBe('application/json')
+    expect(h.get('apikey')).toBe('k')
+  })
+
   it('uses the schema option', async () => {
     const { calls, fetch } = mockFetch(() => json('alice'))
     await postgrestTransport('http://x', { fetch, schema: 'authz' }).rpc('current_subject_id', {}, 'scalar')

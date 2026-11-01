@@ -132,9 +132,9 @@ describe('RbacClient admin', () => {
     })
     await rbac.hasPermission({ permission: 'p', scope: 'acme' })
     expect(seen[0]!.url).toBe('http://localhost:3000/rpc/rbac_has_permission')
-    const headers = seen[0]!.init.headers as Record<string, string>
-    expect(headers.Authorization).toBe('Bearer t')
-    expect(headers['Content-Profile']).toBe('perms')
+    const headers = new Headers(seen[0]!.init.headers)
+    expect(headers.get('Authorization')).toBe('Bearer t')
+    expect(headers.get('Content-Profile')).toBe('perms')
     expect(JSON.parse(seen[0]!.init.body as string)).toEqual({ permission: 'p', scope: 'acme' })
   })
 

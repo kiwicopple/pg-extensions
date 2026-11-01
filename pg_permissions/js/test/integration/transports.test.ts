@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import type pg from 'pg'
+import pg from 'pg'
 import { sqlTransport } from '../../src/transport/sql'
 import { postgrestTransport } from '../../src/transport/postgrest'
 import { PermissionsError, isFgaError, isRbacError } from '../../src/lib/errors'
-import { REST_URL, authHeaders, ownerPool, resetDatabase, servicePool, serviceToken, userToken } from './helpers'
+import { PG_URL, REST_URL, authHeaders, ownerPool, resetDatabase, servicePool, serviceToken, userToken } from './helpers'
 
 const MODEL = {
   schema_version: '1.1',
@@ -35,6 +35,25 @@ beforeAll(async () => {
 afterAll(async () => {
   await service?.end()
   await owner?.end()
+})
+
+describe('sql transport on one shared connection', () => {
+  it('keeps subjects apart across two transports over the same pg.Client', async () => {
+    const client = new pg.Client({ connectionString: PG_URL, options: '-c role=service_role' })
+    await client.connect()
+    try {
+      const a = sqlTransport(client)
+      const b = sqlTransport(client)
+      const results = await Promise.all([
+        a.withSubject({ id: 'alice' }).rpc('current_subject_id', {}, 'scalar'),
+        b.withSubject({ id: 'bob' }).rpc('current_subject_id', {}, 'scalar'),
+        a.withSubject({ id: 'carol' }).rpc('current_subject_id', {}, 'scalar'),
+      ])
+      expect(results).toEqual(['alice', 'bob', 'carol'])
+    } finally {
+      await client.end()
+    }
+  })
 })
 
 describe('sql transport (service_role)', () => {

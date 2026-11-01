@@ -161,6 +161,16 @@ describe('FgaAdminApi: name mapping', () => {
     ])
   })
 
+  it('writeAuthorizationModel rejects (does not throw synchronously) for invalid JSON', async () => {
+    const { transport, fga } = sqlClient(() => '01ABC')
+    let promise: Promise<unknown> | undefined
+    expect(() => {
+      promise = fga.admin.writeAuthorizationModel('{bad')
+    }).not.toThrow()
+    await expect(promise).rejects.toBeInstanceOf(SyntaxError)
+    expect(transport.calls).toHaveLength(0)
+  })
+
   it('readAuthorizationModel maps authorizationModelId', async () => {
     const { transport, fga } = sqlClient(() => ({ id: 'm1', schema_version: '1.1', type_definitions: [] }))
     expect((await fga.admin.readAuthorizationModel()).data?.id).toBe('m1')

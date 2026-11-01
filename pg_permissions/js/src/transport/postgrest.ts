@@ -22,7 +22,7 @@ export interface PostgrestTransportOptions {
 export function postgrestTransport(restUrl: string, options: PostgrestTransportOptions = {}): Transport<'postgrest'> {
   const base = restUrl.replace(/\/+$/, '')
   const schema = options.schema ?? 'permissions'
-  const headers = options.headers ?? {}
+  const userHeaders = options.headers ?? {}
   const fetchFn = resolveFetch(options.fetch)
 
   return {
@@ -37,15 +37,16 @@ export function postgrestTransport(restUrl: string, options: PostgrestTransportO
 
       let response: Response
       try {
+        // A Headers object is case-insensitive: the transport's headers replace
+        // any user header of the same name, whatever its case.
+        const headers = new Headers(userHeaders)
+        headers.set('Content-Type', 'application/json')
+        headers.set('Accept', 'application/json')
+        headers.set('Content-Profile', schema)
+        headers.set('Accept-Profile', schema)
         response = await fetchFn(`${base}/rpc/${fn}`, {
           method: 'POST',
-          headers: {
-            ...headers,
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-            'Content-Profile': schema,
-            'Accept-Profile': schema,
-          },
+          headers,
           body: JSON.stringify(definedArgs(args)),
         })
       } catch (error) {

@@ -45,15 +45,27 @@ export interface SqlTransport extends Transport<'sql'> {
  * With a pool (an object with `connect()` that is not itself a `pg` Client), each
  * subject transaction takes a dedicated client and releases it. With a single
  * connection, the transport runs one call at a time, so a transaction never
- * interleaves with another call.
+ * interleaves with another call. The queue belongs to the connection, so every
+ * transport over the same client shares it.
+ *
+ * With a single `Client`, other code must not use that client while subject calls
+ * run: its queries would run inside the subject's transaction, as the subject. Use a
+ * Pool for concurrent use. If a rollback fails on a single connection, the session may
+ * still be inside the subject's transaction, so the transport rejects every later call
+ * on that connection; replace the connection.
  */
 export function sqlTransport(db: Queryable, options: SqlTransportOptions = {}): SqlTransport {
   const schema = quoteIdent(options.schema ?? 'permissions')
   const pool = isPool(db) ? db : null
-  const serial = pool ? null : serialQueue()
+  const state = pool ? null : connectionState(db)
 
   const run = <T>(task: (conn: Queryable) => Promise<T>): Promise<T> =>
-    serial ? serial(() => task(db)) : task(db)
+    state
+      ? state.enqueue(() => {
+          if (state.poisoned !== undefined) throw poisonedError(state.poisoned)
+          return task(db)
+        })
+      : task(db)
 
   async function call<T>(conn: Queryable, fn: string, args: RpcArgs, shape: Shape): Promise<T> {
     const { text, values } = buildCall(schema, fn, args, shape)
@@ -68,9 +80,6 @@ export function sqlTransport(db: Queryable, options: SqlTransportOptions = {}): 
 
   async function inTransaction<T>(subject: Subject, task: (conn: Queryable) => Promise<T>): Promise<T> {
     const role = subject.role === undefined ? null : quoteRole(subject.role)
-    if (typeof subject.id !== 'string' || subject.id === '') {
-      throw new Error('permissions (sql): withSubject needs a non-empty subject id')
-    }
     // Set when the rollback fails: the connection is then in an unknown state.
     let broken: unknown = undefined
     const body = async (conn: Queryable): Promise<T> => {
@@ -89,8 +98,14 @@ export function sqlTransport(db: Queryable, options: SqlTransportOptions = {}): 
         try {
           await conn.query('rollback')
         } catch (rollbackError) {
-          // The original error matters more than a failed rollback.
+          // The original error matters more than a failed rollback in pool mode,
+          // where the client is destroyed. On a single connection nothing destroys
+          // it, so the session may still be in the subject transaction: poison it.
           broken = rollbackError
+          if (state) {
+            state.poisoned = rollbackError
+            throw poisonedError(rollbackError, error)
+          }
         }
         throw error
       }
@@ -121,7 +136,10 @@ export function sqlTransport(db: Queryable, options: SqlTransportOptions = {}): 
       return run((conn) => call<T>(conn, fn, args, shape))
     },
     withSubject(subject: Subject): Transport<'subject'> {
-      // Validate now, so a bad role fails at `as()` and not at the first call.
+      // Validate now, so a bad id or role fails at `withSubject()` and not at the first call.
+      if (typeof subject.id !== 'string' || subject.id === '') {
+        throw new Error('permissions (sql): withSubject needs a non-empty subject id')
+      }
       if (subject.role !== undefined) quoteRole(subject.role)
       return {
         kind: 'subject',
@@ -195,11 +213,24 @@ async function exec(conn: Queryable, text: string, values?: unknown[]): Promise<
   }
 }
 
-/** Maps a driver error: a Postgres error (with a SQLSTATE) to `PermissionsError`, anything else to `PermissionsFetchError`. */
+/**
+ * Maps a driver error: a Postgres error to `PermissionsError`, anything else to
+ * `PermissionsFetchError`. A Postgres error has a 5-character SQLSTATE `code` and a
+ * string `severity` (node-postgres sets both on every server error). Node errno
+ * codes such as `EPIPE`, `EPERM` and `EBADF` also have 5 characters, so the code
+ * alone does not tell them apart.
+ */
 export function toPermissionsError(error: unknown): PermissionsError {
   if (error instanceof PermissionsError) return error
-  const e = error as { message?: unknown; code?: unknown; detail?: unknown; details?: unknown; hint?: unknown } | null
-  if (e && typeof e.code === 'string' && /^[0-9A-Z]{5}$/.test(e.code)) {
+  const e = error as {
+    message?: unknown
+    code?: unknown
+    severity?: unknown
+    detail?: unknown
+    details?: unknown
+    hint?: unknown
+  } | null
+  if (e && typeof e.code === 'string' && /^[0-9A-Z]{5}$/.test(e.code) && typeof e.severity === 'string') {
     return new PermissionsError({
       message: typeof e.message === 'string' ? e.message : String(error),
       details: typeof e.detail === 'string' ? e.detail : typeof e.details === 'string' ? e.details : null,
@@ -234,14 +265,41 @@ function isPool(db: Queryable): db is PoolLike {
   return typeof d.connect === 'function' && typeof d.release !== 'function' && !('connectionParameters' in d)
 }
 
-function serialQueue(): <T>(task: () => Promise<T>) => Promise<T> {
-  let tail: Promise<unknown> = Promise.resolve()
-  return <T>(task: () => Promise<T>): Promise<T> => {
-    const result = tail.then(task, task)
-    tail = result.then(
-      () => undefined,
-      () => undefined,
-    )
-    return result
+interface ConnectionState {
+  enqueue<T>(task: () => Promise<T>): Promise<T>
+  /** Set when a rollback failed: the session may still be inside a subject transaction. */
+  poisoned: unknown
+}
+
+// One state per connection object, so every transport over the same single
+// connection shares one queue (and one poisoned flag).
+const connections = new WeakMap<object, ConnectionState>()
+
+function connectionState(db: Queryable): ConnectionState {
+  let state = connections.get(db)
+  if (!state) {
+    let tail: Promise<unknown> = Promise.resolve()
+    state = {
+      poisoned: undefined,
+      enqueue<T>(task: () => Promise<T>): Promise<T> {
+        const result = tail.then(task, task)
+        tail = result.then(
+          () => undefined,
+          () => undefined,
+        )
+        return result
+      },
+    }
+    connections.set(db, state)
   }
+  return state
+}
+
+function poisonedError(rollbackError: unknown, original?: unknown): PermissionsFetchError {
+  const reason = rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
+  const first = original === undefined ? '' : ` The call failed first: ${original instanceof Error ? original.message : String(original)}.`
+  return new PermissionsFetchError(
+    `The database connection is unusable: a rollback failed (${reason}), so the session may still be inside a subject transaction. Replace the connection.${first}`,
+    rollbackError,
+  )
 }

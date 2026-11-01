@@ -197,11 +197,12 @@ export class FgaAdmin implements FgaAdminApi {
   }
 
   writeAuthorizationModel(model: WriteAuthorizationModelRequest | string): Promise<Result<WriteAuthorizationModelResponse>> {
-    // The transport sends jsonb as JSON text; parse a string so it is not sent as a JSON string literal.
-    const value: unknown = typeof model === 'string' ? JSON.parse(model) : model
     return this.run(
-      this.transport
-        .rpc<string>('fga_write_authorization_model', { model: value }, 'scalar')
+      // The transport sends jsonb as JSON text; parse a string so it is not sent as a JSON string literal.
+      // Parsing inside the async chain turns a bad JSON string into a rejected promise, not a sync throw.
+      Promise.resolve()
+        .then(() => (typeof model === 'string' ? (JSON.parse(model) as unknown) : model))
+        .then((value) => this.transport.rpc<string>('fga_write_authorization_model', { model: value }, 'scalar'))
         .then((authorizationModelId) => ({ authorizationModelId })),
     )
   }

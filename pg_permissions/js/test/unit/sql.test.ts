@@ -133,6 +133,32 @@ describe('sqlTransport', () => {
     expect((e as PermissionsFetchError).cause).toBe(cause)
   })
 
+  it('treats Node errno codes as connection errors, not Postgres errors', () => {
+    for (const code of ['EPIPE', 'EPERM', 'EBADF']) {
+      const cause = Object.assign(new Error(`write ${code}`), { code, errno: -32, syscall: 'write' })
+      const e = toPermissionsError(cause)
+      expect(e).toBeInstanceOf(PermissionsFetchError)
+      expect((e as PermissionsFetchError).cause).toBe(cause)
+    }
+  })
+
+  it('maps a real-shaped DatabaseError (SQLSTATE + severity) to PermissionsError', () => {
+    // node-postgres: DatabaseError extends Error, with severity, code, detail, hint, ...
+    const cause = Object.assign(new Error('permission denied for function x'), {
+      name: 'error',
+      length: 100,
+      severity: 'ERROR',
+      code: '42501',
+      detail: undefined,
+      hint: undefined,
+      routine: 'aclcheck_error',
+    })
+    const e = toPermissionsError(cause)
+    expect(e).toBeInstanceOf(PermissionsError)
+    expect(e).not.toBeInstanceOf(PermissionsFetchError)
+    expect((e as PermissionsError).code).toBe('42501')
+  })
+
   it('rejects (does not throw synchronously) for an unknown function', async () => {
     const { log, conn } = fakeDb()
     const t = sqlTransport(conn('c'))
@@ -229,12 +255,88 @@ describe('withSubject', () => {
     expect(() => t.withSubject({ id: 'a', role: 'service_role' })).not.toThrow()
   })
 
-  it('rejects an empty subject id', async () => {
+  it('rejects an empty subject id at withSubject()', () => {
     const { log, conn } = fakeDb()
-    await expect(sqlTransport(conn('c')).withSubject({ id: '' }).rpc('current_subject_id', {}, 'scalar')).rejects.toThrow(
-      /subject id/,
-    )
+    const t = sqlTransport(conn('c'))
+    expect(() => t.withSubject({ id: '' })).toThrow(/subject id/)
+    expect(() => t.withSubject({ id: undefined as never })).toThrow(/subject id/)
     expect(log).toHaveLength(0)
+  })
+
+  it('marks a pool client broken on a connection error (EPIPE), not on a Postgres error', async () => {
+    const epipe = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })
+    const { conn } = fakeDb((text) => (text.includes('rbac_has_role') ? epipe : { rows: [] }))
+    const released: unknown[] = []
+    const pool = {
+      ...conn('pool'),
+      async connect() {
+        return { ...conn('client'), release: (err?: unknown) => void released.push(err ?? 'ok') }
+      },
+    }
+    const e = await sqlTransport(pool)
+      .withSubject({ id: 'a' })
+      .rpc('rbac_has_role', { role: 'r' }, 'scalar')
+      .catch((x: unknown) => x)
+    expect(e).toBeInstanceOf(PermissionsFetchError)
+    expect(released).toHaveLength(1)
+    expect(released[0]).toBe(e)
+  })
+
+  it('shares one queue between transports over the same single connection', async () => {
+    const { log, conn } = fakeDb((text) => (text.includes('as value') ? { rows: [{ value: 'x' }] } : { rows: [] }))
+    const client = { ...conn('client'), connectionParameters: {}, async connect() {} }
+    const a = sqlTransport(client as never)
+    const b = sqlTransport(client as never)
+    await Promise.all([
+      a.withSubject({ id: 'alice' }).rpc('current_subject_id', {}, 'scalar'),
+      b.withSubject({ id: 'bob' }).rpc('current_subject_id', {}, 'scalar'),
+      b.rpc('current_subject_type', {}, 'scalar'),
+    ])
+    expect(log.map((q) => q.text.split(' ')[0] + (q.values?.length ? `:${String(q.values[0])}` : ''))).toEqual([
+      'begin',
+      'select:alice',
+      'select',
+      'commit',
+      'begin',
+      'select:bob',
+      'select',
+      'commit',
+      'select',
+    ])
+  })
+
+  it('poisons a single connection when the rollback fails', async () => {
+    const rollbackError = new Error('connection lost')
+    const { log, conn } = fakeDb((text) =>
+      text === 'rollback' ? rollbackError : text.includes('rbac_has_role') ? pgError({ message: 'x', code: '57014' }) : { rows: [] },
+    )
+    const client = { ...conn('client'), connectionParameters: {}, async connect() {} }
+    const a = sqlTransport(client as never)
+    const e = (await a
+      .withSubject({ id: 'a' })
+      .rpc('rbac_has_role', { role: 'r' }, 'scalar')
+      .catch((x: unknown) => x)) as PermissionsFetchError
+    expect(e).toBeInstanceOf(PermissionsFetchError)
+    expect(e.message).toMatch(/Replace the connection/)
+    expect(e.cause).toBe(rollbackError)
+    const before = log.length
+    // Later calls fail without touching the connection, from any transport over it.
+    for (const t of [a, sqlTransport(client as never)]) {
+      await expect(t.rpc('current_subject_id', {}, 'scalar')).rejects.toBeInstanceOf(PermissionsFetchError)
+      await expect(t.withSubject({ id: 'b' }).rpc('current_subject_id', {}, 'scalar')).rejects.toThrow(/Replace the connection/)
+    }
+    expect(log).toHaveLength(before)
+  })
+
+  it('does not poison a single connection when the rollback succeeds', async () => {
+    const { conn } = fakeDb((text) =>
+      text.includes('rbac_has_role') ? pgError({ message: 'x', code: '57014' }) : text.includes('as value') ? { rows: [{ value: 1 }] } : { rows: [] },
+    )
+    const client = { ...conn('client'), connectionParameters: {}, async connect() {} }
+    const t = sqlTransport(client as never)
+    const e = (await t.withSubject({ id: 'a' }).rpc('rbac_has_role', { role: 'r' }, 'scalar').catch((x: unknown) => x)) as PermissionsError
+    expect(e.code).toBe('57014')
+    expect(await t.rpc('current_subject_id', {}, 'scalar')).toBe(1)
   })
 
   it('serializes calls on a single connection so transactions do not interleave', async () => {
