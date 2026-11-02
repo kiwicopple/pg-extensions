@@ -9,22 +9,22 @@ const info: Record<Design, { line: string; pick: string; link: string }> = {
 	a: {
 		line: 'Zanzibar-style tuples. Every check is a recursive walk at read time. The design derives nothing, so nothing can drift.',
 		pick: 'Shallow and narrow sharing graphs, frequent team edits, and the smallest design to maintain.',
-		link: './research/designs/a-tuple-core/',
+		link: '../designs/a-tuple-core/',
 	},
 	b: {
 		line: 'Cedar-style policies. The design computes closures at write time. Forbid rules and conditions are first-class.',
 		pick: 'Forbid rules on groups, or conditions that the design evaluates, in year one; text or bigint keys.',
-		link: './research/designs/b-policy-first/',
+		link: '../designs/b-policy-first/',
 	},
 	c: {
 		line: 'A typed JSON model that the design compiles to SQL. The design materializes memberships at write time. Reads barely change with the shape.',
 		pick: 'Apps with many reads and wide or deep groups, where nests of teams are rare.',
-		link: './research/designs/c-compiled-model/',
+		link: '../designs/c-compiled-model/',
 	},
 	d: {
 		line: 'First-class rbac_* tables plus OpenFGA-compatible fga_* tables, composed in RLS. It passes the test suite of OpenFGA.',
 		pick: 'Teams that want the model and the API of OpenFGA inside Postgres, next to plain RBAC. Benchmarked, and optimized in two passes.',
-		link: './research/designs/d-per-model/',
+		link: '../designs/d-per-model/',
 	},
 };
 const metrics = [
@@ -43,7 +43,7 @@ const metrics = [
 					<a href={info[e.id].link}>{e.name}</a>
 				</div>
 				<p>{info[e.id].line}</p>
-				<p class="pick"><strong>Pick it for:</strong> {info[e.id].pick}</p>
+				<p class="pick"><strong>Explored for:</strong> {info[e.id].pick}</p>
 				<div class="metrics">
 					{metrics.filter((m) => m.v[e.id] != null).map((m) => (
 						<div class="metric">
@@ -56,7 +56,7 @@ const metrics = [
 		))
 	}
 </div>
-<p class="engine-foot">p50 latency, 4 pgbench clients, {s ? <>{seriesVersionLabel(s)}</> : 'no data'}. The numbers come from the primary series of the dashboard. The <a href="./research/benchmarks/optimizations/">Optimizations page</a> shows the runs before and after the optimization pass. The source is the <a href="./research/benchmarks/dashboard/">benchmarks dashboard</a>.</p>
+<p class="engine-foot">p50 latency, 4 pgbench clients, {s ? <>{seriesVersionLabel(s)}</> : 'no data'}. The numbers come from the primary series of the dashboard. The <a href="../benchmarks/optimizations/">Optimizations page</a> shows the runs before and after the optimization pass. The source is the <a href="../benchmarks/dashboard/">benchmarks dashboard</a>.</p>
 
 <style>
 	.engine-cards {

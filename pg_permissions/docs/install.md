@@ -1,15 +1,17 @@
 # Install
 
-This page shows how to install `pg_permissions`. There are two ways: through database.dev (dbdev) or directly. Choose one method. Then [check the install](#check-the-install).
+Install `pg_permissions` by running its SQL file in your database. The database.dev package is not published yet; its instructions below are for a future release.
 
 ## Choose a method
 
-| Method | Use it when | Section |
-| --- | --- | --- |
-| database.dev (dbdev) | You use hosted Postgres, such as Supabase, and you want a versioned package. | [Install with database.dev](#install-with-databasedev) |
-| Direct install | You have `psql` and the extension files. You can also install by hand with pg_tle, or try the extension in Docker. | [Install directly](#install-directly) |
+| Method | Use it when |
+| --- | --- |
+| [Direct install](#install-directly) | You have psql or a SQL editor and the extension file. Available now. |
+| [pg_tle](#pg_tle) | You want to register the SQL file as an extension through pg_tle. |
+| [Docker](#docker) | You want a local database for trying the extension. |
+| [database.dev](#install-with-databasedev) | You want a versioned registry package after publication. Not available yet. |
 
-Both methods give the same result: the schema `permissions` with its tables and functions. Use one method for each database. Do not mix them.
+Use one installation method per database. Each creates the `permissions` schema with its tables and functions.
 
 ## Requirements
 
@@ -18,51 +20,6 @@ Both methods give the same result: the schema `permissions` with its tables and 
 - No C code and no superuser rights. The extension is pure SQL.
 
 The extension is one file, [`pg_permissions--0.0.1.sql`](../pg_permissions--0.0.1.sql), and a control file, [`pg_permissions.control`](../pg_permissions.control). The control file is for the pg_tle path and for tools that read it. A plain install uses only the SQL file.
-
-## Install with database.dev
-
-[database.dev](https://database.dev/kiwicopple/pg_permissions) is a package registry for Postgres extensions. The package name is `kiwicopple@pg_permissions`. The package is not published yet. These steps are for the time after publication. Until then, [install directly](#install-directly).
-
-The `dbdev` tool installs the package as a pg_tle extension. The package is pure SQL, so no server file is necessary. Postgres 16, 17 and 18 are supported.
-
-Do the prerequisites first:
-
-1. Install the `dbdev` command line tool on your computer. On macOS, run `brew install supabase/tap/dbdev`. For other systems, read the [dbdev CLI instructions](https://supabase.github.io/dbdev/cli/).
-2. Enable pg_tle in the database. On Supabase, you can also enable it in the dashboard.
-
-```sql
-create extension if not exists pg_tle;
-```
-
-Do not use dbdev with a database that has only logical backups. The dbdev documentation says that a restore of a logical backup can fail when a database has a pg_tle extension. Use physical backups.
-
-Then install the package:
-
-1. Make the migration file. The command writes a file to the folder `migrations`:
-
-   ```bash
-   dbdev add -o "./migrations/" -v 0.0.1 \
-     package -n kiwicopple@pg_permissions
-   ```
-
-2. Run the file in the database. Use `psql`, or the migration tool that you already use:
-
-   ```bash
-   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
-     -f "./migrations/<generated file>"
-   ```
-
-The file calls `pgtle.install_extension` with the SQL of the package. It then runs this statement:
-
-```sql
-create extension "kiwicopple@pg_permissions" version '0.0.1';
-```
-
-Do not add the option `-s` to `dbdev add`. Do not write `with schema` in `create extension`. The extension file creates the schema `permissions` and puts each object in it, so a `schema` clause does not change where the objects are. You call each function as `permissions.name(...)`.
-
-The name of the extension has an at sign, so always write it in double quotes. The `dbdev` documentation marks the in-database client (`dbdev.install`) as deprecated. This page uses the `dbdev add` command instead.
-
-There is no upgrade path yet. To check the install, go to [Check the install](#check-the-install).
 
 ## Install directly
 
@@ -161,9 +118,51 @@ To list the RBAC functions, use this psql command:
 
 If the first query fails with `schema "permissions" does not exist`, the file did not run in this database. Run it again with `-v ON_ERROR_STOP=1` and read the first error.
 
+## Install with database.dev
+
+[database.dev](https://database.dev/kiwicopple/pg_permissions) is a package registry for Postgres extensions. The package name is `kiwicopple@pg_permissions`. The package is not published yet. These steps are for the time after publication. Until then, [install directly](#install-directly).
+
+The `dbdev` tool installs the package as a pg_tle extension. The package is pure SQL, so no server file is necessary. Postgres 16, 17 and 18 are supported.
+
+Do the prerequisites first:
+
+1. Install the `dbdev` command line tool on your computer. On macOS, run `brew install supabase/tap/dbdev`. For other systems, read the [dbdev CLI instructions](https://supabase.github.io/dbdev/cli/).
+2. Enable pg_tle in the database. On Supabase, you can also enable it in the dashboard.
+
+```sql
+create extension if not exists pg_tle;
+```
+
+Do not use dbdev with a database that has only logical backups. The dbdev documentation says that a restore of a logical backup can fail when a database has a pg_tle extension. Use physical backups.
+
+Then install the package:
+
+1. Make the migration file. The command writes a file to the folder `migrations`:
+
+   ```bash
+   dbdev add -o "./migrations/" -v 0.0.1 \
+     package -n kiwicopple@pg_permissions
+   ```
+
+2. Run the file in the database. Use `psql`, or the migration tool that you already use:
+
+   ```bash
+   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+     -f "./migrations/<generated file>"
+   ```
+
+The file calls `pgtle.install_extension` with the SQL of the package. It then runs this statement:
+
+```sql
+create extension "kiwicopple@pg_permissions" version '0.0.1';
+```
+
+Do not add the option `-s` to `dbdev add`. Do not write `with schema` in `create extension`. The extension file creates the schema `permissions` and puts each object in it, so a `schema` clause does not change where the objects are. You call each function as `permissions.name(...)`.
+
+The name of the extension has an at sign, so always write it in double quotes. The `dbdev` documentation marks the in-database client (`dbdev.install`) as deprecated. This page uses the `dbdev add` command instead.
+
+There is no upgrade path yet. To check the install, go to [Check the install](#check-the-install).
+
 ## Next steps
 
-- [RBAC](rbac.md): roles, permissions and scopes.
-- [The OpenFGA model](fga.md): relationships between users and objects.
-- [RLS policies](rls.md): use both models in row level security.
-- [Function reference](reference.md) and [errors and limits](errors-and-limits.md).
+[Protect a table](get-started/quickstart.md) to verify access as two different users. Then [choose a permission model](get-started/choose-a-model.md) and [connect your application](integrations/identity.md).

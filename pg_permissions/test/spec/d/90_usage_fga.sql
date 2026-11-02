@@ -1,6 +1,6 @@
--- Goal: every example in docs/fga.md ("The OpenFGA model") works as written.
+-- Goal: the examples in docs/models/openfga/ (models, tuples, checks, and updates) work as written.
 --
--- This file mirrors that page, section by section and in the same order, so the
+-- This file mirrors the walkthrough in prerequisite order, so the
 -- state one section builds (the model, the tuples) is what the next one uses.
 -- When you change an example on the page, change it here, and the other way
 -- round. Statements without a result are copied from the page; queries that

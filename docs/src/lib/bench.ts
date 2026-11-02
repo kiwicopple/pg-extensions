@@ -44,7 +44,7 @@ export interface Run {
 }
 
 export const REPO = 'https://github.com/kiwicopple/pg-extensions';
-export const REF = process.env.DOCS_REPO_REF ?? 'main';
+export const REF = process.env.DOCS_REPO_REF ?? 'pg_permissions';
 export const BASELINES_URL = `${REPO}/tree/${REF}/pg_permissions/bench/baselines`;
 export const DATA_URL = `${BASELINES_URL}/data`;
 

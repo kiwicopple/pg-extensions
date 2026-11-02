@@ -1,8 +1,8 @@
--- Goal: every example in docs/rls.md ("RLS with both models") works as written.
+-- Goal: the examples in docs/rls/ (policies, composition, and trusted context) work as written.
 --
--- This file mirrors that page, section by section and in the same order, so the
+-- This file mirrors the RLS walkthrough, in prerequisite order, so the
 -- state one section builds is what the next one uses. When you change an
--- example on the page, change it here, and the other way round. Statements
+-- example in the walkthrough, change it here, and the other way round. Statements
 -- without a result are copied from the page; queries that return something
 -- appear as tap.is(<the same expression>, <the documented answer>).
 --

@@ -1,5 +1,5 @@
--- Goal: every example in docs/conditions.md ("OpenFGA conditions") works as
--- written, in the page's order. Statements without a result are copied from
+-- Goal: the examples in docs/models/openfga/conditions.md, condition-examples.md, and condition-behavior.md work as written.
+-- The walkthrough follows prerequisite order. Statements without a result come from
 -- the page; queries that return something appear as tap.is(<the same
 -- expression>, <the documented answer>), errors as fga_test.error_of(<the
 -- statement>).

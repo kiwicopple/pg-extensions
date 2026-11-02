@@ -1,6 +1,6 @@
 # Research
 
-This section tells how the author designed, measured and chose `pg_permissions`. It is a historical record. The result of the research is the extension in [`../pg_permissions--0.0.1.sql`](../pg_permissions--0.0.1.sql). To use the extension, read the user docs in [`../docs/`](../docs/README.md).
+This section records the design decisions, experiments, and measurements behind `pg_permissions`. Start with [Current architecture](architecture.md) for the implementation in use. The earlier designs and completed plans remain here as historical evidence. The result of the research is the extension in [`../pg_permissions--0.0.1.sql`](../pg_permissions--0.0.1.sql). To use the extension, read the user docs in [`../docs/`](../docs/README.md).
 
 ## The problem
 
@@ -20,7 +20,7 @@ The extension must meet these constraints:
 
 ## The four designs
 
-The author built four designs as SQL files and measured them.
+Four SQL implementations were built and benchmarked.
 
 | Design | Idea |
 | --- | --- |
@@ -45,7 +45,7 @@ Three kinds of measurement apply to the designs.
 
 ## Why D
 
-The user chose D on 2026-10-29 for these reasons:
+The project chose the per-model implementation (D) on 2026-10-29 for these reasons:
 
 - **One API forced different meanings.** The `rbac` preset was not fully identical across A, B and C. A forbid meant something different in each design.
 - **The `rbac` preset is flat across designs.** Its p50 is under 1 ms, and it differs by about 0.1 ms between designs. The designs differ only on sharing shapes, and the optimizations there are specific to a model.

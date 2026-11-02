@@ -1,0 +1,865 @@
+{
+  "baseline": "3966ade",
+  "sections": [
+    {
+      "source": "rbac.md",
+      "section": "Identity",
+      "destination": "integrations/identity.md"
+    },
+    {
+      "source": "rbac.md",
+      "section": "Privileges",
+      "destination": "integrations/privileges.md"
+    },
+    {
+      "source": "fga.md",
+      "section": "Privileges",
+      "destination": "integrations/privileges.md"
+    },
+    {
+      "source": "rbac.md",
+      "section": "Clean up with `delete_subject`",
+      "destination": "integrations/cleanup.md"
+    },
+    {
+      "source": "rls.md",
+      "section": "Clean up when a user is deleted",
+      "destination": "integrations/cleanup.md"
+    },
+    {
+      "source": "rbac.md",
+      "section": "Use from JavaScript",
+      "destination": "models/rbac/overview.md"
+    },
+    {
+      "source": "rbac.md",
+      "section": "Before you start",
+      "destination": "models/rbac/overview.md"
+    },
+    {
+      "source": "rbac.md",
+      "section": "Create roles",
+      "destination": "models/rbac/overview.md"
+    },
+    {
+      "source": "rbac.md",
+      "section": "Rules",
+      "destination": "models/rbac/tenants.md"
+    },
+    {
+      "source": "rbac.md",
+      "section": "Warnings and limits",
+      "destination": "models/rbac/overview.md"
+    },
+    {
+      "source": "rbac.md",
+      "section": "Scenario 1: app-wide roles",
+      "destination": "models/rbac/app-wide.md"
+    },
+    {
+      "source": "rbac.md",
+      "section": "Scenario 2: roles scoped to a tenant",
+      "destination": "models/rbac/tenants.md"
+    },
+    {
+      "source": "rbac.md",
+      "section": "Change and remove roles",
+      "destination": "models/rbac/manage.md"
+    },
+    {
+      "source": "rbac.md",
+      "section": "Errors",
+      "destination": "models/rbac/manage.md"
+    },
+    {
+      "source": "fga.md",
+      "section": "Use from JavaScript",
+      "destination": "models/openfga/overview.md"
+    },
+    {
+      "source": "fga.md",
+      "section": "How the functions map to OpenFGA",
+      "destination": "models/openfga/overview.md"
+    },
+    {
+      "source": "fga.md",
+      "section": "Write a model",
+      "destination": "models/openfga/models.md"
+    },
+    {
+      "source": "fga.md",
+      "section": "Write tuples",
+      "destination": "models/openfga/tuples.md"
+    },
+    {
+      "source": "fga.md",
+      "section": "Check",
+      "destination": "models/openfga/checks.md"
+    },
+    {
+      "source": "fga.md",
+      "section": "ListObjects",
+      "destination": "models/openfga/checks.md"
+    },
+    {
+      "source": "fga.md",
+      "section": "ListUsers",
+      "destination": "models/openfga/checks.md"
+    },
+    {
+      "source": "fga.md",
+      "section": "Read",
+      "destination": "models/openfga/checks.md"
+    },
+    {
+      "source": "fga.md",
+      "section": "Contextual tuples",
+      "destination": "models/openfga/checks.md"
+    },
+    {
+      "source": "fga.md",
+      "section": "Functions for RLS",
+      "destination": "models/openfga/checks.md"
+    },
+    {
+      "source": "fga.md",
+      "section": "Change the model",
+      "destination": "models/openfga/update-models.md"
+    },
+    {
+      "source": "fga.md",
+      "section": "Differences from OpenFGA",
+      "destination": "models/openfga/compatibility.md"
+    },
+    {
+      "source": "conditions.md",
+      "section": "A model with conditions",
+      "destination": "models/openfga/conditions.md"
+    },
+    {
+      "source": "conditions.md",
+      "section": "Write context",
+      "destination": "models/openfga/conditions.md"
+    },
+    {
+      "source": "conditions.md",
+      "section": "Access that expires",
+      "destination": "models/openfga/condition-examples.md"
+    },
+    {
+      "source": "conditions.md",
+      "section": "An IP range",
+      "destination": "models/openfga/condition-examples.md"
+    },
+    {
+      "source": "conditions.md",
+      "section": "Lists",
+      "destination": "models/openfga/condition-examples.md"
+    },
+    {
+      "source": "conditions.md",
+      "section": "Which context wins",
+      "destination": "models/openfga/condition-examples.md"
+    },
+    {
+      "source": "conditions.md",
+      "section": "Contextual tuples",
+      "destination": "models/openfga/condition-examples.md"
+    },
+    {
+      "source": "conditions.md",
+      "section": "Write conditioned tuples",
+      "destination": "models/openfga/condition-examples.md"
+    },
+    {
+      "source": "conditions.md",
+      "section": "More expressions",
+      "destination": "models/openfga/condition-behavior.md"
+    },
+    {
+      "source": "conditions.md",
+      "section": "When the extension cannot evaluate a condition",
+      "destination": "models/openfga/condition-behavior.md"
+    },
+    {
+      "source": "conditions.md",
+      "section": "Stale context",
+      "destination": "models/openfga/condition-behavior.md"
+    },
+    {
+      "source": "conditions.md",
+      "section": "Conditions in RLS helpers",
+      "destination": "models/openfga/condition-behavior.md"
+    },
+    {
+      "source": "conditions.md",
+      "section": "CEL subset",
+      "destination": "reference/cel.md"
+    },
+    {
+      "source": "rls.md",
+      "section": "Before you start",
+      "destination": "rls/policies.md"
+    },
+    {
+      "source": "rls.md",
+      "section": "Policies for RBAC",
+      "destination": "rls/policies.md"
+    },
+    {
+      "source": "rls.md",
+      "section": "Write the models",
+      "destination": "rls/combine-models.md"
+    },
+    {
+      "source": "rls.md",
+      "section": "Create the table and the data",
+      "destination": "rls/combine-models.md"
+    },
+    {
+      "source": "rls.md",
+      "section": "Current-subject functions",
+      "destination": "rls/combine-models.md"
+    },
+    {
+      "source": "rls.md",
+      "section": "Write the policies",
+      "destination": "rls/combine-models.md"
+    },
+    {
+      "source": "rls.md",
+      "section": "Plan-time evaluation",
+      "destination": "rls/performance.md"
+    },
+    {
+      "source": "rls.md",
+      "section": "Mistakes in names raise errors",
+      "destination": "rls/denies-and-context.md"
+    },
+    {
+      "source": "rls.md",
+      "section": "Row attributes that only RLS sees",
+      "destination": "rls/denies-and-context.md"
+    },
+    {
+      "source": "rls.md",
+      "section": "Conditions in policies",
+      "destination": "rls/denies-and-context.md"
+    },
+    {
+      "source": "reference.md",
+      "section": "RBAC functions",
+      "destination": "reference/rbac.md"
+    },
+    {
+      "source": "reference.md",
+      "section": "`rbac_has_permission`",
+      "destination": "reference/rbac.md"
+    },
+    {
+      "source": "reference.md",
+      "section": "`rbac_has_role`",
+      "destination": "reference/rbac.md"
+    },
+    {
+      "source": "reference.md",
+      "section": "`rbac_scopes_with_permission`",
+      "destination": "reference/rbac.md"
+    },
+    {
+      "source": "reference.md",
+      "section": "FGA functions",
+      "destination": "reference/openfga.md"
+    },
+    {
+      "source": "reference.md",
+      "section": "`fga_check_current`",
+      "destination": "reference/openfga.md"
+    },
+    {
+      "source": "reference.md",
+      "section": "`fga_list_objects_current`",
+      "destination": "reference/openfga.md"
+    },
+    {
+      "source": "reference.md",
+      "section": "`fga_list_object_ids_current`",
+      "destination": "reference/openfga.md"
+    },
+    {
+      "source": "reference.md",
+      "section": "Shared functions",
+      "destination": "reference/shared.md"
+    },
+    {
+      "source": "reference.md",
+      "section": "Tables",
+      "destination": "reference/shared.md"
+    },
+    {
+      "source": "errors-and-limits.md",
+      "section": "intro",
+      "destination": "reference/errors.md"
+    },
+    {
+      "source": "errors-and-limits.md",
+      "section": "Error format",
+      "destination": "reference/errors.md"
+    },
+    {
+      "source": "errors-and-limits.md",
+      "section": "RBAC errors",
+      "destination": "reference/errors.md"
+    },
+    {
+      "source": "errors-and-limits.md",
+      "section": "OpenFGA errors",
+      "destination": "reference/errors.md"
+    },
+    {
+      "source": "errors-and-limits.md",
+      "section": "Errors from Postgres",
+      "destination": "reference/errors.md"
+    },
+    {
+      "source": "errors-and-limits.md",
+      "section": "Limits",
+      "destination": "reference/limits.md"
+    },
+    {
+      "source": "javascript.md",
+      "section": "Install",
+      "destination": "integrations/javascript.md"
+    },
+    {
+      "source": "javascript.md",
+      "section": "Entry points",
+      "destination": "integrations/javascript.md"
+    },
+    {
+      "source": "javascript.md",
+      "section": "Check as a subject",
+      "destination": "integrations/javascript.md"
+    },
+    {
+      "source": "javascript.md",
+      "section": "Get the current subject",
+      "destination": "integrations/javascript.md"
+    },
+    {
+      "source": "javascript.md",
+      "section": "Use from a CDN",
+      "destination": "integrations/javascript.md"
+    },
+    {
+      "source": "javascript.md",
+      "section": "Compatibility",
+      "destination": "integrations/javascript.md"
+    },
+    {
+      "source": "javascript.md",
+      "section": "Results and errors",
+      "destination": "reference/javascript.md"
+    },
+    {
+      "source": "javascript.md",
+      "section": "Methods",
+      "destination": "reference/javascript.md"
+    },
+    {
+      "source": "javascript.md",
+      "section": "Other imports",
+      "destination": "reference/javascript.md"
+    }
+  ],
+  "legacyAnchors": {
+    "rbac": {
+      "use-from-javascript": {
+        "page": "models/rbac/overview.md",
+        "anchor": "use-from-javascript"
+      },
+      "before-you-start": {
+        "page": "models/rbac/overview.md",
+        "anchor": "before-you-start"
+      },
+      "identity": {
+        "page": "integrations/identity.md",
+        "anchor": "identity"
+      },
+      "plain-postgres": {
+        "page": "integrations/identity.md",
+        "anchor": "plain-postgres"
+      },
+      "supabase-and-postgrest": {
+        "page": "integrations/identity.md",
+        "anchor": "supabase-and-postgrest"
+      },
+      "subject-type": {
+        "page": "integrations/identity.md",
+        "anchor": "subject-type"
+      },
+      "the-type-of-current_subject_id": {
+        "page": "integrations/identity.md",
+        "anchor": "the-type-of-current_subject_id"
+      },
+      "privileges": {
+        "page": "integrations/privileges.md",
+        "anchor": "rbac-and-shared-functions"
+      },
+      "create-roles": {
+        "page": "models/rbac/overview.md",
+        "anchor": "create-roles"
+      },
+      "scenario-1-app-wide-roles": {
+        "page": "models/rbac/app-wide.md",
+        "anchor": "scenario-1-app-wide-roles"
+      },
+      "scenario-2-roles-scoped-to-a-tenant": {
+        "page": "models/rbac/tenants.md",
+        "anchor": "scenario-2-roles-scoped-to-a-tenant"
+      },
+      "rules": {
+        "page": "models/rbac/tenants.md",
+        "anchor": "rules"
+      },
+      "change-and-remove-roles": {
+        "page": "models/rbac/manage.md",
+        "anchor": "change-and-remove-roles"
+      },
+      "errors": {
+        "page": "models/rbac/manage.md",
+        "anchor": "errors"
+      },
+      "clean-up-with-delete_subject": {
+        "page": "integrations/cleanup.md",
+        "anchor": "clean-up-with-delete_subject"
+      },
+      "warnings-and-limits": {
+        "page": "models/rbac/overview.md",
+        "anchor": "warnings-and-limits"
+      }
+    },
+    "fga": {
+      "use-from-javascript": {
+        "page": "models/openfga/overview.md",
+        "anchor": "use-from-javascript"
+      },
+      "how-the-functions-map-to-openfga": {
+        "page": "models/openfga/overview.md",
+        "anchor": "how-the-functions-map-to-openfga"
+      },
+      "write-a-model": {
+        "page": "models/openfga/models.md",
+        "anchor": "write-a-model"
+      },
+      "write-tuples": {
+        "page": "models/openfga/tuples.md",
+        "anchor": "write-tuples"
+      },
+      "check": {
+        "page": "models/openfga/checks.md",
+        "anchor": "check"
+      },
+      "listobjects": {
+        "page": "models/openfga/checks.md",
+        "anchor": "listobjects"
+      },
+      "listusers": {
+        "page": "models/openfga/checks.md",
+        "anchor": "listusers"
+      },
+      "read": {
+        "page": "models/openfga/checks.md",
+        "anchor": "read"
+      },
+      "contextual-tuples": {
+        "page": "models/openfga/checks.md",
+        "anchor": "contextual-tuples"
+      },
+      "functions-for-rls": {
+        "page": "models/openfga/checks.md",
+        "anchor": "functions-for-rls"
+      },
+      "change-the-model": {
+        "page": "models/openfga/update-models.md",
+        "anchor": "change-the-model"
+      },
+      "privileges": {
+        "page": "integrations/privileges.md",
+        "anchor": "openfga-functions"
+      },
+      "differences-from-openfga": {
+        "page": "models/openfga/compatibility.md",
+        "anchor": "differences-from-openfga"
+      }
+    },
+    "conditions": {
+      "a-model-with-conditions": {
+        "page": "models/openfga/conditions.md",
+        "anchor": "a-model-with-conditions"
+      },
+      "cel-subset": {
+        "page": "reference/cel.md",
+        "anchor": "cel-subset"
+      },
+      "write-context": {
+        "page": "models/openfga/conditions.md",
+        "anchor": "write-context"
+      },
+      "access-that-expires": {
+        "page": "models/openfga/condition-examples.md",
+        "anchor": "access-that-expires"
+      },
+      "an-ip-range": {
+        "page": "models/openfga/condition-examples.md",
+        "anchor": "an-ip-range"
+      },
+      "lists": {
+        "page": "models/openfga/condition-examples.md",
+        "anchor": "lists"
+      },
+      "which-context-wins": {
+        "page": "models/openfga/condition-examples.md",
+        "anchor": "which-context-wins"
+      },
+      "contextual-tuples": {
+        "page": "models/openfga/condition-examples.md",
+        "anchor": "contextual-tuples"
+      },
+      "write-conditioned-tuples": {
+        "page": "models/openfga/condition-examples.md",
+        "anchor": "write-conditioned-tuples"
+      },
+      "when-the-extension-cannot-evaluate-a-condition": {
+        "page": "models/openfga/condition-behavior.md",
+        "anchor": "when-the-extension-cannot-evaluate-a-condition"
+      },
+      "stale-context": {
+        "page": "models/openfga/condition-behavior.md",
+        "anchor": "stale-context"
+      },
+      "conditions-in-rls-helpers": {
+        "page": "models/openfga/condition-behavior.md",
+        "anchor": "conditions-in-rls-helpers"
+      },
+      "more-expressions": {
+        "page": "models/openfga/condition-behavior.md",
+        "anchor": "more-expressions"
+      }
+    },
+    "rls": {
+      "before-you-start": {
+        "page": "rls/policies.md",
+        "anchor": "before-you-start"
+      },
+      "policies-for-rbac": {
+        "page": "rls/policies.md",
+        "anchor": "policies-for-rbac"
+      },
+      "tenant-tables-the-fast-path": {
+        "page": "rls/policies.md",
+        "anchor": "tenant-tables-the-fast-path"
+      },
+      "writes-check-the-row": {
+        "page": "rls/policies.md",
+        "anchor": "writes-check-the-row"
+      },
+      "app-wide-or-scoped-checks": {
+        "page": "rls/policies.md",
+        "anchor": "app-wide-or-scoped-checks"
+      },
+      "other-rules": {
+        "page": "rls/policies.md",
+        "anchor": "other-rules"
+      },
+      "policies-for-both-models": {
+        "page": "rls/combine-models.md",
+        "anchor": ""
+      },
+      "write-the-models": {
+        "page": "rls/combine-models.md",
+        "anchor": "write-the-models"
+      },
+      "create-the-table-and-the-data": {
+        "page": "rls/combine-models.md",
+        "anchor": "create-the-table-and-the-data"
+      },
+      "current-subject-functions": {
+        "page": "rls/combine-models.md",
+        "anchor": "current-subject-functions"
+      },
+      "write-the-policies": {
+        "page": "rls/combine-models.md",
+        "anchor": "write-the-policies"
+      },
+      "plan-time-evaluation": {
+        "page": "rls/performance.md",
+        "anchor": "plan-time-evaluation"
+      },
+      "mistakes-in-names-raise-errors": {
+        "page": "rls/denies-and-context.md",
+        "anchor": "mistakes-in-names-raise-errors"
+      },
+      "row-attributes-that-only-rls-sees": {
+        "page": "rls/denies-and-context.md",
+        "anchor": "row-attributes-that-only-rls-sees"
+      },
+      "conditions-in-policies": {
+        "page": "rls/denies-and-context.md",
+        "anchor": "conditions-in-policies"
+      },
+      "clean-up-when-a-user-is-deleted": {
+        "page": "integrations/cleanup.md",
+        "anchor": "clean-up-when-a-user-is-deleted"
+      }
+    },
+    "reference": {
+      "groups": {
+        "page": "reference.md",
+        "anchor": ""
+      },
+      "privileges": {
+        "page": "integrations/privileges.md",
+        "anchor": ""
+      },
+      "shared-functions": {
+        "page": "reference/shared.md",
+        "anchor": "shared-functions"
+      },
+      "current_subject_id": {
+        "page": "reference/shared.md",
+        "anchor": "current_subject_id"
+      },
+      "current_subject_type": {
+        "page": "reference/shared.md",
+        "anchor": "current_subject_type"
+      },
+      "delete_subject": {
+        "page": "reference/shared.md",
+        "anchor": "delete_subject"
+      },
+      "rbac-functions": {
+        "page": "reference/rbac.md",
+        "anchor": "rbac-functions"
+      },
+      "rbac_create_role": {
+        "page": "reference/rbac.md",
+        "anchor": "rbac_create_role"
+      },
+      "rbac_drop_role": {
+        "page": "reference/rbac.md",
+        "anchor": "rbac_drop_role"
+      },
+      "rbac_assign_role": {
+        "page": "reference/rbac.md",
+        "anchor": "rbac_assign_role"
+      },
+      "rbac_unassign_role": {
+        "page": "reference/rbac.md",
+        "anchor": "rbac_unassign_role"
+      },
+      "rbac_user_permissions": {
+        "page": "reference/rbac.md",
+        "anchor": "rbac_user_permissions"
+      },
+      "rbac_users_with_role": {
+        "page": "reference/rbac.md",
+        "anchor": "rbac_users_with_role"
+      },
+      "fga-functions": {
+        "page": "reference/openfga.md",
+        "anchor": "fga-functions"
+      },
+      "fga_write_authorization_model": {
+        "page": "reference/openfga.md",
+        "anchor": "fga_write_authorization_model"
+      },
+      "fga_read_authorization_model": {
+        "page": "reference/openfga.md",
+        "anchor": "fga_read_authorization_model"
+      },
+      "fga_read_authorization_models": {
+        "page": "reference/openfga.md",
+        "anchor": "fga_read_authorization_models"
+      },
+      "fga_delete_store": {
+        "page": "reference/openfga.md",
+        "anchor": "fga_delete_store"
+      },
+      "fga_write": {
+        "page": "reference/openfga.md",
+        "anchor": "fga_write"
+      },
+      "fga_write_tuple": {
+        "page": "reference/openfga.md",
+        "anchor": "fga_write_tuple"
+      },
+      "fga_delete_tuple": {
+        "page": "reference/openfga.md",
+        "anchor": "fga_delete_tuple"
+      },
+      "fga_read": {
+        "page": "reference/openfga.md",
+        "anchor": "fga_read"
+      },
+      "fga_check": {
+        "page": "reference/openfga.md",
+        "anchor": "fga_check"
+      },
+      "fga_list_objects": {
+        "page": "reference/openfga.md",
+        "anchor": "fga_list_objects"
+      },
+      "fga_list_users": {
+        "page": "reference/openfga.md",
+        "anchor": "fga_list_users"
+      },
+      "rls-helpers": {
+        "page": "reference.md",
+        "anchor": ""
+      },
+      "rbac_has_permission": {
+        "page": "reference/rbac.md",
+        "anchor": "rbac_has_permission"
+      },
+      "rbac_has_role": {
+        "page": "reference/rbac.md",
+        "anchor": "rbac_has_role"
+      },
+      "rbac_scopes_with_permission": {
+        "page": "reference/rbac.md",
+        "anchor": "rbac_scopes_with_permission"
+      },
+      "fga_check_current": {
+        "page": "reference/openfga.md",
+        "anchor": "fga_check_current"
+      },
+      "fga_list_objects_current": {
+        "page": "reference/openfga.md",
+        "anchor": "fga_list_objects_current"
+      },
+      "fga_list_object_ids_current": {
+        "page": "reference/openfga.md",
+        "anchor": "fga_list_object_ids_current"
+      },
+      "tables": {
+        "page": "reference/shared.md",
+        "anchor": "tables"
+      }
+    },
+    "errors-and-limits": {
+      "error-format": {
+        "page": "reference/errors.md",
+        "anchor": "error-format"
+      },
+      "detail-namespaces": {
+        "page": "reference/errors.md",
+        "anchor": "detail-namespaces"
+      },
+      "rbac-errors": {
+        "page": "reference/errors.md",
+        "anchor": "rbac-errors"
+      },
+      "openfga-errors": {
+        "page": "reference/errors.md",
+        "anchor": "openfga-errors"
+      },
+      "errors-from-postgres": {
+        "page": "reference/errors.md",
+        "anchor": "errors-from-postgres"
+      },
+      "limits": {
+        "page": "reference/limits.md",
+        "anchor": "limits"
+      }
+    },
+    "javascript": {
+      "install": {
+        "page": "integrations/javascript.md",
+        "anchor": "install"
+      },
+      "entry-points": {
+        "page": "integrations/javascript.md",
+        "anchor": "entry-points"
+      },
+      "check-as-a-subject": {
+        "page": "integrations/javascript.md",
+        "anchor": "check-as-a-subject"
+      },
+      "get-the-current-subject": {
+        "page": "integrations/javascript.md",
+        "anchor": "get-the-current-subject"
+      },
+      "results-and-errors": {
+        "page": "reference/javascript.md",
+        "anchor": "results-and-errors"
+      },
+      "methods": {
+        "page": "reference/javascript.md",
+        "anchor": "methods"
+      },
+      "client-methods": {
+        "page": "reference/javascript.md",
+        "anchor": "client-methods"
+      },
+      "admin-methods": {
+        "page": "reference/javascript.md",
+        "anchor": "admin-methods"
+      },
+      "names-of-arguments": {
+        "page": "reference/javascript.md",
+        "anchor": "names-of-arguments"
+      },
+      "other-imports": {
+        "page": "reference/javascript.md",
+        "anchor": "other-imports"
+      },
+      "use-from-a-cdn": {
+        "page": "integrations/javascript.md",
+        "anchor": "use-from-a-cdn"
+      },
+      "compatibility": {
+        "page": "integrations/javascript.md",
+        "anchor": "compatibility"
+      }
+    },
+    "guide": {
+      "pages": {
+        "page": "README.md",
+        "anchor": "pages"
+      },
+      "which-model-do-i-use": {
+        "page": "README.md",
+        "anchor": "which-model-do-i-use"
+      },
+      "conventions-in-the-examples": {
+        "page": "README.md",
+        "anchor": "conventions-in-the-examples"
+      }
+    },
+    "": {
+      "what-it-is": {
+        "page": "docs/src/content/docs/index.mdx",
+        "anchor": "what-it-is"
+      },
+      "where-to-start": {
+        "page": "docs/src/content/docs/index.mdx",
+        "anchor": "where-to-start"
+      },
+      "status": {
+        "page": "docs/src/content/docs/index.mdx",
+        "anchor": "status"
+      },
+      "the-three-prototypes-of-the-research-history": {
+        "page": "docs/src/content/docs/index.mdx",
+        "anchor": "the-three-prototypes-of-the-research-history"
+      }
+    }
+  },
+  "notes": [
+    "Sections were extracted without changing their code blocks. Shared privilege prose is consolidated in integrations/privileges.md; one duplicate privilege-error example from the old reference was removed.",
+    "Old introductions and the documentation index are replaced by task introductions, the model chooser, and explicit prerequisites.",
+    "All original headings on the seven split pages remain on compatibility pages. The error hint naming docs/conditions.md therefore remains valid.",
+    "The build journal and extension implementation are unchanged."
+  ]
+}

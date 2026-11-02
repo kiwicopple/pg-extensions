@@ -9,11 +9,12 @@
     "dev": "astro dev",
     "start": "astro dev",
     "prebuild": "node scripts/sync.mjs",
-    "build": "astro build && node scripts/check-links.mjs",
+    "build": "astro build && node scripts/check-links.mjs && node scripts/check-content.mjs",
     "preview": "astro preview",
     "fixture": "node scripts/make-fixture.mjs",
     "astro": "astro",
-    "check-links": "node scripts/check-links.mjs"
+    "check-links": "node scripts/check-links.mjs",
+    "check:quickstart": "bash scripts/check-quickstart.sh"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.42.7",

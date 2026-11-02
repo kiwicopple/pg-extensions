@@ -5,7 +5,7 @@
 //
 // Everything this script writes is generated and gitignored; edit the sources in ../pg_permissions.
 //   1. Markdown   -> src/content/docs/<route>.md  (frontmatter added, relative links rewritten;
-//                    the page table is PAGES below, the sidebar is in astro.config.mjs).
+//                    the page inventory and sidebar are in navigation.mjs).
 //                    A page with code tab groups is written as <route>.mdx instead (see convertTabs).
 //   2. Bench data -> src/data/bench/*.json        (copied from pg_permissions/bench/baselines/data)
 //   3. Workloads  -> src/data/workloads.generated.json (description = first sentence of each
@@ -15,6 +15,7 @@
 // line after the imports. rmGenerated removes only those, so cleaning is safe.
 
 import fs from 'node:fs';
+import { pages } from '../navigation.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -23,50 +24,15 @@ const SRC_ROOT = path.resolve(DOCS, '..', 'pg_permissions');
 const OUT_DOCS = path.join(DOCS, 'src', 'content', 'docs');
 const OUT_DATA = path.join(DOCS, 'src', 'data');
 const REPO = process.env.DOCS_REPO_URL ?? 'https://github.com/kiwicopple/pg-extensions';
-const REF = process.env.DOCS_REPO_REF ?? 'main';
+const REF = process.env.DOCS_REPO_REF ?? 'pg_permissions';
 const REPO_PREFIX = 'pg_permissions'; // where SRC_ROOT lives inside the repo
 
 /**
  * source file (relative to pg_permissions) -> route (no leading or trailing slash) and sidebar label.
- * The sidebar in astro.config.mjs lists these routes by slug, so a route added here also needs an entry there.
+ * navigation.mjs defines both the page inventory and sidebar.
  * A page whose source file is missing is skipped with a warning; links to a skipped page render as plain code.
  */
-const PAGES = [
-	// user docs
-	{ src: 'docs/README.md', route: 'guide', label: 'Using pg_permissions' },
-	{ src: 'docs/install.md', route: 'install', label: 'Install' },
-	{ src: 'docs/rbac.md', route: 'rbac', label: 'RBAC' },
-	{ src: 'docs/fga.md', route: 'fga', label: 'FGA' },
-	{ src: 'docs/conditions.md', route: 'conditions', label: 'Conditions' },
-	{ src: 'docs/rls.md', route: 'rls', label: 'RLS' },
-	{ src: 'docs/reference.md', route: 'reference', label: 'Reference' },
-	{ src: 'docs/errors-and-limits.md', route: 'errors-and-limits', label: 'Errors and limits' },
-	{ src: 'docs/javascript.md', route: 'javascript', label: 'JavaScript setup' },
-	// contributing
-	{ src: 'test/README.md', route: 'contributing/test-suite', label: 'Test suite and bench harness' },
-	{ src: 'STYLE.md', route: 'contributing/style-guide', label: 'Style guide' },
-	// research
-	{ src: 'research/README.md', route: 'research/overview', label: 'Overview' },
-	{ src: 'research/plan.md', route: 'research/plan', label: 'Plan' },
-	{ src: 'research/goals.md', route: 'research/goals', label: 'Goals' },
-	{ src: 'research/decision.md', route: 'research/decision', label: 'Decision guide' },
-	{ src: 'research/designs/a-tuple-core.md', route: 'research/designs/a-tuple-core', label: 'A: tuple core' },
-	{ src: 'research/designs/b-policy-first.md', route: 'research/designs/b-policy-first', label: 'B: policy first' },
-	{ src: 'research/designs/c-compiled-model.md', route: 'research/designs/c-compiled-model', label: 'C: compiled model' },
-	{ src: 'research/designs/d-per-model.md', route: 'research/designs/d-per-model', label: 'D: per-model tables (the extension)' },
-	{ src: 'research/designs/d-conditions.md', route: 'research/designs/d-conditions', label: 'D: conditions (CEL)' },
-	{ src: 'research/prototypes/README.md', route: 'research/prototypes/overview', label: 'Overview' },
-	{ src: 'research/prototypes/a-tuple-core.md', route: 'research/prototypes/a-tuple-core', label: 'A: tuple core usage' },
-	{ src: 'research/prototypes/b-policy-first.md', route: 'research/prototypes/b-policy-first', label: 'B: policy first usage' },
-	{ src: 'research/prototypes/c-compiled-model.md', route: 'research/prototypes/c-compiled-model', label: 'C: compiled model usage' },
-	{ src: 'research/benchmarks/README.md', route: 'research/benchmarks/overview', label: 'Overview' },
-	{ src: 'research/benchmarks/COMPARISON.md', route: 'research/benchmarks/comparison', label: 'Engine comparison (report)' },
-	{ src: 'research/benchmarks/VERSIONS.md', route: 'research/benchmarks/versions-report', label: 'Postgres versions (report)' },
-	{ src: 'research/benchmarks/OPTIMIZATIONS.md', route: 'research/benchmarks/optimizations-report', label: 'Optimizations (report)' },
-	{ src: 'research/benchmarks/D.md', route: 'research/benchmarks/design-d-report', label: 'Design D (report)' },
-	{ src: 'research/upstream/openfga-cycle-but-not-inconsistency.md', route: 'research/upstream/openfga-cycle-but-not', label: 'OpenFGA report: cycle with but not' },
-	{ src: 'research/journal.md', route: 'research/journal', label: 'Build journal' },
-];
+const PAGES = pages;
 
 /** Directories (and a few files) that have a better home on the site than GitHub. */
 const DIR_ROUTES = {
@@ -122,7 +88,7 @@ function githubUrl(relToRoot, isDir) {
 }
 
 /** Rewrite one link target found in `srcFile`. Returns {url} or {code} (render as plain code). */
-function rewriteTarget(target, srcFile, fromRoute) {
+function rewriteTarget(target, srcFile, fromRoute, markdown = false) {
 	if (/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(target) || target.startsWith('#')) return { url: target };
 	const m = target.match(/^([^#?]*)([?#].*)?$/);
 	const pathPart = m[1];
@@ -130,9 +96,16 @@ function rewriteTarget(target, srcFile, fromRoute) {
 	const abs = path.resolve(SRC_ROOT, path.dirname(srcFile), decodeURI(pathPart));
 	const rel = posix(path.relative(SRC_ROOT, abs));
 	if (rel.startsWith('..')) return { code: target };
-	if (bySrc.has(rel)) return { url: routeLink(fromRoute, bySrc.get(rel).route) + tail.replace(/^\?[^#]*/, '') };
+	if (bySrc.has(rel)) {
+		const route = bySrc.get(rel).route;
+		const url = markdown ? path.posix.relative(path.posix.dirname(fromRoute), route + '.md') : routeLink(fromRoute, route);
+		return { url: url + tail.replace(/^\?[^#]*/, '') };
+	}
 	const key = rel.replace(/\/$/, '');
-	if (DIR_ROUTES[key]) return { url: routeLink(fromRoute, DIR_ROUTES[key]) + tail };
+	if (DIR_ROUTES[key]) {
+		const route = DIR_ROUTES[key];
+		return { url: (markdown ? path.posix.relative(path.posix.dirname(fromRoute), route + '.md') : routeLink(fromRoute, route)) + tail };
+	}
 	if (!fs.existsSync(abs)) {
 		warn(`${srcFile}: link target not found: ${target}`);
 		return { code: target };
@@ -142,7 +115,7 @@ function rewriteTarget(target, srcFile, fromRoute) {
 }
 
 /** Rewrite links in markdown, leaving fenced code blocks and inline code untouched. */
-function rewriteLinks(body, srcFile, fromRoute) {
+function rewriteLinks(body, srcFile, fromRoute, markdown = false) {
 	const lines = body.split('\n');
 	let fence = null;
 	return lines
@@ -159,12 +132,12 @@ function rewriteLinks(body, srcFile, fromRoute) {
 			const re = /(`+[^`]*`+)|(!?)\[((?:[^\]`]|`[^`]*`)*)\]\(([^)\s]+)(\s+"[^"]*")?\)/g;
 			line = line.replace(re, (all, code, bang, text, target, title) => {
 				if (code) return all;
-				const r = rewriteTarget(target, srcFile, fromRoute);
+				const r = rewriteTarget(target, srcFile, fromRoute, markdown);
 				if (r.code) return bang ? all : `${text} (\`${r.code}\`)`;
 				return `${bang}[${text}](${r.url}${title ?? ''})`;
 			});
 			return line.replace(/^(\s*\[[^\]]+\]:\s*)(\S+)/, (all, pre, target) => {
-				const r = rewriteTarget(target, srcFile, fromRoute);
+				const r = rewriteTarget(target, srcFile, fromRoute, markdown);
 				return r.url ? pre + r.url : all;
 			});
 		})
@@ -311,6 +284,8 @@ function syncMarkdown() {
 			title = stripInline(h1[1]);
 			text = text.replace(h1[0], ''); // Starlight renders the title as the page H1
 		}
+		const historical = /^research\/(?:designs|prototypes)\/[abc]-/.test(page.route) || ['research/plan', 'research/decision'].includes(page.route);
+		if (historical) title = `Historical: ${title}`;
 		const description = firstParagraph(text);
 		let body = rewriteLinks(text, page.src, page.route);
 		const tabs = convertTabs(body, page.src);
@@ -321,6 +296,7 @@ function syncMarkdown() {
 			'---',
 			`title: ${yaml(title)}`,
 			description ? `description: ${yaml(description)}` : null,
+			page.legacy ? 'pagefind: false' : null,
 			`editUrl: ${yaml(`${REPO}/edit/${REF}/${REPO_PREFIX}/${page.src}`)}`,
 			`sidebar:\n  label: ${yaml(page.label)}${page.order ? `\n  order: ${page.order}` : ''}`,
 			'---',
@@ -341,6 +317,38 @@ function syncMarkdown() {
 		}
 	}
 	console.log(`sync: ${n}/${PAGES.length} markdown pages -> src/content/docs (${nMdx} as .mdx)`);
+}
+
+
+function syncPlainMarkdown() {
+	const publicDir = path.join(DOCS, 'public');
+	const markdownDir = path.join(publicDir, 'markdown');
+	fs.rmSync(markdownDir, { recursive: true, force: true });
+	const base = (process.env.DOCS_BASE ?? '').replace(/\/$/, '');
+	const site = (process.env.DOCS_SITE ?? '').replace(/\/$/, '');
+	const index = [
+		'# pg_permissions', '',
+		'> Authorization in Postgres: RBAC and OpenFGA relationships, enforced through RLS.', '',
+		'Use current guides and reference for implementation. Research records include historical designs and superseded plans.',
+		'Cedar is a future direction, not an implemented model. SQL and JavaScript examples are both included in Markdown.', '',
+		'## Guides and reference', '',
+	];
+	const groups = { current: [], research: [], contributing: [] };
+	for (const page of AVAILABLE) {
+		const text = fs.readFileSync(path.join(SRC_ROOT, page.src), 'utf8');
+		const dest = path.join(markdownDir, page.route + '.md');
+		fs.mkdirSync(path.dirname(dest), { recursive: true });
+		const body = rewriteLinks(text, page.src, page.route, true);
+		fs.writeFileSync(dest, body);
+		if (page.legacy) continue;
+		const description = firstParagraph(text);
+		const title = stripInline(text.match(/^# (.+)$/m)?.[1] ?? page.label);
+		const group = page.route.startsWith('research/') ? 'research' : page.route.startsWith('contributing/') ? 'contributing' : 'current';
+		groups[group].push(`- [${title}](${site}${base}/markdown/${page.route}.md): ${description}`);
+	}
+	index.push(...groups.current, '', '## Research and design records', '', ...groups.research, '', '## Contributing', '', ...groups.contributing);
+	fs.writeFileSync(path.join(publicDir, 'llms.txt'), index.join('\n') + '\n');
+	console.log(`sync: ${AVAILABLE.length} plain Markdown exports and llms.txt`);
 }
 
 function syncData() {
@@ -398,6 +406,7 @@ if (!fs.existsSync(SRC_ROOT)) {
 	process.exit(1);
 }
 syncMarkdown();
+syncPlainMarkdown();
 syncData();
 syncWorkloads();
 if (warnings.length) console.warn(`sync: ${warnings.length} warning(s)`);

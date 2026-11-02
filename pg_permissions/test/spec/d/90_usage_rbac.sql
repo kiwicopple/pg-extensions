@@ -1,6 +1,6 @@
--- Goal: every example in docs/README.md ("Using pg_permissions") works as written.
+-- Goal: the examples in docs/models/rbac/ (roles and tenants), docs/integrations/cleanup.md work as written.
 --
--- This file mirrors that page, section by section and in the same order, so the
+-- This file mirrors the walkthrough in prerequisite order, so the
 -- state built by one section (roles, assignments, tables) is what the next one
 -- uses. When you change an example in the page, change it here, and the other
 -- way round. Statements without a result are copied from the page. Queries that
@@ -9,7 +9,7 @@
 -- surface (identity, privileges, RLS rules).
 -- The extension's copy of test/spec/90_usage_rbac.sql (the prototypes' version,
 -- in their unprefixed API): the same assertions, with the rbac_* names. Calls
--- pass arguments by name, as in docs/README.md.
+-- pass arguments by name, as in docs/models/rbac/overview.md.
 --
 -- The page's own IDs, not fixtures/ids.sql: the page defines them in its first
 -- code block.

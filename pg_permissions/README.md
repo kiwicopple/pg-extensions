@@ -7,7 +7,7 @@
 
 The extension is pure SQL. It needs no other extension and no C code. It runs on Postgres 16, 17 and 18.
 
-- Source: https://github.com/kiwicopple/pg-extensions/tree/main/pg_permissions
+- Source: https://github.com/kiwicopple/pg-extensions/tree/pg_permissions/pg_permissions
 - database.dev (dbdev): https://database.dev/kiwicopple/pg_permissions (not yet published)
 
 ## Features
@@ -22,89 +22,31 @@ The extension is pure SQL. It needs no other extension and no C code. It runs on
 
 ## Quick start
 
-Install the extension with one of two methods.
-
-**database.dev (dbdev).** The package is `kiwicopple@pg_permissions`. It is not published yet. Enable pg_tle, generate a migration with the `dbdev` command line tool, and run it:
-
-```bash
-dbdev add -o "./migrations/" -v 0.0.1 \
-  package -n kiwicopple@pg_permissions
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
-  -f "./migrations/<generated file>"
-```
-
-**Direct.** Run the SQL file once in each database:
+Run the SQL file once in a fresh database, from this directory:
 
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
   -f pg_permissions--0.0.1.sql
 ```
 
-[Install](docs/install.md) has the full steps for both methods, and for a non-superuser install, pg_tle and Docker. The extension creates its own schema `permissions`. Do not use `with schema`.
+Then follow [Protect a table](docs/get-started/quickstart.md). It creates a role, grants Alice access to one organization, and verifies that Bob sees no rows. The walkthrough includes request identity and tests queries as an application database role.
 
-Define two roles, and give a user the `editor` role in one organization. The role `editor` inherits `viewer`:
-
-```sql
-select permissions.rbac_create_role(
-  role => 'viewer',
-  permissions => '{documents.read}'
-);
-select permissions.rbac_create_role(
-  role => 'editor',
-  permissions => '{documents.edit}',
-  inherits => '{viewer}'
-);
-select permissions.rbac_assign_role(
-  user_id => '11111111-1111-1111-1111-111111111111',
-  role => 'editor',
-  scope => 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
-);
-```
-
-Add an RLS policy. The policy lets a user read the rows of each organization where the user has `documents.read`:
-
-```sql
-create table public.documents (
-  id uuid primary key default gen_random_uuid(),
-  org_id uuid not null,
-  title text not null
-);
-create index on public.documents (org_id);
-alter table public.documents enable row level security;
-grant select on public.documents to authenticated;
-
-create policy documents_select
-  on public.documents
-  for select
-  to authenticated
-  using (
-    org_id = any (
-      array(
-        select unnest(
-          permissions.rbac_scopes_with_permission(
-            permission => 'documents.read'
-          )
-        )::uuid
-      )
-    )
-  );
-```
-
-The example uses the role `authenticated` of Supabase. On plain Postgres, create it first. The extension finds the current user in the JWT of the request (Supabase and PostgREST). On plain Postgres, set `permissions.subject_id` at the start of each transaction. See [RBAC](docs/rbac.md#identity).
+[Install](docs/install.md) covers non-superuser installation, pg_tle, and Docker. The database.dev package is not published yet. The extension creates the `permissions` schema itself; do not add `with schema`.
 
 ## Documentation
 
-| Page | What it covers |
+Start with the [documentation map](docs/README.md) or [choose a permission model](docs/get-started/choose-a-model.md).
+
+| Task | Guide |
 | --- | --- |
-| [Index](docs/README.md) | The list of pages, and how to choose a model |
-| [Install](docs/install.md) | Install with database.dev, with psql, as a non-superuser, with pg_tle and with Docker |
-| [RBAC](docs/rbac.md) | Identity, roles, permissions, scopes and privileges |
-| [The OpenFGA model](docs/fga.md) | Authorization models, tuples, Check, ListObjects, ListUsers and Read |
-| [OpenFGA conditions](docs/conditions.md) | CEL conditions on tuples |
-| [RLS policies](docs/rls.md) | RLS policies for RBAC, and for both models together |
-| [Function reference](docs/reference.md) | The signature of each function |
-| [Errors and limits](docs/errors-and-limits.md) | Error codes and limits |
-| [JavaScript client: setup](docs/javascript.md) | The npm package `permissions`: install, entry points and errors |
+| Set request identity | [Identity and request context](docs/integrations/identity.md) |
+| Assign roles and permissions | [RBAC](docs/models/rbac/overview.md) |
+| Share objects through relationships | [OpenFGA](docs/models/openfga/overview.md) |
+| Add expiry or attribute conditions | [Conditions](docs/models/openfga/conditions.md) |
+| Enforce access on a table | [RLS policies](docs/rls/policies.md) |
+| Combine roles, shares, and denies | [Combine models](docs/rls/combine-models.md) |
+| Look up a function | [Shared](docs/reference/shared.md), [RBAC](docs/reference/rbac.md), [OpenFGA](docs/reference/openfga.md) |
+| Connect from JavaScript | [Setup](docs/integrations/javascript.md) and [reference](docs/reference/javascript.md) |
 
 ## JavaScript client
 
@@ -127,7 +69,7 @@ const { data: canEdit } = await permissions.rbac.hasPermission({
 })
 ```
 
-See [JavaScript client: setup](docs/javascript.md) for the methods and the errors. The RBAC and OpenFGA pages show each call next to the SQL.
+See [JavaScript client: setup](docs/integrations/javascript.md) for the methods and the errors. The RBAC and OpenFGA pages show each call next to the SQL.
 
 ## Contributing
 
