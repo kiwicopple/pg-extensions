@@ -1,0 +1,19 @@
+# Cedar integration-test requests not run, with the reason. Tab-separated:
+# case[:rN]	scope	reason	note
+#   case    the case name in cases/ (corpus/<sha1> or tests/<dir>/<file>);
+#           append :rN to skip one request (N counts from 0) instead of the case
+#   scope   all, or the run it applies to: json, text (policy format) or
+#           stored, overlay (entity mode)
+#   reason  one word from the list below; the report counts by reason
+#   note    free text: the divergence, with a link to research/designs/e-cedar.md
+# Never edit an expectation to make a case pass; list it here with the reason.
+#
+# Reasons:
+#   divergence  a documented difference from Cedar (e-cedar.md, "Divergences")
+#   limit       the case exceeds a documented limit (e-cedar.md, "Limits")
+#   nul         a string holds U+0000 and the U+E000 substitution cannot apply
+#               (generate.py skips these by itself and counts them as
+#               nul-collision; none in the pinned release)
+#
+# Cases outside the selected phase (a gated feature: decimal, ipaddr,
+# datetime, duration, template) are left out by generate.py, not listed here.
