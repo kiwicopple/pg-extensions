@@ -1,6 +1,6 @@
 ---
 import { DESIGN_IDS } from '../../lib/chart';
-import { allSeries, primary, runs, scalingSeries, seriesVersionLabel, usingFixture, DATA_URL } from '../../lib/bench';
+import { allSeries, filledNote, primary, runs, scalingSeries, seriesVersionLabel, usingFixture, DATA_URL } from '../../lib/bench';
 // What data the dashboard is showing, plus a stat strip and the cross-engine checksum result.
 const s = primary;
 const dates = s ? s.runs.map((r) => r.date.slice(0, 10)).sort() : [];
@@ -59,7 +59,7 @@ if (s) {
 					<div class="value">
 						{agree} of {total}
 					</div>
-					<div class="note">configurations with identical visible ids on A, B and C</div>
+					<div class="note">configurations with identical visible ids on all engines</div>
 				</div>
 			</div>
 			<p>
@@ -67,6 +67,7 @@ if (s) {
 				{hosts.length > 0 && <>{' '}on {hosts.join('; ')}</>}: Postgres {s.versions.join(', ')}, the latest run for each design, scale
 				and shape. This is the primary series, and we chose it on purpose. It is Docker, the newest Postgres version, and the
 				optimized designs when their runs exist (otherwise the newest Docker series, then local).{' '}
+				{filledNote(s) && <>{filledNote(s)}. </>}
 				{s.runs[0]?.clients && <>{s.runs[0].clients} pgbench clients, {s.runs[0].duration_s} s for each workload. </>}
 				Docker runs cover only the large default, medium deep and medium wide configurations.
 				{scaling && scaling !== s && (

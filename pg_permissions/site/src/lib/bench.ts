@@ -5,7 +5,7 @@
 //
 // Real data wins automatically: as soon as one file exists in src/data/bench the fixture is ignored.
 
-import type { Design } from './chart';
+import { DESIGN_IDS, engine, type Design } from './chart';
 import labels from '../data/workload-labels.json';
 
 export interface WorkloadResult {
@@ -54,7 +54,7 @@ const fixture = import.meta.glob<Omit<Run, 'file'>>('/src/data/fixture/*.json', 
 export const usingFixture = Object.keys(real).length === 0;
 const source = usingFixture ? fixture : real;
 
-const DESIGNS = ['a', 'b', 'c', 'd'];
+const DESIGNS = DESIGN_IDS as string[];
 const SCALES = ['small', 'medium', 'large'];
 const SHAPES = ['default', 'deep', 'wide'];
 
@@ -76,7 +76,7 @@ function valid(r: any, file: string): boolean {
  */
 function tagOf(r: { tag?: string; run_id?: string }): string | undefined {
 	if (typeof r.tag === 'string' && r.tag) return r.tag;
-	const m = r.run_id?.match(/^pg\d+-[a-z]+-[abc]-(?:small|medium|large)-(?:default|deep|wide)-(.+)$/);
+	const m = r.run_id?.match(/^pg\d+-[a-z]+-[a-e]-(?:small|medium|large)-(?:default|deep|wide)-(.+)$/);
 	return m?.[1] || undefined;
 }
 
@@ -101,6 +101,8 @@ export interface Series {
 	environment: string;
 	tag?: string;
 	runs: Run[];
+	/** designs filled in from another tagged series (see `withMissingDesigns`) */
+	filled?: { design: Design; tag?: string }[];
 	/** latest run per (design, scale, shape) */
 	get(design: Design, scale: string, shape: string): Run | undefined;
 	/** configurations present, ordered */
@@ -183,11 +185,40 @@ const newest = (a: Series, b: Series) => {
 	return db.localeCompare(da) || b.major - a.major;
 };
 
-export const primary: Series | undefined =
+/**
+ * A design that the chosen series has no runs for at all (Cedar, E, only has its own `p5` runs) is filled in from the
+ * series with the newest runs of it, among the series with the same environment and Postgres major version.
+ * Designs the series already has keep its own runs.
+ */
+function withMissingDesigns(s: Series): Series {
+	const filled: NonNullable<Series['filled']> = [];
+	const extra: Run[] = [];
+	for (const design of DESIGN_IDS) {
+		if (s.runs.some((r) => r.design === design)) continue;
+		const newestOf = (x: Series) => x.runs.filter((r) => r.design === design).map((r) => r.date).sort().pop() ?? '';
+		const from = allSeries
+			.filter((x) => x !== s && x.environment === s.environment && x.major === s.major && newestOf(x))
+			.sort((a, b) => newestOf(b).localeCompare(newestOf(a)))[0];
+		if (!from) continue;
+		extra.push(...from.runs.filter((r) => r.design === design));
+		filled.push({ design, tag: from.tag });
+	}
+	return filled.length ? { ...makeSeries(s.key, [...s.runs, ...extra]), filled } : s;
+}
+
+const primaryBase: Series | undefined =
 	findSeries(PRIMARY_PREFERENCE.environment, PRIMARY_PREFERENCE.major, PRIMARY_PREFERENCE.tag) ??
 	[...allSeries].filter((s) => s.environment === 'docker').sort(newest)[0] ??
 	[...allSeries].filter((s) => s.environment === 'local').sort(newest)[0] ??
 	[...allSeries].sort(newest)[0];
+
+export const primary: Series | undefined = primaryBase && withMissingDesigns(primaryBase);
+
+/** "Cedar (E) comes from its own tagged run (`p5`)": which designs of a series come from another tagged series. */
+export const filledNote = (s: Series): string =>
+	(s.filled ?? [])
+		.map((f) => `${engine(f.design).name} (${f.design.toUpperCase()}) comes from its own tagged run (${f.tag ? `tag ${f.tag}` : 'untagged'})`)
+		.join('; ');
 
 /** `PG 18.6 (docker, optimized)`: label with the full server version, for captions that name the exact build. */
 export const seriesVersionLabel = (s: Series) =>
@@ -299,7 +330,7 @@ export type ByEngine = Partial<Record<Design, number>>;
 /** p50 of one workload for each engine at one configuration. */
 export function p50s(s: Series, scale: string, shape: string, name: string): ByEngine {
 	const out: ByEngine = {};
-	for (const d of ['a', 'b', 'c', 'd'] as Design[]) {
+	for (const d of DESIGN_IDS) {
 		const v = p50(s.get(d, scale, shape), name);
 		if (v != null) out[d] = v;
 	}

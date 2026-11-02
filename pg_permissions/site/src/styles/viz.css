@@ -1,7 +1,7 @@
 /* Chart tokens. Engine colours are fixed everywhere: A blue, B orange, C aqua (categorical slots 1-3,
    validated all-pairs in light and dark with the dataviz skill's validate_palette.js), D yellow
    (slot 4: passes adjacent pairs in both modes; all-pairs it is close to B's orange, so D is always
-   letter-labelled in legends and table views). */
+   letter-labelled in legends and table views), E (Cedar) purple. */
 :root {
 	--viz-surface: #fcfcfb;
 	--viz-ink: #0b0b0b;
@@ -15,6 +15,7 @@
 	--eng-b: #eb6834;
 	--eng-c: #1baf7a;
 	--eng-d: #eda100;
+	--eng-e: #8a5cd6;
 }
 :root[data-theme='dark'] {
 	--viz-surface: #1a1a19;
@@ -29,6 +30,7 @@
 	--eng-b: #d95926;
 	--eng-c: #199e70;
 	--eng-d: #c98500;
+	--eng-e: #9a72e0;
 }
 
 .viz {
@@ -146,10 +148,12 @@
 .viz-body .eng-b { fill: var(--eng-b); }
 .viz-body .eng-c { fill: var(--eng-c); }
 .viz-body .eng-d { fill: var(--eng-d); }
+.viz-body .eng-e { fill: var(--eng-e); }
 .viz-body .ln-a { stroke: var(--eng-a); }
 .viz-body .ln-b { stroke: var(--eng-b); }
 .viz-body .ln-c { stroke: var(--eng-c); }
 .viz-body .ln-d { stroke: var(--eng-d); }
+.viz-body .ln-e { stroke: var(--eng-e); }
 .viz-body .line {
 	fill: none;
 	stroke-width: 2;
