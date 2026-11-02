@@ -92,7 +92,7 @@ const entities = [
 await permissions.cedar.admin.putEntities(entities)
 ```
 
-A put replaces the whole stored entity that has the same uid. It replaces the attributes, the parents and the tags. An entity that you leave out of the array stays as it is. All the entities of one call are stored in one transaction. The call stores at most 10,000 entities.
+Each supplied entity replaces the stored entity with the same uid, including its attributes, parents and tags. Entities omitted from the array stay unchanged. A call stores up to 10,000 entities in one transaction.
 
 Subjects are entities of the subject type. The user `alice` above is the entity `user::"alice"`. This is the principal when the current subject is `alice` (see [the overview](overview.md#the-subject-is-the-principal)). A user does not need a stored entity to be a principal. A policy that tests `principal in Team::"eng"` or `principal.level` needs the stored entity.
 
@@ -118,7 +118,7 @@ A value that is not valid is the error `cedar:invalid_entity`, with the index of
 
 ## The hierarchy
 
-The `parents` of an entity are its direct parents. Store only these. The test `a in b` follows the parents for you. It is true when `a` is `b`, or when `b` is a parent of `a`, or a parent of a parent, and so on. Carol is in `design`, and `design` is in `eng`. For this reason `user::"carol" in Team::"eng"` is true, and the policy `eng-view-reports` applies to her.
+Store direct parents in `parents`; the evaluator follows the hierarchy. The expression `a in b` is true when `a` equals `b` or `b` is an ancestor of `a`. Carol belongs to `design`, which belongs to `eng`, so `user::"carol" in Team::"eng"` is true and `eng-view-reports` applies to her.
 
 - A parent does not need to be a stored entity. An entity that does not exist has no parents, and it is not an error.
 - The hierarchy cannot have a cycle. A put that makes an entity its own ancestor raises `cedar:invalid_entity`. Cedar rejects cycles too.
@@ -212,10 +212,10 @@ select permissions.cedar_put_entities(
 
 ## Keep entities in sync
 
-Entities are data. Your application changes them when users join a team or when a document moves. Write each change in the same transaction as the change to your own tables. Then a check never sees a state that your application never had.
+Update entities when users join a team or documents move. Write the entity changes and the corresponding application changes in the same transaction so they become visible together.
 
 A row of your own tables does not have to be an entity. For a check in an RLS policy, the policy can pass the columns of the row as attributes. See [Cedar in RLS](../../rls/policies.md#policies-for-cedar). Store an entity when a policy uses its parents, or when you list resources with `cedar_list_resources_current`. The list function returns stored entities only.
 
 ## Next step
 
-Continue with [Check access](checks.md).
+Continue with [Use policy templates](templates.md), then [Check access](checks.md).

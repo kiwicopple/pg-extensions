@@ -37,7 +37,9 @@ The Cedar functions follow the same rule as the others: compute a list once for 
 
 ### Measurements
 
-These numbers come from [the design record](../../research/designs/e-cedar.md#152-cedar_is_authorized_current-the-statement-level-work-in-a-setting) and [the benchmark page](../../research/benchmarks/cedar.md). They are results of single runs on the machines named below. They are not a guarantee. Measure your own policies.
+The tables below record phase 5 measurements from [the design record](../../research/designs/e-cedar.md#152-cedar_is_authorized_current-the-statement-level-work-in-a-setting) and [the benchmark page](../../research/benchmarks/cedar.md). They predate the statement-cache security fixes. The later [phase 9 runs](../../research/benchmarks/cedar.md#phase-9) cover small and medium datasets: list and single-row workloads remained within measurement noise, while the per-row page improved from 39.9 to 35.2 ms at small scale and from 107.8 to 97.5 ms at medium scale (p50). Large scale was not rerun in phase 9.
+
+These measurements describe the workloads and machines below. Measure your own policies before choosing a query shape.
 
 Per row, in microseconds (Postgres 16.4 on a laptop with Apple silicon, 1,000 rows, best of 5 runs):
 
@@ -56,7 +58,7 @@ For one call of the list function (the same setup, 1,000 documents):
 | 20 folder links with a condition: 1,000 documents are walked and checked | 23,302 |
 | `resource is Document` with a condition: every document is checked | 15,336 |
 
-A condition costs about 15 to 23 µs for each candidate resource. A policy without a condition costs almost nothing for each row.
+A condition added about 15 to 23 µs per candidate resource in these measurements. Unconditional permits can avoid that evaluation when no forbid needs checking.
 
 The benchmark of the harness (Postgres 18.6 in Docker, 4 clients, 10 s for each workload, p50 and p95 in ms) has a page of documents that a user can read, with the list in the policy, and a page that checks each row:
 
@@ -70,11 +72,11 @@ The page that checks each row reads about 500 rows at small scale, and about 2,6
 
 ### Rules
 
-- **Use the list for reads.** `id = any (array(select permissions.cedar_list_resources_current(...)))` grows little with the table, because the candidates come from the policies and not from the table. In the benchmark, a page took 0.56 ms at 10,000 documents and 1.19 ms at 1,000,000 documents (p50).
+- **Use the list for reads.** `id = any (array(select permissions.cedar_list_resources_current(...)))` computes accessible ids once per statement. Narrow policy scopes reduce candidate work; broad scopes with conditions can still require checking every stored resource. In the phase 5 sharing benchmark, a page took 0.56 ms at 10,000 documents and 1.19 ms at 1,000,000 documents (p50).
 - **Use the check for writes and for single rows.** A write policy touches few rows.
-- **Keep conditions off the hot path.** A read policy that runs a condition on each of many rows costs tens of microseconds for each row. Move the condition into the entity (an attribute or a group) and use the list. Or keep the rule in a plain SQL policy.
+- **Reduce repeated condition evaluation.** A condition over many candidate resources can dominate the query cost. If the rule can be represented by group membership, use that hierarchy in the policy scope. Moving an attribute into entity storage does not remove the cost of evaluating a condition on it. Rules on row columns can also use a plain SQL policy.
 - **A forbid that applies to a user costs more.** For a user to whom no `forbid` applies, a check of a row is answered from the work of the query. For a user to whom a `forbid` applies, each row evaluates it.
-- **Store each resource as an entity.** The list returns stored entities only. A policy that names a folder with `resource in Folder::"x"` walks the descendants of the folder. A hierarchy with members of other types under the folder makes the walk longer. Keep roles and users out of the hierarchy of the resources.
+- **Store resources that need to appear in lists.** The list returns stored entities only; a row check can use attributes supplied from the row. A policy with `resource in Folder::"x"` walks that folder's descendants, including other entity types. Keep the resource hierarchy focused to avoid unnecessary traversal.
 - **Do not wrap the functions.** The same rule as in [Plan-time evaluation](#plan-time-evaluation) holds. Call the list function directly. Do not pass `plan_time_guard`.
 
 `EXPLAIN` shows a list policy as one InitPlan. A check policy is a filter on the table. The check does the work for the principal once for each query, and `EXPLAIN` does not show it. To see the number of calls, use `auto_explain` with nested statements, or `pg_stat_user_functions` with `track_functions = 'all'`.

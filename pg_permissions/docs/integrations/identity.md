@@ -122,7 +122,7 @@ select permissions.current_subject_type();                    -- service
 commit;
 ```
 
-Do not change the subject type for RBAC. Only `user` subjects hold roles. A request with another subject type holds no role. The subject type matters for the OpenFGA model. There the current subject is `<current_subject_type()>:<current_subject_id()>`. See [RLS with both models](../rls/combine-models.md#current-subject-functions). In the Cedar model the principal is `<current_subject_type()>::"<current_subject_id()>"`, for example `user::"alice"`. Write Cedar policies with the same type. See [the Cedar overview](../models/cedar/overview.md#the-subject-is-the-principal).
+Do not change the subject type for RBAC. Only `user` subjects hold roles. A request with another subject type holds no role. The subject type matters for the OpenFGA model. There the current subject is `<current_subject_type()>:<current_subject_id()>`. See [RLS integration](../rls/combine-models.md#current-subject-functions). In the Cedar model the principal is `<current_subject_type()>::"<current_subject_id()>"`, for example `user::"alice"`. Write Cedar policies with the same type. See [the Cedar overview](../models/cedar/overview.md#the-subject-is-the-principal).
 
 ### The type of `current_subject_id()`
 

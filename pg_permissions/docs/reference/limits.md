@@ -81,7 +81,7 @@ select permissions.fga_write(
 
 ## Cedar limits
 
-The limits are fixed. You cannot change them. Each limit is well above the maximum in Cedar's own test suite. The extension has no counter for evaluation steps. Cedar has no loops, so the size limits bound the work of a request.
+These limits are fixed and exceed the maxima in the tested Cedar corpus. The extension has no evaluation-step counter. Although Cedar has no loops, the number of candidate policies, the entity hierarchy and collection sizes still affect the work of a request. Use `statement_timeout` to bound execution time.
 
 | Limit | Value | What happens when you go over it |
 | --- | --- | --- |
@@ -96,7 +96,7 @@ The limits are fixed. You cannot change them. Each limit is well above the maxim
 | Results of `cedar_list_resources_current` | None | Not applicable. |
 | Size of a Long | -2^63 to 2^63-1 | An entity with another number is `cedar:invalid_entity`. A result that goes beyond the range is an `overflow` error of the policy. |
 
-The RLS functions `cedar_is_authorized_current` and `cedar_list_resources_current` return every result. A cap would hide rows and give no sign of it. The extension has no built-in time limit on a call. To bound the time, set `statement_timeout`. It raises an error and does not return a part of a result.
+`cedar_list_resources_current` has no result cap: a cap could silently hide rows from an RLS query. `cedar_is_authorized_current` returns a single boolean. The extension has no built-in time limit; exceeding Postgres's `statement_timeout` raises an error rather than returning a partial result.
 
 To store more than 10,000 entities, put them in batches. The batches can share a transaction. They then commit together:
 

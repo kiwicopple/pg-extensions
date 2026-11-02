@@ -386,7 +386,8 @@ select permissions.cedar_is_authorized(
 )
 $$)).hint, 'Write a uid as Cedar text, a type and a quoted id: principal => ''User::"alice"'' (a namespaced type: ''App::User::"alice"'').', 'checks: the hint');
 
-select set_config('permissions.subject_id', 'alice', false);
+begin;
+select set_config('permissions.subject_id', 'alice', true);
 select tap.is(permissions.cedar_is_authorized_current(
   action => 'Action::"view"',
   resource => 'Document::"q3"'
@@ -399,7 +400,7 @@ select tap.is(array(select permissions.cedar_list_resources_current(
   action => 'Action::"view"',
   resource_type => 'Document'
 )), '{q3}'::text[], 'checks: the list');
-select set_config('permissions.subject_id', '', false);
+commit;
 select tap.is(permissions.cedar_is_authorized_current(
   action => 'Action::"view"',
   resource => 'Document::"q3"'

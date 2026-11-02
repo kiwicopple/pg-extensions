@@ -1,12 +1,12 @@
 # Use policy templates
 
-Use a template when many policies have the same shape and differ only in the principal or the resource. Write the shape once. Then link it to each pair of entities.
+Use a template when several policies share a rule but apply to different principals or resources. Write the rule once, then create links that fill its slots with specific entities.
 
 First complete [Write policies](policies.md) and [Store entities](entities.md). An admin role runs these calls.
 
 ## Put a template
 
-A template is a policy with a slot in its scope. The slot `?principal` stands in the principal scope. The slot `?resource` stands in the resource scope. A template can have one slot or both. A slot in a condition or in the action scope is an error. A template with no slot is an error, because it is a policy.
+A template has `?principal` in its principal scope, `?resource` in its resource scope, or both. Slots are not allowed in conditions or the action scope. A rule without slots is a static policy; store it with `cedar_put_policy`.
 
 `cedar_put_template` takes a template id and one template, in Cedar text. It also takes `template_json`, the JSON format of the template. Pass exactly one of the two:
 
@@ -88,7 +88,7 @@ await permissions.cedar.admin.linkTemplate({
 })
 ```
 
-A link is a policy. `cedar_is_authorized` matches it and names it in `reasons` like any other policy. A link with the id of a link that exists replaces that link. Cedar's own `link` call rejects a duplicate id, and this call does not, because every put in this API replaces by id.
+A link participates in authorization like a static policy, and its id appears in `reasons` when it determines the decision. Linking to an existing link id replaces that link. This differs from Cedar's `link` call, which rejects duplicate ids; it follows the extension's convention of replacing by id.
 
 `cedar_policies` shows each link with its template and its slot values. A static policy has `null` in both columns:
 
@@ -151,7 +151,7 @@ const { data: templates } = await permissions.cedar.admin.templates()
 
 ## Replace and delete
 
-A put with the id of a template replaces it. The extension fills the slots of its links again from the new template, in the same transaction. The new template must keep the slots that its links fill. If it does not, the put raises `cedar:template_in_use` and names the links.
+Updating a template also updates its linked policies in the same transaction. The replacement must remain compatible with the slots filled by those links; otherwise the function raises `cedar:template_in_use` and names the affected links.
 
 You cannot delete a template while it has links. Delete the links first with `cedar_delete_policy`. The hint of the error names up to five of them:
 

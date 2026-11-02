@@ -1,6 +1,6 @@
 # Write policies
 
-Store the policies that give or deny access. Put each policy with its own id. Replace a policy: put it again with the same id. Delete it when you do not need it.
+Create policies that permit or forbid access, then update or delete them as your rules change. Each policy has a stable id; writing to the same id replaces it.
 
 Install the extension in a fresh database and connect as its owner. For JavaScript, create the [server client](overview.md#use-from-javascript). The later pages use the policies from this page. The admin role runs every call here. A client role cannot call these functions (see [Privileges](../../integrations/privileges.md#cedar-functions)).
 
@@ -31,7 +31,7 @@ await permissions.cedar.admin.putPolicy({
 })
 ```
 
-A put with an id that exists replaces that policy. The put checks the policy. It raises an error with the line and the column when the text has a syntax error:
+Writing to an existing policy id replaces that policy. The function checks syntax and reports the line and column of an error. It does not validate against a Cedar schema:
 
 ```sql
 select permissions.cedar_put_policy(
@@ -185,7 +185,7 @@ const found = policies?.find((p) => p.policyId === 'notes')
 
 ## List policies
 
-`cedar_policies` returns every policy, ordered by id. A row has the id, the effect, the Cedar text of a text put, the policy in JSON (`est`), the annotations, and the template of a link:
+`cedar_policies` returns every policy, ordered by id. Each row includes its effect, original Cedar text (when supplied), JSON representation (`est`), annotations, and template details for a linked policy:
 
 ```sql tab="SQL"
 select
@@ -237,4 +237,4 @@ A policy has at most 64 KiB of text, 4,096 expression nodes and 64 levels of dep
 
 ## Next step
 
-Continue with [Templates](templates.md), or go to [Entities](entities.md).
+Continue with [Store entities](entities.md), then [Use policy templates](templates.md). The access checks later in the walkthrough use both.

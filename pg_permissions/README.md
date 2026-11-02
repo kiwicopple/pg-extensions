@@ -4,11 +4,11 @@
 
 - **RBAC** (`rbac_*` functions): roles that grant permissions. A user holds a role app-wide or in one tenant.
 - **Relationships** (`fga_*` functions): an [OpenFGA](https://openfga.dev)-compatible engine. It has authorization models, tuples, Check, ListObjects, ListUsers and Read, with the error codes of OpenFGA.
-- **Policies** (`cedar_*` functions): a [Cedar](https://www.cedarpolicy.com)-compatible engine. It has policies and templates in Cedar text or JSON, entities with groups, attributes and tags, and `cedar_is_authorized`. It follows Cedar 4.14 and passes Cedar's own integration tests.
+- **Policies** (`cedar_*` functions): evaluate Cedar policies and templates, using entities with groups, attributes and tags. The engine targets Cedar 4.14, with [documented compatibility differences](docs/models/cedar/compatibility.md).
 
 The extension is pure SQL. It needs no other extension and no C code. It runs on Postgres 16, 17 and 18.
 
-- Source: https://github.com/kiwicopple/pg-extensions/tree/pg_permissions/pg_permissions
+- Source: https://github.com/kiwicopple/pg-extensions/tree/main/pg_permissions
 - database.dev (dbdev): https://database.dev/kiwicopple/pg_permissions (not yet published)
 
 ## Features
@@ -16,7 +16,7 @@ The extension is pure SQL. It needs no other extension and no C code. It runs on
 - Roles with inheritance. Assign a role app-wide or in a scope, such as a tenant.
 - Access to single objects, nested teams and folders, with the OpenFGA model language (schema 1.1).
 - Conditions in [CEL](https://github.com/google/cel-spec) on tuples, for example access that expires.
-- Cedar policies with `permit`, `forbid` (a deny that always wins), conditions on attributes and on the request context, templates, and the extension types `ipaddr`, `decimal`, `datetime` and `duration`.
+- Cedar policies with `permit` and `forbid`, conditions on attributes, templates, and the extension types `ipaddr`, `decimal`, `datetime` and `duration`. Admin checks also accept trusted request context. A `forbid` overrides Cedar permits; restrictive RLS policies enforce denies across models.
 - Functions for RLS policies that answer for the current user, with a fast path for tenant tables.
 - Support for Supabase and PostgREST (the JWT `sub` claim). Plain Postgres uses a value that is local to the transaction.
 - Denies across the models, with restrictive policies.
@@ -32,6 +32,8 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
 ```
 
 Then follow [Protect a table](docs/get-started/quickstart.md). It creates a role, grants Alice access to one organization, and verifies that Bob sees no rows. The walkthrough includes request identity and tests queries as an application database role.
+
+Already running 0.0.1? Use the [upgrade script](docs/install.md#upgrade-from-001) to add Cedar while keeping your existing permission data.
 
 [Install](docs/install.md) covers non-superuser installation, pg_tle, and Docker. The database.dev package is not published yet. The extension creates the `permissions` schema itself; do not add `with schema`.
 
@@ -73,6 +75,8 @@ const { data: canEdit } = await permissions.rbac.hasPermission({
 ```
 
 See [JavaScript client: setup](docs/integrations/javascript.md) for the methods and the errors. The RBAC, OpenFGA and Cedar pages show each call next to the SQL.
+
+The published `permissions` 0.2.0 package supports RBAC and OpenFGA. To try the Cedar JavaScript examples before the next client release, [build and install the client from source](docs/integrations/javascript.md#install).
 
 ## Development scripts
 

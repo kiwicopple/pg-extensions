@@ -116,14 +116,14 @@ export const pages = [
     "label": "Write policies"
   },
   {
-    "src": "docs/models/cedar/templates.md",
-    "route": "models/cedar/templates",
-    "label": "Use policy templates"
-  },
-  {
     "src": "docs/models/cedar/entities.md",
     "route": "models/cedar/entities",
     "label": "Store entities"
+  },
+  {
+    "src": "docs/models/cedar/templates.md",
+    "route": "models/cedar/templates",
+    "label": "Use policy templates"
   },
   {
     "src": "docs/models/cedar/checks.md",
@@ -500,12 +500,12 @@ export const sidebar = [
             "slug": "models/cedar/policies"
           },
           {
-            "label": "Use policy templates",
-            "slug": "models/cedar/templates"
-          },
-          {
             "label": "Store entities",
             "slug": "models/cedar/entities"
+          },
+          {
+            "label": "Use policy templates",
+            "slug": "models/cedar/templates"
           },
           {
             "label": "Check access",

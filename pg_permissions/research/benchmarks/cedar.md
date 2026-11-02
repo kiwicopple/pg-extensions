@@ -117,5 +117,4 @@ The security review made the statement cache of `cedar_is_authorized_current` au
 
 ## For later phases
 
-- The docs site reads `bench/baselines/data/` and accepts designs `a` to `d` only (`site/src/lib/bench.ts`, `DESIGNS`), so it skips the three E files with a warning until phase 8 adds `e`.
-- Check the other `_current` helpers on a server with JIT (section 15.3 of the design doc).
+The follow-up work identified after phase 5 is complete. The docs dashboard includes design E and reads its benchmark files from `bench/baselines/data/`. Phase 6 also measured the current-subject helpers with JIT enabled on Postgres 18; see [the JIT results](../designs/e-cedar.md#164-jit). The phase 9 results above include the subsequent security fixes.

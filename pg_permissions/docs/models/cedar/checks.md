@@ -1,8 +1,8 @@
 # Check access
 
-Ask if a principal can do an action on a resource. Read the decision, the policies that decided it, and the policies that failed.
+Check whether a principal can perform an action on a resource, then inspect the policies behind the decision and any evaluation errors.
 
-First complete [Write policies](policies.md), [Use policy templates](templates.md) and [Store entities](entities.md). The examples use their policies and entities. The function `cedar_is_authorized` takes the principal as an argument, so it is admin-only. [Check for the current subject](#check-for-the-current-subject) shows the functions that clients call.
+First complete [Write policies](policies.md), [Store entities](entities.md) and [Use policy templates](templates.md). The examples use their policies and entities. The function `cedar_is_authorized` accepts an explicit principal and is admin-only. [Check for the current subject](#check-for-the-current-subject) covers the functions available to application clients.
 
 ## Check a request
 
@@ -184,9 +184,9 @@ The message starts with a code, then a colon and a detail. The codes follow the 
 
 The text of the message is not stable. Match on the code at the start. The policy ids in `errors` are the stable part.
 
-A failed `forbid` is a risk. It did not deny the request, because Cedar skipped it. `cedar_is_authorized` reports this and still allows the request. The RLS functions treat it as a deny. See [Check for the current subject](#check-for-the-current-subject).
+A failed `forbid` does not block access: Cedar skips it, so another matching permit can still allow the request. Inspect `errors` as well as `decision` in a backend check. The RLS helpers deny access when a relevant `forbid` fails to evaluate. See [Check for the current subject](#check-for-the-current-subject).
 
-To write a condition that cannot fail, test before you read: `context has mfa && context.mfa`. The operator `&&` does not evaluate its right side when the left side is false.
+To avoid a missing-attribute error, check before reading: `context has mfa && context.mfa`. The operator `&&` skips its right side when the left side is false. The value must still have the expected type. In a `forbid`, this guard makes the condition false when `mfa` is missing; if missing MFA should deny access, write that case into the condition too.
 
 ## Check with entities that are not stored
 
@@ -270,10 +270,11 @@ Clients cannot call `cedar_is_authorized`, because it accepts any principal. Cli
 
 In JavaScript, `cedar.isAuthorized` calls `cedar_is_authorized_current`, and `cedar.listResources` calls `cedar_list_resources_current`.
 
-The principal is the current subject: `current_subject_type()` and `current_subject_id()`, joined as `type::"id"`. The default type is `user`. The request has no context. This example sets the subject for the session:
+The principal comes from `current_subject_type()` and `current_subject_id()`, as `type::"id"`. The default type is `user`. These helpers use an empty request context. Set the subject for the transaction so it is cleared before a pooled connection serves another request:
 
 ```sql tab="SQL"
-select set_config('permissions.subject_id', 'alice', false);
+begin;
+select set_config('permissions.subject_id', 'alice', true);
 select permissions.cedar_is_authorized_current(
   action => 'Action::"view"',
   resource => 'Document::"q3"'
@@ -289,7 +290,8 @@ select permissions.cedar_list_resources_current(
   resource_type => 'Document'
 );
 -- q3
-select set_config('permissions.subject_id', '', false);
+commit;
+
 select permissions.cedar_is_authorized_current(
   action => 'Action::"view"',
   resource => 'Document::"q3"'
@@ -330,11 +332,11 @@ These functions fail closed:
 - If a `forbid` that applies gives an error, the check returns `false`, and the list leaves out that resource.
 - A `permit` that gives an error is skipped, as in Cedar. It gives no access.
 
-They have no context, and they take no entities from the caller. The check reads only stored entities. Because a client cannot send the context, a policy that needs `context` never allows a check for the current subject.
+These helpers accept neither request context nor a request entity overlay. Policies that require a context value, such as `context.mfa`, cannot obtain it through these calls. A failing permit grants no access; another matching permit can still allow access unless a forbid blocks it.
 
-`cedar_is_authorized_current` has the optional argument `resource_attrs`. It gives the attributes of a resource that is not a stored entity, such as a row. See [Cedar in RLS](../../rls/policies.md#policies-for-cedar).
+The optional `resource_attrs` argument of `cedar_is_authorized_current` replaces the resource's attributes for that check. Parents and tags still come from storage, and the resource itself need not be stored. In RLS, supply the attributes from the actual row. Attributes supplied by an application client are useful for a UI check but are not trusted evidence of row access. See [Cedar in RLS](../../rls/policies.md#policies-for-cedar).
 
-`cedar_list_resources_current` returns stored entities only. A resource that a policy names but nobody stored is not in the list. `cedar_is_authorized_current` allows it. The function has no cap on the number of rows.
+`cedar_list_resources_current` returns stored entities only, with no result cap. A resource mentioned in a policy but absent from the entity store will not appear in the list. A direct check can still allow that resource if the policies permit it.
 
 ## Next step
 

@@ -2,6 +2,8 @@
 
 Install `pg_permissions` by running its SQL file in your database. The database.dev package is not published yet; its instructions below are for a future release.
 
+Version 0.1.0 includes RBAC, OpenFGA and Cedar in one installation. An existing 0.0.1 database needs the [upgrade script](#upgrade-from-001) to add Cedar.
+
 ## Choose a method
 
 | Method | Use it when |
@@ -37,7 +39,7 @@ The file creates the schema `permissions` with its tables and functions. The rol
 
 Do not run the file twice in one database. A second run fails with `already exists` errors. To move a database from 0.0.1 to 0.1.0, see [Upgrade from 0.0.1](#upgrade-from-001).
 
-To install again, drop the schema first with `drop schema permissions cascade;`. Do this only in a database that has no data that you need. You will lose all roles, models and tuples.
+To install again, drop the schema first with `drop schema permissions cascade;`. Do this only in a database that has no data that you need. You will lose all permission data, including roles, models, tuples, Cedar policies, templates and entities, as well as dependent objects such as RLS policies.
 
 On Supabase, paste the file into the SQL editor. You can also run it with `psql` as the `postgres` role. The roles `anon`, `authenticated` and `service_role` already exist on Supabase. Plain Postgres does not have them. The install does not need them. Create the role that your requests use to run.
 

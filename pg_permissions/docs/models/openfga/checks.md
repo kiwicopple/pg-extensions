@@ -498,7 +498,7 @@ create policy documents_select
   );
 ```
 
-For a list of rows, the fast form is `id = any (array(select permissions.fga_list_object_ids_current(type => 'document', relation => 'viewer')))`. See [RLS with both models](../../rls/policies.md).
+For a list of rows, the fast form is `id = any (array(select permissions.fga_list_object_ids_current(type => 'document', relation => 'viewer')))`. See [RLS integration](../../rls/policies.md).
 
 ## Next step
 

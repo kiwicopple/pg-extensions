@@ -1,6 +1,6 @@
 # Cedar compatibility
 
-The extension implements Cedar 4.14 and uses Cedar's own integration tests as an oracle. It runs inside Postgres, so storage, errors and some limits differ from the Cedar libraries.
+The extension targets Cedar 4.14 and checks its behavior against Cedar's integration tests. It runs inside Postgres, so storage, errors and some limits differ from the Cedar libraries. Schema validation and partial evaluation are outside its scope.
 
 ## The tested release
 
@@ -17,7 +17,7 @@ The suite has 5,701 tests and 45,494 requests. A test has policies, entities and
 
 ## Pass rates
 
-Every request of every run passes. No request is skipped.
+The recorded runs pass all requests selected for each mode below. The JSON run covers the full corpus; the other modes exercise subsets or transformed cases. The harness substitutes U+E000 for U+0000 because Postgres cannot store U+0000. These results establish compatibility with the tested corpus, rather than every possible policy.
 
 | Run | Requests | Result |
 | --- | --- | --- |
@@ -47,7 +47,7 @@ The comparison covers the decision and the ids of the policies. It does not comp
 | **Two concurrent puts** can make a cycle that neither put sees. The test `in` still ends. Two concurrent puts can also give a static policy and a template the same id. | The extension takes no global lock. |
 | **Fail-closed helpers.** `cedar_is_authorized_current` returns `false`, and `cedar_list_resources_current` leaves out a resource, when a `forbid` that applies gives an error. | The helpers feed access control. A skipped `forbid` must not allow access. `cedar_is_authorized` follows Cedar and reports the error. |
 | **`resource_attrs` replaces.** The attributes that `cedar_is_authorized_current` gets in `resource_attrs` replace the stored attributes of the resource. They do not merge. The parents and the tags still come from the stored entity. | The call describes a row. A merge would let a stale stored attribute stay. |
-| **The list is for stored entities.** `cedar_list_resources_current` returns stored entities only. A resource that a policy names, and that nobody stored, is not listed. `cedar_is_authorized_current` allows it. | The function finds candidates in the entity table. |
+| **The list is for stored entities.** `cedar_list_resources_current` returns stored entities only. A resource named in a policy but absent from storage is not listed. `cedar_is_authorized_current` can still allow it if the policies permit it. | The function finds candidates in the entity table. |
 | **The `@id` rule.** The argument `policy_id` names a policy. An `@id` annotation stays an annotation. | The JSON format has no id field. A text and a JSON put name a policy in the same way. |
 | **No policy-set loader.** No function takes a whole policy set. Put each policy with its own id. | A loader that names policies by position changes the ids when the file changes. |
 | **Links replace.** `cedar_link_template` with the id of a link that exists replaces that link. Cedar's `link` rejects a duplicate id. | Every put in this API replaces by id. |

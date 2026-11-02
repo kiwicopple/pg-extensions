@@ -32,9 +32,11 @@ The extension has three permission models in the `permissions` schema:
 | --- | --- | --- |
 | Roles and permissions (RBAC) | Roles across an application or within a tenant, with role inheritance | Alice is an editor in Acme and a viewer in Globex. |
 | Relationships (OpenFGA) | Individual shares, nested teams, and access inherited from folders | Bob can read a document because it is shared with his team. |
-| Policies (Cedar) | Rules on the attributes of the user, the resource and the request, and a deny that always wins | Owners edit their own documents. Nobody opens a confidential document without MFA. |
+| Policies (Cedar) | Reviewed policy text, rules on attributes, and explicit denies | Owners edit their own documents. A confidentiality rule can override that access. |
 
 OpenFGA relationships can also have CEL conditions, such as an expiry time. The models can work together: one RLS policy grants access through a role, another grants it through a share or a Cedar policy, and a restrictive policy can deny access across all of them.
+
+Cedar's admin API also accepts trusted request context, such as an MFA result or a client address. Its RLS helpers use stored entities and, for row checks, attributes passed from the row. They do not accept request context. A Cedar `forbid` overrides Cedar permits; [a restrictive RLS policy](rls/combine-models.md#add-cedar-as-a-third-model) extends that deny across the other models.
 
 [Choose a permission model](get-started/choose-a-model.md) walks through the options. Each model has its own guide, its own functions and its own data. The structure leaves room for other models alongside them.
 
@@ -48,7 +50,7 @@ OpenFGA relationships can also have CEL conditions, such as an expiry time. The 
 
 ## Where it fits in your application
 
-Your authentication system establishes who is making a request. A trusted backend assigns roles or writes sharing relationships, using SQL or the JavaScript client. Application clients can check their own permissions, and RLS policies control which rows their queries can read or change.
+Your authentication system establishes who is making a request. A trusted backend assigns roles, writes sharing relationships, or manages Cedar policies and entities, using SQL or the JavaScript client. Application clients can check their own permissions, and RLS policies control which rows their queries can read or change.
 
 A permission check does not read your application tables. If a policy adds a rule such as “only editors can see drafts,” an application check alone does not include that rule. Use checks to guide the interface and let RLS make the final decision about row access.
 

@@ -10,6 +10,8 @@ The extension does not track your users table. When you delete a user, the role 
 
 `delete_subject` removes a subject from every model in one call. It removes the role assignments of the subject, scoped assignments too. It also removes each OpenFGA tuple that names the subject, as user, as userset or as object. In the Cedar model, it removes the entity `<subject_type>::"<subject_id>"`, its parent edges, the edges that name it as a parent, and each template link whose `?principal` or `?resource` slot names it. Static Cedar policies and templates stay, because they are your application's code. It returns the number of rows that it removed.
 
+Cleanup does not disable an identity. A static Cedar policy that names the deleted principal can still match a future request for that id, even without a stored entity. Your authentication system must stop issuing requests for a deleted user. Review any static policies that name the user, and avoid reusing subject ids.
+
 ```sql tab="SQL"
 select permissions.rbac_assign_role(
   user_id => :'frank',

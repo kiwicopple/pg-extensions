@@ -321,7 +321,9 @@ permissions.cedar_is_authorized_current(
 ) returns boolean
 ```
 
-Returns `true` when the decision for the current subject is `allow` and no `forbid` that applies gave an error. It returns `false` when there is no subject, when an argument is `null`, and when a value in `resource_attrs` is not a Cedar value. `resource_attrs` is a JSON object. It replaces the stored attributes of the resource, and the parents and tags still come from the stored entity. It does not need a stored entity. Do not pass `plan_time_guard`.
+Returns `true` when the decision for the current subject is `allow` and no relevant `forbid` fails to evaluate. It returns `false` when there is no subject or when `action` or `resource` is `null`. The optional `resource_attrs` defaults to `null`, which uses stored attributes. When supplied as a JSON object, it replaces the resource's attributes for this check; parents and tags still come from storage. A stored resource entity is not required. Do not pass `plan_time_guard`.
+
+When the check evaluates supplied attributes, invalid Cedar values deny access. An unconditional permit with no relevant forbid can allow access without evaluating attributes. In an RLS policy, build `resource_attrs` from the row being protected. Caller-supplied attributes in a standalone check do not establish access to a database row.
 
 The function computes the work for the principal and the action once for each statement, and it then answers each row from that work. A resource text of the form `Type::"..."` that is not a valid Cedar string denies that row. Build the text with `cedar_uid`.
 

@@ -43,6 +43,6 @@ Look up [shared SQL functions](reference/shared.md), [RBAC functions](reference/
 
 SQL examples use named arguments and lowercase keywords. JavaScript equivalents appear alongside SQL. Each task page states its prerequisites; run its steps in order unless a block is marked as a fragment or an expected error.
 
-The examples call the extension owner the admin. Functions that change roles, models, or tuples run as that role or an explicitly authorized backend. Policy tests switch to the application's database role so that RLS applies.
+The examples call the extension owner the admin. Functions that change roles, models, tuples, Cedar policies or entities run as that role or an explicitly authorized backend. Policy tests switch to the application's database role so that RLS applies.
 
 Some examples use psql variables, such as `:'alice'`. The OpenFGA `user` field is named `subject` in SQL because `user` is reserved. JavaScript uses `user` and camel-case argument names.
