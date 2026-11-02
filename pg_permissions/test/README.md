@@ -21,6 +21,7 @@ Run these commands from the `pg_permissions/` directory:
 ./test/run.sh --design b --impl my.sql            # force the design (a|b|c|d|none)
 ./test/run.sh -v                                  # print every assertion
 ./test/run.sh --no-cedar-oracle                   # skip the generated Cedar oracle files
+./test/run.sh --upgrade-from 0.0.1                # the whole suite on 0.0.1 plus the upgrade script
 ```
 
 From the root of the repository, run `make test.pg_permissions`. To test a prototype, run `IMPL=prototypes/a-tuple-core.sql make test.pg_permissions`.
@@ -35,9 +36,11 @@ The runner sorts the files of both directories by file name. The name filter app
 
 By default, the runner starts a throwaway Postgres in a temporary directory. The server listens on a Unix socket only, so it does not conflict with a server that you already run. The runner deletes it at the end of the run. Each spec file gets a new database. The runner clones the database from a template that has the implementation installed.
 
+`--upgrade-from 0.0.1` builds the template from `pg_permissions--0.0.1.sql` and the upgrade script `pg_permissions--0.0.1--0.1.0.sql` instead of the 0.1.0 file, so every spec runs against an upgraded install. For the extension, the runner first runs `tools/sync-upgrade.sh --check` and counts it as a file (`tools/sync-upgrade --check`), so an upgrade script that misses a change to a marked section fails the run.
+
 To use a server that already runs, pass `--external` and set `PGHOST`, `PGPORT` and `PGUSER`. The user must be able to create databases and roles.
 
-To test on Postgres 16, 17 and 18 with pg_tle, use Docker. The command `docker/run-matrix.sh test` runs the extension on each version, one server at a time. Add `--designs ext,a,b,c` to run the prototypes too. See [`../docker/README.md`](../docker/README.md). This is the only way to run the `pgtle.install_extension` branch of `03_tle_install.sql` and the `pgtle.install_update_path` branch of `d/05_upgrade.sql`. Without pg_tle, these tests pass with `SKIP` assertions.
+To test on Postgres 16, 17 and 18 with pg_tle, use Docker. The command `docker/run-matrix.sh test` runs the extension on each version, one server at a time. Add `--designs ext,a,b,c` to run the prototypes too. See [`../docker/README.md`](../docker/README.md). This is the only way to run the `pgtle.install_extension` branch of `03_tle_install.sql`, the `pgtle.install_update_path` branch of `d/05_upgrade.sql`, and the non-superuser update and `pgtle.set_default_version` branch of `d/03_tle_install.sql`. Without pg_tle, these tests pass with `SKIP` assertions.
 
 The runner creates the client roles of Supabase: `anon`, `authenticated` and `service_role`. RLS tests then run like Supabase clients.
 

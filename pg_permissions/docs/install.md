@@ -129,7 +129,7 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 \
   -f pg_permissions--0.0.1--0.1.0.sql
 ```
 
-For a pg_tle install, register the script as an update path, then update the extension:
+For a pg_tle install, register the script as an update path, update the extension, and make 0.1.0 the default version. Run these as the role that installed the extension; it needs `pgtle_admin`, as for the install, and no superuser rights:
 
 ```sql
 \set body `cat pg_permissions--0.0.1--0.1.0.sql`
@@ -140,9 +140,15 @@ select pgtle.install_update_path(
   :'body'
 );
 alter extension pg_permissions update to '0.1.0';
+select pgtle.set_default_version(
+  'pg_permissions',
+  '0.1.0'
+);
 ```
 
-The test suite installs 0.0.1, runs the script, and compares every function, table and index with a fresh 0.1.0 install. It checks the pg_tle update path on Postgres 16, 17 and 18.
+`set_default_version` makes a later `create extension pg_permissions` without a version, for example in a restore, install 0.1.0 instead of 0.0.1. The update itself does not need it.
+
+The test suite installs 0.0.1, runs the script, and compares every function, table and index with a fresh 0.1.0 install. `./test/run.sh --upgrade-from 0.0.1` runs the whole suite against an upgraded install. On Postgres 16, 17 and 18, the suite checks the pg_tle update path, as a superuser and as a non-superuser with `pgtle_admin`, and `set_default_version`.
 
 ## Install with database.dev
 
@@ -187,7 +193,7 @@ Do not add the option `-s` to `dbdev add`. Do not write `with schema` in `create
 
 The name of the extension has an at sign, so always write it in double quotes. The `dbdev` documentation marks the in-database client (`dbdev.install`) as deprecated. This page uses the `dbdev add` command instead.
 
-There is no upgrade path yet. To check the install, go to [Check the install](#check-the-install).
+The first published version is 0.1.0, so a database.dev install has no earlier version to upgrade from. To check the install, go to [Check the install](#check-the-install).
 
 ## Next steps
 

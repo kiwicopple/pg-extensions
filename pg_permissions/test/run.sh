@@ -8,6 +8,7 @@
 #   test/run.sh -v                                    # show every assertion, not just failures
 #   test/run.sh --external                            # use the server from PGHOST/PGPORT/PGUSER
 #   test/run.sh --no-cedar-oracle                     # skip the generated Cedar oracle files
+#   test/run.sh --upgrade-from 0.0.1                  # install 0.0.1, apply the upgrade script, run every spec
 #
 # Spec files in test/spec/ are the shared RBAC, RLS and install specs in the
 # API the prototypes have (unprefixed create_role, has_permission, ...); they
@@ -21,6 +22,11 @@
 #
 # Each spec file runs in a fresh database cloned from a template that has the
 # implementation installed. Exit status is 0 only if every file passes.
+# --upgrade-from V builds the template from pg_permissions--V.sql plus the
+# upgrade script pg_permissions--V--<version of --impl>.sql instead, so the
+# whole suite runs against an upgraded install. For the extension,
+# tools/sync-upgrade.sh --check runs first and counts as a file: the upgrade
+# script must hold the install file's marked sections.
 #
 # For the extension, test/spec/d/7[0-7]_cedar_oracle*.sql are generated from
 # Cedar's integration tests before the run (python3 -I test/cedar/generate.py
@@ -37,6 +43,7 @@ VERBOSE=0
 EXTERNAL=0
 DESIGN=
 CEDAR_ORACLE=1
+UPGRADE_FROM=
 PATTERNS=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -47,7 +54,9 @@ while [ $# -gt 0 ]; do
         --external) EXTERNAL=1; shift ;;
         --no-cedar-oracle) CEDAR_ORACLE=0; shift ;;
         -v|--verbose) VERBOSE=1; shift ;;
-        -h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --upgrade-from) UPGRADE_FROM=$2; shift 2 ;;
+        --upgrade-from=*) UPGRADE_FROM=${1#--upgrade-from=}; shift ;;
+        -h|--help) sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) PATTERNS+=("$1"); shift ;;
     esac
 done
@@ -67,6 +76,23 @@ case "$DESIGN" in
     a|b|c|d|none) ;;
     *) echo "error: unknown design: $DESIGN (expected a, b, c, d or none)" >&2; exit 2 ;;
 esac
+
+# --upgrade-from V: the template gets pg_permissions--V.sql, then the upgrade
+# script to the version of --impl, both from the directory of --impl.
+INSTALL=("$IMPL")
+if [ -n "$UPGRADE_FROM" ]; then
+    impl_version=$(basename "$IMPL" .sql)
+    impl_version=${impl_version#pg_permissions--}
+    case "$(basename "$IMPL")" in
+        pg_permissions--*.sql) ;;
+        *) echo "error: --upgrade-from needs an extension file (pg_permissions--<version>.sql) as --impl" >&2; exit 2 ;;
+    esac
+    INSTALL=("$(dirname "$IMPL")/pg_permissions--$UPGRADE_FROM.sql"
+             "$(dirname "$IMPL")/pg_permissions--$UPGRADE_FROM--$impl_version.sql")
+    for f in "${INSTALL[@]}"; do
+        [ -f "$f" ] || { echo "error: --upgrade-from $UPGRADE_FROM: not found: $f" >&2; exit 2; }
+    done
+fi
 
 # The generated Cedar oracle files (design d): regenerate them when this run
 # would select any of them.
@@ -97,17 +123,44 @@ ensure_roles
 TEMPLATE=pgperm_template
 psql_admin -c "drop database if exists $TEMPLATE" -c "create database $TEMPLATE"
 "$PGBIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$TEMPLATE" -f "$HERE/lib/tap.sql" >/dev/null
-if ! load_out=$("$PGBIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$TEMPLATE" -f "$IMPL" 2>&1 >/dev/null); then
-    echo "${RED}error: failed to install ${IMPL#$EXT_DIR/}${RESET}" >&2
-    echo "$load_out" >&2
-    exit 2
-fi
+for f in "${INSTALL[@]}"; do
+    if ! load_out=$("$PGBIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$TEMPLATE" -f "$f" 2>&1 >/dev/null); then
+        echo "${RED}error: failed to install ${f#$EXT_DIR/}${RESET}" >&2
+        echo "$load_out" >&2
+        exit 2
+    fi
+done
 
-echo "Implementation: ${IMPL#$EXT_DIR/} (design: $DESIGN)"
+installed=
+for f in "${INSTALL[@]}"; do installed="${installed:+$installed + }${f#$EXT_DIR/}"; done
+echo "Implementation: $installed (design: $DESIGN)"
 echo "Postgres:       $("$PGBIN/psql" -X -tA -d "$TEMPLATE" -c 'show server_version')"
 echo
 
 total_files=0; passed_files=0; total_planned=0; total_passed=0
+
+# The extension: the upgrade script must hold the install file's marked
+# sections (tools/sync-upgrade.sh). One file, one assertion.
+# It runs unless name patterns select no file of that name.
+sync_check=0
+if [ "$DESIGN" = d ] && [ "$(basename "$IMPL")" = pg_permissions--0.1.0.sql ] && [ -x "$EXT_DIR/tools/sync-upgrade.sh" ] \
+   && [ "$(dirname "$IMPL")" = "$EXT_DIR" ]; then
+    sync_check=1
+    if [ ${#PATTERNS[@]} -gt 0 ]; then
+        sync_check=0
+        for p in "${PATTERNS[@]}"; do case "sync-upgrade" in *"$p"*) sync_check=1 ;; esac; done
+    fi
+fi
+if [ $sync_check = 1 ]; then
+    total_files=$((total_files + 1)); total_planned=$((total_planned + 1))
+    if sync_out=$("$EXT_DIR/tools/sync-upgrade.sh" --check 2>&1); then
+        passed_files=$((passed_files + 1)); total_passed=$((total_passed + 1))
+        printf '  %sPASS%s  %-30s %3s/%s\n' "$GREEN" "$RESET" "tools/sync-upgrade --check" 1 1
+    else
+        printf '  %sFAIL%s  %-30s %3s/%s  (%s)\n' "$RED" "$RESET" "tools/sync-upgrade --check" 0 1 "out of date"
+        printf '%s\n' "$sync_out" | sed 's/^/        /'
+    fi
+fi
 
 # Shared specs plus the design's own, sorted by file name across both. Design
 # d has its own copies of the shared specs (rbac_* names), so it skips them.
