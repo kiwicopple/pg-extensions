@@ -1052,3 +1052,11 @@ Orchestrator choices: fixed constant caps (OpenFGA makes them configurable; here
 - **SQL/JavaScript tabs.** The source stays plain Markdown (GitHub shows paired blocks one after the other); the site sync turns adjacent blocks tagged `tab="SQL"` and `tab="JavaScript"` into Starlight `<Tabs syncKey="lang">`. The JS usage moved into the RBAC, FGA and Conditions pages; the JavaScript page became setup only.
 - **The site moved** from the repo root `docs/` into `pg_permissions/site/`, since it documents only this extension. A separate docs revision (task guides, navigation, content checks) was committed first. Suite 56 files / 3,650 assertions; JS 140 unit tests.
 - **Pushed** the `pg_permissions` branch to origin for a PR; not merged, and npm `permissions` 0.2.0 is still unpublished.
+
+## Session 9 (2026-11-02): planning the Cedar model
+
+- **The ask:** plan a third model, Cedar, now that RBAC, FGA and the JS client are done. The research had reserved it since session 4: "Cedar is for later (`cedar_*`), with B as the base", tested against the Cedar corpus.
+- **Research, two agents.** One mapped what Cedar must fit in this repo (the CEL engine to reuse, B's planner lessons, the FGA oracle harness, the toolkit rules); the other read Cedar 4.x itself: grammar, decision algorithm, the ~60,000-request `cedar-integration-tests` corpus, cedar-go's subset, and the one Cedar-to-SQL attempt (luxas/cedar-sql, explicitly not for production).
+- **The decision that mattered most:** Cedar skips a policy that errors, so a broken `forbid` fails open. The user chose spec semantics in `cedar_is_authorized` (so the corpus can pass) and fail-closed RLS helpers (an erroring forbid denies). The same shape as FGA: exact in the API, conservative where a database decides which rows exist.
+- **Other choices:** full Cedar 4.x in v1 (datetime, duration and templates included), stored entities plus a row-attribute overlay for RLS, and version 0.1.0 with an upgrade script.
+- The plan is in `research/plan-cedar.md`.
