@@ -19,7 +19,9 @@
 #                         history)
 #   --keep-running        leave the last server running (default: compose down)
 #   -- ARGS               passed to test/run.sh or bench/run.sh
-#                         (--external and --impl are added here)
+#                         (--external and --impl are added here, and for
+#                         test/run.sh -j with the server's CPU limit, which
+#                         a -j in ARGS overrides)
 #
 # For each version the other servers are stopped and this one is started, so
 # only one server uses the CPUs at a time. Each design then runs in a
@@ -117,6 +119,11 @@ for v in "${VERSION_LIST[@]}"; do
     cpus=$( [ "$quota" = max ] && echo unlimited || awk -v q="$quota" -v p="$period" 'BEGIN { printf "%g", q / p }')
     memdesc=$( [ "$mem" = max ] && echo unlimited || awk -v m="$mem" 'BEGIN { printf "%gg", m / 1073741824 }')
     host="$MACHINE; container cpus=$cpus mem=$memdesc"
+    # test/run.sh runs one spec file per server CPU at a time
+    JOBS_ARG=()
+    if [ "$MODE" = test ] && [ "$cpus" != unlimited ]; then
+        JOBS_ARG=(-j "$(awk -v c="$cpus" 'BEGIN { j = int(c); if (j < c) j++; if (j < 1) j = 1; print j }')")
+    fi
 
     for d in "${DESIGN_LIST[@]}"; do
         impl=$(impl_for "$d")
@@ -127,7 +134,8 @@ for v in "${VERSION_LIST[@]}"; do
         compose run --rm --no-deps -T --entrypoint bash -u postgres \
             -e PGHOST=/var/run/postgresql -e PGUSER=postgres -e TZ="${TZ_NAME:-UTC}" \
             -e BENCH_ENVIRONMENT=docker -e BENCH_HOST="$host" \
-            "$svc" "/pg_permissions/$MODE/run.sh" --external --impl "$impl" $( [ "$d" = e ] && echo --design e ) ${PASS[@]+"${PASS[@]}"} 2>&1 |
+            "$svc" "/pg_permissions/$MODE/run.sh" --external --impl "$impl" $( [ "$d" = e ] && echo --design e ) \
+            ${JOBS_ARG[@]+"${JOBS_ARG[@]}"} ${PASS[@]+"${PASS[@]}"} 2>&1 |
             grep --line-buffered -v -E '^ ?Container .*(Creating|Created|Starting|Started|Running|Waiting|Healthy)' | tee "$out_file"
         status=${PIPESTATUS[0]}
         secs=$(( $(date +%s) - start ))

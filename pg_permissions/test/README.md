@@ -21,6 +21,7 @@ Run these commands from the `pg_permissions/` directory:
 ./test/run.sh --design b --impl my.sql            # force the design (a|b|c|d|none)
 ./test/run.sh -v                                  # print every assertion
 ./test/run.sh --no-cedar-oracle                   # skip the generated Cedar oracle files
+./test/run.sh -j 4                                # run 4 spec files at a time (default: one per CPU)
 ./test/run.sh --upgrade-from 0.0.1                # the whole suite on 0.0.1 plus the upgrade script
 ```
 
@@ -36,11 +37,13 @@ The runner sorts the files of both directories by file name. The name filter app
 
 By default, the runner starts a throwaway Postgres in a temporary directory. The server listens on a Unix socket only, so it does not conflict with a server that you already run. The runner deletes it at the end of the run. Each spec file gets a new database. The runner clones the database from a template that has the implementation installed.
 
+Because each file has its own database, the runner runs several files at a time on the one server: `-j N` files, by default one per CPU (`getconf _NPROCESSORS_ONLN`). It prints the results in file order, and the summary counts every file. `-j 1` runs one file at a time. A spec that creates objects outside its database (roles, other databases) must give them names that no other spec uses. On a 10-CPU Apple silicon laptop the whole suite took 166 seconds with one file at a time and 77 seconds with `-j 10` (2026-11-02); the oracle files contend for the server, so the gain is not linear.
+
 `--upgrade-from 0.0.1` builds the template from `pg_permissions--0.0.1.sql` and the upgrade script `pg_permissions--0.0.1--0.1.0.sql` instead of the 0.1.0 file, so every spec runs against an upgraded install. For the extension, the runner first runs `tools/sync-upgrade.sh --check` and counts it as a file (`tools/sync-upgrade --check`), so an upgrade script that misses a change to a marked section fails the run.
 
 To use a server that already runs, pass `--external` and set `PGHOST`, `PGPORT` and `PGUSER`. The user must be able to create databases and roles.
 
-To test on Postgres 16, 17 and 18 with pg_tle, use Docker. The command `docker/run-matrix.sh test` runs the extension on each version, one server at a time. Add `--designs ext,a,b,c` to run the prototypes too. See [`../docker/README.md`](../docker/README.md). This is the only way to run the `pgtle.install_extension` branch of `03_tle_install.sql`, the `pgtle.install_update_path` branch of `d/05_upgrade.sql`, and the non-superuser update and `pgtle.set_default_version` branch of `d/03_tle_install.sql`. Without pg_tle, these tests pass with `SKIP` assertions.
+To test on Postgres 16, 17 and 18 with pg_tle, use Docker. The command `docker/run-matrix.sh test` runs the extension on each version, one server at a time, with `-j` set to the server's CPU limit. Add `--designs ext,a,b,c` to run the prototypes too. See [`../docker/README.md`](../docker/README.md). This is the only way to run the `pgtle.install_extension` branch of `03_tle_install.sql`, the `pgtle.install_update_path` branch of `d/05_upgrade.sql`, and the non-superuser update and `pgtle.set_default_version` branch of `d/03_tle_install.sql`. Without pg_tle, these tests pass with `SKIP` assertions.
 
 The runner creates the client roles of Supabase: `anon`, `authenticated` and `service_role`. RLS tests then run like Supabase clients.
 
@@ -48,7 +51,7 @@ A file passes only when each planned assertion ran and passed, and no SQL error 
 
 ### The generated Cedar oracle files
 
-The files `spec/d/7[0-7]_cedar_oracle*_NN.sql` come from Cedar's integration tests (`cedar/`): requests with JSON policies (entities stored, in the overlay, and with direct parents only), with Cedar text policies, and through template links, plus the parser on every text policy. They cover every case of the corpus, the extension types included, and are about 197 MB in 190 files, so Git ignores them (`spec/d/.gitignore`), and the runner writes them before each run of the extension with `python3 -I test/cedar/generate.py suite`. That takes about 9 seconds, and the files add about 140 seconds to a run (the whole suite takes about 165 seconds on Apple silicon). The runner skips the step when its name patterns select none of them, for example `./test/run.sh rbac`.
+The files `spec/d/7[0-7]_cedar_oracle*_NN.sql` come from Cedar's integration tests (`cedar/`): requests with JSON policies (entities stored, in the overlay, and with direct parents only), with Cedar text policies, and through template links, plus the parser on every text policy. They cover every case of the corpus, the extension types included, and are about 197 MB in 190 files, so Git ignores them (`spec/d/.gitignore`), and the runner writes them before each run of the extension with `python3 -I test/cedar/generate.py suite`. That takes about 9 seconds, and the files add about 140 seconds to a run with `-j 1` (the whole suite takes about 165 seconds with `-j 1` and about 77 seconds with `-j 10` on Apple silicon). The runner skips the step when its name patterns select none of them, for example `./test/run.sh rbac`.
 
 - `--no-cedar-oracle` runs everything else and skips these files.
 - Without `python3`, the runner uses the files that are already there, and warns if there are none. `docker/run-matrix.sh test` writes them on the host, because its client containers have no Python.
@@ -69,7 +72,7 @@ The code that is new in 0.1.0 sits in `pg_permissions--0.1.0.sql` between marker
 
 ```
 test/
-  run.sh             runner: one fresh database per spec file, TAP parsing, summary
+  run.sh             runner: one fresh database per spec file, -j N files at a time, TAP parsing, summary
   lib/tap.sql        assertions (pgTAP-compatible names), installed in schema `tap`
   lib/cluster.sh     throwaway cluster helpers, shared with bench/run.sh
   fixtures/ids.sql   fixed UUIDs for the plan scenarios (psql variables :alice, :acme, ...)

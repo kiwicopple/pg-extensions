@@ -8,6 +8,7 @@
 #   test/run.sh -v                                    # show every assertion, not just failures
 #   test/run.sh --external                            # use the server from PGHOST/PGPORT/PGUSER
 #   test/run.sh --no-cedar-oracle                     # skip the generated Cedar oracle files
+#   test/run.sh -j 4                                  # run 4 spec files at a time (default: one per CPU)
 #   test/run.sh --upgrade-from 0.0.1                  # install 0.0.1, apply the upgrade script, run every spec
 #
 # Spec files in test/spec/ are the shared RBAC, RLS and install specs in the
@@ -21,7 +22,8 @@
 # Files from both directories are sorted by file name; patterns match both.
 #
 # Each spec file runs in a fresh database cloned from a template that has the
-# implementation installed. Exit status is 0 only if every file passes.
+# implementation installed, so -j N runs N files at a time on one cluster;
+# the output stays in file order. Exit status is 0 only if every file passes.
 # --upgrade-from V builds the template from pg_permissions--V.sql plus the
 # upgrade script pg_permissions--V--<version of --impl>.sql instead, so the
 # whole suite runs against an upgraded install. For the extension,
@@ -43,6 +45,7 @@ VERBOSE=0
 EXTERNAL=0
 DESIGN=
 CEDAR_ORACLE=1
+JOBS=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
 UPGRADE_FROM=
 PATTERNS=()
 while [ $# -gt 0 ]; do
@@ -54,9 +57,12 @@ while [ $# -gt 0 ]; do
         --external) EXTERNAL=1; shift ;;
         --no-cedar-oracle) CEDAR_ORACLE=0; shift ;;
         -v|--verbose) VERBOSE=1; shift ;;
+        -j|--jobs) JOBS=$2; shift 2 ;;
+        -j*) JOBS=${1#-j}; shift ;;
+        --jobs=*) JOBS=${1#--jobs=}; shift ;;
         --upgrade-from) UPGRADE_FROM=$2; shift 2 ;;
         --upgrade-from=*) UPGRADE_FROM=${1#--upgrade-from=}; shift ;;
-        -h|--help) sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) PATTERNS+=("$1"); shift ;;
     esac
 done
@@ -75,6 +81,9 @@ fi
 case "$DESIGN" in
     a|b|c|d|none) ;;
     *) echo "error: unknown design: $DESIGN (expected a, b, c, d or none)" >&2; exit 2 ;;
+esac
+case "$JOBS" in
+    ''|*[!0-9]*|0) echo "error: -j needs a positive number, got: $JOBS" >&2; exit 2 ;;
 esac
 
 # --upgrade-from V: the template gets pg_permissions--V.sql, then the upgrade
@@ -119,6 +128,16 @@ else GREEN=; RED=; DIM=; RESET=; fi
 
 start_cluster
 ensure_roles
+OUT=$(mktemp -d "${TMPDIR:-/tmp}/pgperm-out.XXXXXX")
+# On exit or interrupt: stop the spec files still running, then the cluster.
+cleanup() {
+    local p
+    for p in $(jobs -p); do kill "$p" 2>/dev/null || true; done
+    wait 2>/dev/null || true
+    rm -rf "$OUT"
+    stop_cluster
+}
+trap cleanup EXIT INT TERM
 
 TEMPLATE=pgperm_template
 psql_admin -c "drop database if exists $TEMPLATE" -c "create database $TEMPLATE"
@@ -172,6 +191,8 @@ while IFS= read -r line; do SPECS+=("${line#*$'\t'}"); done < <(
         [ -f "$f" ] && printf '%s\t%s\n' "$(basename "$f")" "$f"
     done | LC_ALL=C sort -t $'\t' -k1,1)
 
+# The files this run selects, in order.
+RUN_FILES=(); RUN_LABELS=()
 for f in "${SPECS[@]}"; do
     name=$(basename "$f" .sql)
     # shellcheck disable=SC2254
@@ -183,11 +204,24 @@ for f in "${SPECS[@]}"; do
         for p in "${PATTERNS[@]}"; do case "$name" in *"$p"*) match=1 ;; esac; done
         [ $match = 1 ] || continue
     fi
+    RUN_FILES+=("$f"); RUN_LABELS+=("$label")
+done
 
-    db="pgperm_t_${name}"
-    psql_admin -c "drop database if exists \"$db\"" -c "create database \"$db\" template $TEMPLATE"
-    out=$("$PGBIN/psql" -X -q -tA -v ON_ERROR_STOP=0 -v impl_path="$IMPL" -d "$db" -f "$f" 2>&1 || true)
-    psql_admin -c "drop database if exists \"$db\"" 2>/dev/null || true
+# One spec file in its own database, output to $OUT/<i>.out, then $OUT/<i>.done.
+run_one() {
+    local i=$1 f=$2 db
+    db="pgperm_t_$(basename "$f" .sql)"
+    psql_admin -c "drop database if exists \"$db\"" -c "create database \"$db\" template $TEMPLATE" >/dev/null 2>&1 || true
+    "$PGBIN/psql" -X -q -tA -v ON_ERROR_STOP=0 -v impl_path="$IMPL" -d "$db" -f "$f" >"$OUT/$i.out" 2>&1 || true
+    psql_admin -c "drop database if exists \"$db\"" >/dev/null 2>&1 || true
+    : >"$OUT/$i.done"
+}
+
+# Print the result of file i (it has finished) and add it to the totals.
+report() {
+    local i=$1 label=${RUN_LABELS[$1]} out planned passed failed errors missing detail
+    out=$(cat "$OUT/$i.out")
+    rm -f "$OUT/$i.out" "$OUT/$i.done"
 
     planned=$(printf '%s\n' "$out" | sed -n 's/^1\.\.\([0-9][0-9]*\)$/\1/p' | head -1)
     planned=${planned:-0}
@@ -221,7 +255,25 @@ for f in "${SPECS[@]}"; do
             printf '%s\n' "$out" | grep 'ERROR:' | head -3 | sed 's/^psql:[^:]*:/        line /' || true
         fi
     fi
+}
+
+# Up to $JOBS files at a time; results are printed in file order as soon as
+# every earlier file has finished. (Polling: macOS's bash 3.2 has no wait -n.)
+n_run=${#RUN_FILES[@]}
+next=0; printed=0
+while [ $printed -lt $n_run ]; do
+    while [ $next -lt $n_run ] && [ "$(jobs -pr | wc -l)" -lt "$JOBS" ]; do
+        run_one $next "${RUN_FILES[$next]}" &
+        next=$((next + 1))
+    done
+    if [ -f "$OUT/$printed.done" ]; then
+        report $printed
+        printed=$((printed + 1))
+    else
+        sleep 0.05
+    fi
 done
+wait
 
 echo
 if [ $total_files = 0 ]; then
