@@ -3,12 +3,14 @@
 The Astro + Starlight site publishes application guides, API reference, and research for `pg_permissions`. Canonical prose lives in the parent directory, `pg_permissions/` (`../docs`, `../research` and so on). Edit those files, not the generated site pages.
 
 ```bash
-make docs              # from the repo root: install if needed, build, and check links/content
-make docs.dev          # local development server
-# or, from pg_permissions/site/:
-npm run sync           # regenerate pages, Markdown exports, and data
-npm run build          # sync, build, and validate
-npm run check:quickstart # execute the quickstart in a temporary Postgres
+# from pg_permissions/ (the scripts are in package.json there):
+npm run docs:install            # npm ci in site/
+npm run docs:dev                # local development server (syncs first)
+npm run docs:build              # sync, build into site/dist, and validate
+npm run docs:preview            # serve the built site
+npm run docs:check:quickstart   # execute the quickstart in a temporary Postgres
+# or from the repo root: make docs, make docs.dev
+# or from pg_permissions/site/: npm run sync, npm run build, npm run check:quickstart
 ```
 
 The site uses Astro 7, Starlight 0.42, and `starlight-links-validator`. Charts are build-time SVG components. Use the Node version required by the installed Astro release.
@@ -39,6 +41,8 @@ Every generated site page has a marker and an edit link to its canonical source.
 Adjacent fenced blocks with `tab="SQL"` and `tab="JavaScript"` become synchronized Starlight tabs. GitHub and plain Markdown exports retain both blocks. Do not hand-copy a second language version into another guide.
 
 ## Sync and deployment
+
+Vercel builds the site from source with the Root Directory `pg_permissions` and the settings in `../vercel.json`. The built site and the generated pages are never committed. `npm run docs:publish` (from `pg_permissions/`) deploys by hand; the Git integration deploys on push to `main`.
 
 Sync runs before development and build. It adds page metadata, rewrites relative links, exports plain Markdown, copies benchmark data, and extracts workload descriptions. Links to code and other non-page files point to GitHub. Missing targets produce a warning; resolve warnings before publishing.
 

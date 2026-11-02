@@ -71,8 +71,43 @@ const { data: canEdit } = await permissions.rbac.hasPermission({
 
 See [JavaScript client: setup](docs/integrations/javascript.md) for the methods and the errors. The RBAC and OpenFGA pages show each call next to the SQL.
 
+## Development scripts
+
+The file `package.json` in this directory is the entry point for the whole folder. It is private and has no dependencies. Run each script with `npm run <name>` from `pg_permissions/`. The scripts call the library in `js/` with pnpm and the documentation site in `site/` with npm.
+
+| Script | What it does |
+| --- | --- |
+| `test` | Runs the extension test suite on a throwaway local Postgres. |
+| `test:docker` | Runs the suite on Postgres 16, 17 and 18 with Docker. |
+| `test:all` | Runs `test`, then `test:docker`. |
+| `js:install` | Installs the dependencies of the JavaScript client. |
+| `js:build` | Builds the client into `js/dist`. |
+| `js:typecheck` | Type-checks the source, tests and examples. |
+| `js:test` | Runs the unit tests. |
+| `js:test:integration` | Runs the integration tests. They need Docker. |
+| `js:check` | Runs the type check, the unit tests, a build, and the package export checks. |
+| `js:docs` | Generates the API reference with TypeDoc. |
+| `js:publish` | Runs `js:check`, then publishes `permissions` to npm. Needs your npm login. |
+| `js:publish:dry` | Runs `js:check`, then `npm publish --dry-run`. Nothing is published. |
+| `docs:install` | Installs the site dependencies from the lock file (`npm ci`). |
+| `docs:sync` | Generates the site pages from `docs/` and `research/`. |
+| `docs:dev` | Starts the site locally with hot reload. |
+| `docs:build` | Syncs, builds the site into `site/dist`, and checks links and content. |
+| `docs:preview` | Serves the built site locally. |
+| `docs:check:quickstart` | Runs the quickstart SQL on a temporary Postgres. Needs the Postgres binaries. |
+| `docs:publish` | Deploys the site to Vercel production with `npx vercel deploy --prod`. Needs your Vercel login. |
+| `check` | Runs `js:check` and `docs:build`. Needs no Docker and no Postgres. |
+
+The build output (`js/dist`, `site/dist`) and the generated site pages are never committed. The root `Makefile` targets `make docs`, `make docs.dev` and `make docs.sync` call the `docs:*` scripts.
+
+### Deploy the docs on Vercel
+
+Vercel builds the site from source. Create the project with the Root Directory `pg_permissions`. The install command, the build command and the output directory come from [`vercel.json`](vercel.json), so do not set them in the dashboard. The build needs Node 22.23.4 or later.
+
+The Vercel Git integration deploys on every push to `main`. The script `docs:publish` is the manual alternative.
+
 ## Contributing
 
-To run the tests, see [`test/README.md`](test/README.md). To run Postgres 16, 17 and 18 with pg_tle, see [`docker/README.md`](docker/README.md). Write documentation as described in [`STYLE.md`](STYLE.md). The documentation site (Astro + Starlight) is in [`site/`](site/README.md); `make docs` from the repository root builds it.
+To run the tests, see [`test/README.md`](test/README.md). To run Postgres 16, 17 and 18 with pg_tle, see [`docker/README.md`](docker/README.md). Write documentation as described in [`STYLE.md`](STYLE.md). The documentation site (Astro + Starlight) is in [`site/`](site/README.md); `npm run docs:build` builds it.
 
 For the design history and the benchmarks, see [`research/README.md`](research/README.md).

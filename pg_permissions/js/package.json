@@ -93,6 +93,7 @@
     "typecheck": "tsc -p tsconfig.json && tsc -p test/tsconfig.json && tsc -p examples/tsconfig.json",
     "check:exports": "publint && attw --pack . --profile node16",
     "docs": "typedoc",
+    "prepublishOnly": "pnpm build && pnpm typecheck && pnpm test && pnpm check:exports",
     "db:up": "docker compose -f test/docker-compose.yml up -d --wait",
     "db:down": "docker compose -f test/docker-compose.yml down -v"
   },
