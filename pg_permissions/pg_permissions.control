@@ -1,4 +1,4 @@
 # pg_permissions extension
 comment = 'Authorization for RLS policies: RBAC and an OpenFGA-compatible relationship engine (Check, ListObjects, ListUsers).'
-default_version = '0.0.1'
+default_version = '0.1.0'
 superuser = false

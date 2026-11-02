@@ -328,9 +328,9 @@ function syncPlainMarkdown() {
 	const site = (process.env.DOCS_SITE ?? '').replace(/\/$/, '');
 	const index = [
 		'# pg_permissions', '',
-		'> Authorization in Postgres: RBAC and OpenFGA relationships, enforced through RLS.', '',
+		'> Authorization in Postgres: RBAC, OpenFGA relationships and Cedar policies, enforced through RLS.', '',
 		'Use current guides and reference for implementation. Research records include historical designs and superseded plans.',
-		'Cedar is a future direction, not an implemented model. SQL and JavaScript examples are both included in Markdown.', '',
+		'The extension has three models: RBAC, OpenFGA and Cedar. SQL and JavaScript examples are both included in Markdown.', '',
 		'## Guides and reference', '',
 	];
 	const groups = { current: [], research: [], contributing: [] };

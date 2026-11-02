@@ -14,6 +14,7 @@ Read the summaries in this order:
 | [`VERSIONS.md`](./VERSIONS.md) | A, B and C on Postgres 16.15, 17.11 and 18.6 in Docker, before the optimizations of session 3. It shows what changes with the Postgres version. It also compares Docker runs with local runs (Calibration). |
 | [`OPTIMIZATIONS.md`](./OPTIMIZATIONS.md) | The same Docker matrix after the optimizations of session 3. It checks the claims of the design documents. It has before and after tables, the changes in the ranking of the designs, and the budgets. |
 | [`D.md`](./D.md) | Design D, the extension. It has the first measurement and the diagnosis of D. It also has the second and third optimization passes (opt2 and opt3), the phase 6 runs at small, medium and large scale, and the change of the large `parents_proj_select_count` budget. |
+| [`cedar.md`](./cedar.md) | Design E, the extension's Cedar model (`cedar_*`), on the same data, compared with D's FGA and RBAC on the equivalent workloads, and the per-row check that only Cedar has. |
 
 Each run is one run for each configuration. Treat differences under about 20% as noise.
 
@@ -21,7 +22,7 @@ Each run is one run for each configuration. Treat differences under about 20% as
 
 `bench/run.sh` writes one markdown report for each run. The reports are in [`../../bench/baselines/`](../../bench/baselines/). The harness generates them, so do not edit them. A report has the latency table (p50 and p95) and the plans. It also has the seed time and the table sizes after each phase, and the checksums of the documents that the sample users see.
 
-The name of a report shows the run. The values are these. `<design>` is `a`, `b`, `c` or `d`. `<scale>` is `small` (10k documents), `medium` (100k) or `large` (1M). `<shape>` is `default`, `deep` or `wide`. `<NN>` is the Postgres major version (16, 17 or 18).
+The name of a report shows the run. The values are these. `<design>` is `a`, `b`, `c`, `d` or `e` (the Cedar model of the extension, `bench/run.sh --design e`). `<scale>` is `small` (10k documents), `medium` (100k) or `large` (1M). `<shape>` is `default`, `deep` or `wide`. `<NN>` is the Postgres major version (16, 17 or 18).
 
 | Name | Run |
 | --- | --- |
@@ -38,6 +39,7 @@ These tags exist:
 - `opt3-covering`: design D with the covering index.
 - `p6`: the runs of phase 6 at small, medium and large scale.
 - `p6check`: the `--check` run of phase 6 at large scale.
+- `p5`: design E, Cedar phase 5 ([`cedar.md`](./cedar.md)).
 
 The JSON data of the runs is in [`../../bench/baselines/data/`](../../bench/baselines/data/). The [README of that folder](../../bench/baselines/data/README.md) describes the fields. The docs site makes its charts from these JSON files.
 

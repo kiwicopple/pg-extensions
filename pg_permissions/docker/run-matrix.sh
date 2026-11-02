@@ -13,11 +13,15 @@
 #   --versions 16,17,18   which servers, in this order (default all three)
 #   --designs ext,a,b,c   which implementations, in this order (default ext);
 #                         `ext` (or `d`) is the extension file
-#                         pg_permissions--0.0.1.sql, `a`, `b` and `c` are the
-#                         prototypes in prototypes/ (measured history)
+#                         pg_permissions--0.1.0.sql, `e` the same file with
+#                         bench/run.sh --design e (its Cedar model), `a`, `b`
+#                         and `c` are the prototypes in prototypes/ (measured
+#                         history)
 #   --keep-running        leave the last server running (default: compose down)
 #   -- ARGS               passed to test/run.sh or bench/run.sh
-#                         (--external and --impl are added here)
+#                         (--external and --impl are added here, and for
+#                         test/run.sh -j with the server's CPU limit, which
+#                         a -j in ARGS overrides)
 #
 # For each version the other servers are stopped and this one is started, so
 # only one server uses the CPUs at a time. Each design then runs in a
@@ -64,8 +68,8 @@ impl_for() {
         a) echo prototypes/a-tuple-core.sql ;;
         b) echo prototypes/b-policy-first.sql ;;
         c) echo prototypes/c-compiled-model.sql ;;
-        d|ext) echo pg_permissions--0.0.1.sql ;;
-        *) echo "unknown design: $1 (expected a, b, c, d or ext)" >&2; return 1 ;;
+        d|ext|e) echo pg_permissions--0.1.0.sql ;;
+        *) echo "unknown design: $1 (expected a, b, c, d, e or ext)" >&2; return 1 ;;
     esac
 }
 IFS=, read -r -a VERSION_LIST <<<"$VERSIONS"
@@ -94,6 +98,11 @@ exec > >(tee -a "$LOG") 2>&1
 SUMMARY=()
 FAILED=0
 START_ALL=$(date +%s)
+# The client containers have no python3: generate the Cedar oracle spec files
+# here, on the host (test/run.sh runs the files it finds).
+if [ "$MODE" = test ] && command -v python3 >/dev/null 2>&1; then
+    python3 -I "$EXT_DIR/test/cedar/generate.py" suite >/dev/null || { echo "error: test/cedar/generate.py suite failed"; exit 2; }
+fi
 for v in "${VERSION_LIST[@]}"; do
     svc="pg$v"
     echo "==== $svc: stopping other servers, starting $svc"
@@ -110,6 +119,11 @@ for v in "${VERSION_LIST[@]}"; do
     cpus=$( [ "$quota" = max ] && echo unlimited || awk -v q="$quota" -v p="$period" 'BEGIN { printf "%g", q / p }')
     memdesc=$( [ "$mem" = max ] && echo unlimited || awk -v m="$mem" 'BEGIN { printf "%gg", m / 1073741824 }')
     host="$MACHINE; container cpus=$cpus mem=$memdesc"
+    # test/run.sh runs one spec file per server CPU at a time
+    JOBS_ARG=()
+    if [ "$MODE" = test ] && [ "$cpus" != unlimited ]; then
+        JOBS_ARG=(-j "$(awk -v c="$cpus" 'BEGIN { j = int(c); if (j < c) j++; if (j < 1) j = 1; print j }')")
+    fi
 
     for d in "${DESIGN_LIST[@]}"; do
         impl=$(impl_for "$d")
@@ -120,7 +134,8 @@ for v in "${VERSION_LIST[@]}"; do
         compose run --rm --no-deps -T --entrypoint bash -u postgres \
             -e PGHOST=/var/run/postgresql -e PGUSER=postgres -e TZ="${TZ_NAME:-UTC}" \
             -e BENCH_ENVIRONMENT=docker -e BENCH_HOST="$host" \
-            "$svc" "/pg_permissions/$MODE/run.sh" --external --impl "$impl" ${PASS[@]+"${PASS[@]}"} 2>&1 |
+            "$svc" "/pg_permissions/$MODE/run.sh" --external --impl "$impl" $( [ "$d" = e ] && echo --design e ) \
+            ${JOBS_ARG[@]+"${JOBS_ARG[@]}"} ${PASS[@]+"${PASS[@]}"} 2>&1 |
             grep --line-buffered -v -E '^ ?Container .*(Creating|Created|Starting|Started|Running|Waiting|Healthy)' | tee "$out_file"
         status=${PIPESTATUS[0]}
         secs=$(( $(date +%s) - start ))

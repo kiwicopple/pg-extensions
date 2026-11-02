@@ -1,6 +1,6 @@
 -- Goal: the public API's names follow one rule (research/decision.md, "API naming
 -- (session 5)"). A model-specific function carries its model's prefix
--- (rbac_ or fga_); no prefix means shared across models (current_subject_id,
+-- (rbac_, fga_ or cedar_); no prefix means shared across models (current_subject_id,
 -- current_subject_type, delete_subject); a leading _ is internal. Parameters
 -- have names, no p_ prefix, and every name can be written unquoted in named
 -- notation (`name => value`): no reserved, type_func_name or col_name keyword
@@ -41,12 +41,12 @@ begin
     end loop;
 end $$;
 
-select tap.plan(34);
+select tap.plan(49);
 
 select tap.is(
     (select array_agg(name order by name) from api_fn
-     where name !~ '^(rbac|fga)_' and name not in ('current_subject_id', 'current_subject_type', 'delete_subject')),
-    null, 'every public function is rbac_*, fga_* or one of the shared three');
+     where name !~ '^(rbac|fga|cedar)_' and name not in ('current_subject_id', 'current_subject_type', 'delete_subject')),
+    null, 'every public function is rbac_*, fga_*, cedar_* or one of the shared three');
 select tap.is(
     (select array_agg(name || '(' || arg || ')' order by name, n) from api_arg where arg like 'p\_%'),
     null, 'no public parameter starts with p_');
@@ -69,8 +69,12 @@ select tap.set_eq(
           'fga_write_authorization_model', 'fga_read_authorization_model', 'fga_read_authorization_models',
           'fga_delete_store', 'fga_write', 'fga_write_tuple', 'fga_delete_tuple', 'fga_read',
           'fga_check', 'fga_list_objects', 'fga_list_users',
-          'fga_check_current', 'fga_list_objects_current', 'fga_list_object_ids_current'],
-    'the public functions are the 26 called below');
+          'fga_check_current', 'fga_list_objects_current', 'fga_list_object_ids_current',
+          'cedar_put_policy', 'cedar_delete_policy', 'cedar_policies', 'cedar_put_entities', 'cedar_delete_entities',
+          'cedar_read_entities', 'cedar_is_authorized', 'cedar_is_authorized_current', 'cedar_list_resources_current',
+          'cedar_uid',
+          'cedar_put_template', 'cedar_link_template', 'cedar_delete_template', 'cedar_templates'],
+    'the public functions are the 40 called below');
 
 -- one call per public function, every argument named
 
@@ -148,6 +152,42 @@ select set_config('permissions.subject_id', '', false);
 select tap.lives_ok(format($$ select permissions.fga_delete_tuple(subject => %L, relation => 'viewer', object => %L) $$,
                            'user:' || :'bob', 'document:' || :'acme_readme'),
     'fga_delete_tuple(subject, relation, object)');
+
+-- Cedar
+select tap.lives_ok($$ select permissions.cedar_put_policy(policy_id => 'view', policy => null, policy_json => '{
+    "effect": "permit", "principal": {"op": "All"}, "action": {"op": "==", "entity": {"type": "Action", "id": "view"}},
+    "resource": {"op": "All"}, "conditions": []}') $$,
+    'cedar_put_policy(policy_id, policy, policy_json)');
+select tap.lives_ok($$ select permissions.cedar_put_policy(policy_id => 'edit', policy => 'permit (principal, action == Action::"edit", resource);', policy_json => null) $$,
+    'cedar_put_policy(policy_id, policy, policy_json) with Cedar text');
+select tap.lives_ok($$ select permissions.cedar_put_template(template_id => 'own', template => 'permit (principal == ?principal, action, resource == ?resource);', template_json => null) $$,
+    'cedar_put_template(template_id, template, template_json)');
+select tap.lives_ok($$ select permissions.cedar_link_template(policy_id => 'bob-d1', template_id => 'own', principal => 'User::"bob"', resource => 'Doc::"d1"') $$,
+    'cedar_link_template(policy_id, template_id, principal, resource)');
+select tap.is((select array_agg(t.template_id) from permissions.cedar_templates() t), '{own}', 'cedar_templates()');
+select tap.is((select array_agg(p.policy_id || ':' || coalesce(p.template_id, '')) from permissions.cedar_policies() p), '{bob-d1:own,edit:,view:}', 'cedar_policies()');
+select tap.lives_ok($$ select permissions.cedar_put_entities(entities => '[{"uid": {"type": "User", "id": "bob"}, "attrs": {}, "parents": []}]') $$,
+    'cedar_put_entities(entities)');
+select tap.is(permissions.cedar_read_entities(type => 'User', ids => '{bob}') -> 0 -> 'uid', '{"type": "User", "id": "bob"}',
+    'cedar_read_entities(type, ids)');
+select tap.is(permissions.cedar_is_authorized(principal => 'User::"bob"', action => 'Action::"view"', resource => 'Doc::"d1"',
+        context => null, entities => null) ->> 'decision',
+    'allow', 'cedar_is_authorized(principal, action, resource, context, entities)');
+select set_config('permissions.subject_id', 'bob', false);
+select set_config('permissions.subject_type', 'User', false);
+select tap.is(permissions.cedar_is_authorized_current(action => 'Action::"view"', resource => 'Doc::"d1"', resource_attrs => '{}',
+                                                      plan_time_guard => null),
+              true, 'cedar_is_authorized_current(action, resource, resource_attrs, plan_time_guard)');
+select tap.is(array(select permissions.cedar_list_resources_current(action => 'Action::"view"', resource_type => 'User')),
+              '{bob}', 'cedar_list_resources_current(action, resource_type)');
+select tap.is(permissions.cedar_uid(type => 'Doc', id => 'd1'), 'Doc::"d1"', 'cedar_uid(type, id)');
+select set_config('permissions.subject_id', '', false);
+select set_config('permissions.subject_type', '', false);
+select tap.is(permissions.cedar_delete_entities(uids => '[{"type": "User", "id": "bob"}]'), 1::bigint, 'cedar_delete_entities(uids)');
+select tap.lives_ok($$ select permissions.cedar_delete_policy(policy_id => 'view') $$, 'cedar_delete_policy(policy_id)');
+select permissions.cedar_delete_policy(policy_id => 'edit');
+select permissions.cedar_delete_policy(policy_id => 'bob-d1');
+select tap.lives_ok($$ select permissions.cedar_delete_template(template_id => 'own') $$, 'cedar_delete_template(template_id)');
 
 -- shared cleanup: Bob's assignment in acme and his remaining tuple
 select tap.is(permissions.delete_subject(subject_type => 'user', subject_id => :'bob'), 2::bigint,

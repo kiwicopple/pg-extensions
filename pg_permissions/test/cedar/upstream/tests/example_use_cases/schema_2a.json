@@ -1,0 +1,226 @@
+{
+    "": {
+        "entityTypes": {
+            "Account": {},
+            "AccountGroup": {},
+            "Administrator": {},
+            "Album": {
+                "memberOfTypes": [
+                    "Account",
+                    "Album"
+                ]
+            },
+            "Photo": {
+                "memberOfTypes": [
+                    "Account",
+                    "Album"
+                ]
+            },
+            "User": {
+                "memberOfTypes": [
+                    "UserGroup"
+                ]
+            },
+            "UserGroup": {},
+            "Video": {
+                "memberOfTypes": [
+                    "Account",
+                    "Album"
+                ]
+            }
+        },
+        "actions": {
+            "addPhoto": {
+                "appliesTo": {
+                    "resourceTypes": [
+                        "Album"
+                    ],
+                    "principalTypes": [
+                        "User"
+                    ],
+                    "context": {
+                        "type": "Record",
+                        "attributes": {
+                            "authenticated": {
+                                "type": "EntityOrCommon",
+                                "name": "Bool"
+                            },
+                            "confidence_score": {
+                                "type": "EntityOrCommon",
+                                "name": "decimal"
+                            },
+                            "source_ip": {
+                                "type": "EntityOrCommon",
+                                "name": "ipaddr"
+                            }
+                        }
+                    }
+                }
+            },
+            "comment": {
+                "appliesTo": {
+                    "resourceTypes": [
+                        "Photo"
+                    ],
+                    "principalTypes": [
+                        "User"
+                    ],
+                    "context": {
+                        "type": "Record",
+                        "attributes": {
+                            "authenticated": {
+                                "type": "EntityOrCommon",
+                                "name": "Bool"
+                            },
+                            "confidence_score": {
+                                "type": "EntityOrCommon",
+                                "name": "decimal"
+                            },
+                            "source_ip": {
+                                "type": "EntityOrCommon",
+                                "name": "ipaddr"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "appliesTo": {
+                    "resourceTypes": [
+                        "Photo"
+                    ],
+                    "principalTypes": [
+                        "User"
+                    ],
+                    "context": {
+                        "type": "Record",
+                        "attributes": {
+                            "authenticated": {
+                                "type": "EntityOrCommon",
+                                "name": "Bool"
+                            },
+                            "confidence_score": {
+                                "type": "EntityOrCommon",
+                                "name": "decimal"
+                            },
+                            "source_ip": {
+                                "type": "EntityOrCommon",
+                                "name": "ipaddr"
+                            }
+                        }
+                    }
+                }
+            },
+            "edit": {
+                "appliesTo": {
+                    "resourceTypes": [
+                        "Photo"
+                    ],
+                    "principalTypes": [
+                        "User"
+                    ],
+                    "context": {
+                        "type": "Record",
+                        "attributes": {
+                            "authenticated": {
+                                "type": "EntityOrCommon",
+                                "name": "Bool"
+                            },
+                            "confidence_score": {
+                                "type": "EntityOrCommon",
+                                "name": "decimal"
+                            },
+                            "source_ip": {
+                                "type": "EntityOrCommon",
+                                "name": "ipaddr"
+                            }
+                        }
+                    }
+                }
+            },
+            "listAlbums": {
+                "appliesTo": {
+                    "resourceTypes": [
+                        "Account"
+                    ],
+                    "principalTypes": [
+                        "User"
+                    ],
+                    "context": {
+                        "type": "Record",
+                        "attributes": {
+                            "authenticated": {
+                                "type": "EntityOrCommon",
+                                "name": "Bool"
+                            },
+                            "confidence_score": {
+                                "type": "EntityOrCommon",
+                                "name": "decimal"
+                            },
+                            "source_ip": {
+                                "type": "EntityOrCommon",
+                                "name": "ipaddr"
+                            }
+                        }
+                    }
+                }
+            },
+            "listPhotos": {
+                "appliesTo": {
+                    "resourceTypes": [
+                        "Album"
+                    ],
+                    "principalTypes": [
+                        "User"
+                    ],
+                    "context": {
+                        "type": "Record",
+                        "attributes": {
+                            "authenticated": {
+                                "type": "EntityOrCommon",
+                                "name": "Bool"
+                            },
+                            "confidence_score": {
+                                "type": "EntityOrCommon",
+                                "name": "decimal"
+                            },
+                            "source_ip": {
+                                "type": "EntityOrCommon",
+                                "name": "ipaddr"
+                            }
+                        }
+                    }
+                }
+            },
+            "view": {
+                "appliesTo": {
+                    "resourceTypes": [
+                        "Photo",
+                        "Video"
+                    ],
+                    "principalTypes": [
+                        "User",
+                        "Administrator"
+                    ],
+                    "context": {
+                        "type": "Record",
+                        "attributes": {
+                            "authenticated": {
+                                "type": "EntityOrCommon",
+                                "name": "Bool"
+                            },
+                            "confidence_score": {
+                                "type": "EntityOrCommon",
+                                "name": "decimal"
+                            },
+                            "source_ip": {
+                                "type": "EntityOrCommon",
+                                "name": "ipaddr"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

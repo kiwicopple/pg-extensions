@@ -1,5 +1,5 @@
 -- Roles and grants for the integration tests, as in Supabase. Runs after
--- pg_permissions--0.0.1.sql (see docker-compose.yml).
+-- pg_permissions--0.1.0.sql (see docker-compose.yml).
 
 create role anon nologin;
 create role authenticated nologin;
@@ -33,4 +33,20 @@ grant execute on function
     permissions.fga_check(text, text, text, jsonb, text, jsonb),
     permissions.fga_list_objects(text, text, text, jsonb, text, jsonb),
     permissions.fga_list_users(text, text, text[], jsonb, text, jsonb)
+to service_role;
+
+-- The Cedar admin functions: policies, templates and links, entities, and
+-- requests for any principal.
+grant execute on function
+    permissions.cedar_put_policy(text, text, jsonb),
+    permissions.cedar_delete_policy(text),
+    permissions.cedar_policies(),
+    permissions.cedar_put_template(text, text, jsonb),
+    permissions.cedar_link_template(text, text, text, text),
+    permissions.cedar_delete_template(text),
+    permissions.cedar_templates(),
+    permissions.cedar_put_entities(jsonb),
+    permissions.cedar_delete_entities(jsonb),
+    permissions.cedar_read_entities(text, text[]),
+    permissions.cedar_is_authorized(text, text, text, jsonb, jsonb)
 to service_role;

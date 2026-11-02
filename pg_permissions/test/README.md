@@ -15,11 +15,14 @@ The tests need only the Postgres binaries: `initdb`, `pg_ctl` and `psql`. The be
 Run these commands from the `pg_permissions/` directory:
 
 ```bash
-./test/run.sh                                     # the extension: pg_permissions--0.0.1.sql
+./test/run.sh                                     # the extension: pg_permissions--0.1.0.sql
 ./test/run.sh --impl prototypes/a-tuple-core.sql  # a prototype
 ./test/run.sh rbac                                # only spec files whose name contains "rbac"
 ./test/run.sh --design b --impl my.sql            # force the design (a|b|c|d|none)
 ./test/run.sh -v                                  # print every assertion
+./test/run.sh --no-cedar-oracle                   # skip the generated Cedar oracle files
+./test/run.sh -j 4                                # run 4 spec files at a time (default: one per CPU)
+./test/run.sh --upgrade-from 0.0.1                # the whole suite on 0.0.1 plus the upgrade script
 ```
 
 From the root of the repository, run `make test.pg_permissions`. To test a prototype, run `IMPL=prototypes/a-tuple-core.sql make test.pg_permissions`.
@@ -34,24 +37,48 @@ The runner sorts the files of both directories by file name. The name filter app
 
 By default, the runner starts a throwaway Postgres in a temporary directory. The server listens on a Unix socket only, so it does not conflict with a server that you already run. The runner deletes it at the end of the run. Each spec file gets a new database. The runner clones the database from a template that has the implementation installed.
 
+Because each file has its own database, the runner runs several files at a time on the one server: `-j N` files, by default one per CPU (`getconf _NPROCESSORS_ONLN`). It prints the results in file order, and the summary counts every file. `-j 1` runs one file at a time. A spec that creates objects outside its database (roles, other databases) must give them names that no other spec uses. On a 10-CPU Apple silicon laptop the whole suite took 166 seconds with one file at a time and 77 seconds with `-j 10` (2026-11-02); the oracle files contend for the server, so the gain is not linear.
+
+`--upgrade-from 0.0.1` builds the template from `pg_permissions--0.0.1.sql` and the upgrade script `pg_permissions--0.0.1--0.1.0.sql` instead of the 0.1.0 file, so every spec runs against an upgraded install. For the extension, the runner first runs `tools/sync-upgrade.sh --check` and counts it as a file (`tools/sync-upgrade --check`), so an upgrade script that misses a change to a marked section fails the run.
+
 To use a server that already runs, pass `--external` and set `PGHOST`, `PGPORT` and `PGUSER`. The user must be able to create databases and roles.
 
-To test on Postgres 16, 17 and 18 with pg_tle, use Docker. The command `docker/run-matrix.sh test` runs the extension on each version, one server at a time. Add `--designs ext,a,b,c` to run the prototypes too. See [`../docker/README.md`](../docker/README.md). This is the only way to run the `pgtle.install_extension` branch of `03_tle_install.sql`. Without pg_tle, the test passes with a `SKIP` assertion.
+To test on Postgres 16, 17 and 18 with pg_tle, use Docker. The command `docker/run-matrix.sh test` runs the extension on each version, one server at a time, with `-j` set to the server's CPU limit. Add `--designs ext,a,b,c` to run the prototypes too. See [`../docker/README.md`](../docker/README.md). This is the only way to run the `pgtle.install_extension` branch of `03_tle_install.sql`, the `pgtle.install_update_path` branch of `d/05_upgrade.sql`, and the non-superuser update and `pgtle.set_default_version` branch of `d/03_tle_install.sql`. Without pg_tle, these tests pass with `SKIP` assertions.
 
 The runner creates the client roles of Supabase: `anon`, `authenticated` and `service_role`. RLS tests then run like Supabase clients.
 
 A file passes only when each planned assertion ran and passed, and no SQL error occurred.
 
+### The generated Cedar oracle files
+
+The files `spec/d/7[0-7]_cedar_oracle*_NN.sql` come from Cedar's integration tests (`cedar/`): requests with JSON policies (entities stored, in the overlay, and with direct parents only), with Cedar text policies, and through template links, plus the parser on every text policy. They cover every case of the corpus, the extension types included, and are about 197 MB in 190 files, so Git ignores them (`spec/d/.gitignore`), and the runner writes them before each run of the extension with `python3 -I test/cedar/generate.py suite`. That takes about 9 seconds, and the files add about 140 seconds to a run with `-j 1` (the whole suite takes about 165 seconds with `-j 1` and about 77 seconds with `-j 10` on Apple silicon). The runner skips the step when its name patterns select none of them, for example `./test/run.sh rbac`.
+
+- `--no-cedar-oracle` runs everything else and skips these files.
+- Without `python3`, the runner uses the files that are already there, and warns if there are none. `docker/run-matrix.sh test` writes them on the host, because its client containers have no Python.
+- To write them by hand, or for another phase, see [`cedar/README.md`](cedar/README.md).
+
+### The upgrade script
+
+The code that is new in 0.1.0 sits in `pg_permissions--0.1.0.sql` between marker lines: the Cedar model between `-- >>> cedar section: begin` and `-- <<< cedar section: end`, and the new `delete_subject` in the `cleanup` section. The upgrade script `pg_permissions--0.0.1--0.1.0.sql` has the same markers. Edit the install file only, then copy the section into the upgrade script:
+
+```bash
+./tools/sync-upgrade.sh           # rewrite the marked regions of the upgrade script
+./tools/sync-upgrade.sh --check   # exit 1 if the upgrade script is out of date
+```
+
+`spec/d/05_upgrade.sql` then checks that 0.0.1 plus the upgrade script equals a fresh 0.1.0 install.
+
 ## Layout
 
 ```
 test/
-  run.sh             runner: one fresh database per spec file, TAP parsing, summary
+  run.sh             runner: one fresh database per spec file, -j N files at a time, TAP parsing, summary
   lib/tap.sql        assertions (pgTAP-compatible names), installed in schema `tap`
   lib/cluster.sh     throwaway cluster helpers, shared with bench/run.sh
   fixtures/ids.sql   fixed UUIDs for the plan scenarios (psql variables :alice, :acme, ...)
   fixtures/rbac_roles.sql  the viewer/editor/admin roles (the API of the prototypes)
   fixtures/d/rbac_roles.sql  the same roles through the extension's rbac_create_role
+  fixtures/d/cedar.sql       helpers for the hand-written Cedar specs (cedar_t.eval, cedar_t.authz, ...)
   spec/              shared files, one per goal, in the rbac API of the prototypes (not run for d)
   spec/a/ b/ c/ d/   per-design files: same scenarios, each design's native API (d/ is the extension,
                      with its own copies of the shared files)
@@ -59,16 +86,22 @@ test/
   fga_lang/          openfga/language's model validation cases: vendor.sh, generate.py -> spec/d/62_fga_lang_oracle
   fga_abac/          OpenFGA's ABAC (conditions) suite: vendor.sh, generate.py --suite -> spec/d/6[34]_fga_abac_*
                      (without --suite: fga_abac/spec/, not run), probe.sh (the server's answers, P1-P44)
+  cedar/             Cedar's integration tests: vendor.sh, generate.py suite -> spec/d/7[0-7]_cedar_oracle_*
+                     (generated by run.sh, not committed)
 ```
 
 The scenarios and the work plan are in [`../research/plan.md`](../research/plan.md).
 
 | Prefix | Area | Where |
 | --- | --- | --- |
-| `0x_` | Identity, security, install, names of the API (`d/04`) | `spec/` (shared) and `spec/d/` |
+| `0x_` | Identity, security, install, names of the API (`d/04`), upgrade from 0.0.1 (`d/05`) | `spec/` (shared) and `spec/d/` |
 | `1x_` | `rbac` preset | `spec/` (shared) and `spec/d/` |
 | `2x_` | RLS | `spec/` (shared) and `spec/d/` |
 | `3x_`, `4x_`, `5x_` | Zanzibar-level API, graduation, v0.0.2 scenarios (see `research/plan.md`) | `spec/<design>/` (per design) |
+| `5x_cedar_` | Cedar: API, errors and limits, hierarchy, evaluator, overlay, text parser, templates (`research/plan-cedar.md`) | `spec/d/` |
+| `6x_` | OpenFGA oracles (generated, committed) | `spec/d/` |
+| `7x_cedar_oracle` | Cedar oracle (generated before each run, not committed) | `spec/d/` |
+| `90_usage_` | The SQL examples of the user docs: RBAC, OpenFGA, conditions, RLS and Cedar (`90_usage_cedar.sql`) | `spec/d/` |
 
 ## Write a test
 
@@ -160,10 +193,11 @@ A run has five phases. Each phase loads a seed and measures the time. Then it ru
 | parents_proj | `designs/<design>/seed_parents.sql`: about 10 folders per org, org roles inherited by folders, every 5th user a folder viewer. Documents point at folders only through the app column `documents.folder_id`. Two-arm projection policy: `id = any(<documents shared with me>) or folder_id = any(<folders I can view>)` | `parents_proj_select_page`, `parents_proj_select_count` |
 | parents | `designs/<design>/seed_parent_docs.sql`: a parent link per document in the tables of the design. Single-branch policy: one call returns each visible document ID | `parents_select_page`, `parents_select_count` |
 | `nesting` | `designs/<design>/seed_nest.sql`, loaded after `write_nest_team`: a team of 1,000 members nested in the deepest team for good | `write_nest_team` (rolled back), `nest_check` (a check that needs the nested team) |
+| `rowcheck` (design `e` only) | `designs/e/seed_rowcheck.sql`: one select policy that calls `cedar_is_authorized_current` on every row, with the row's org as a resource attribute. Its visible sets must equal the parents phase's | `row_select_page` |
 
 Both parents policies have no `org_id` branch, and they see the same documents. The projection shape measures the design on a few folder IDs. The single-branch shape measures the design on each visible document. The seed time and the storage of the parents phase include the per-document link that this shape needs.
 
-The runner infers the design from the name of the `--impl` file, as `test/run.sh` does. You can also set it with `--design a|b|c|d|none`. The extension file is design `d`. The runner skips a phase when the design has no files for it (phases 2 to 5).
+The runner infers the design from the name of the `--impl` file, as `test/run.sh` does. You can also set it with `--design a|b|c|d|e|none`. The extension file is design `d`. Design `e` is the extension's Cedar model: run the extension file with `--design e` (`docker/run-matrix.sh bench --designs e`). Its seeds write the same facts as Cedar entities and template links, and its results are in [`../research/benchmarks/cedar.md`](../research/benchmarks/cedar.md). The runner skips a phase when the design has no files for it (phases 2 to 5, and the design-specific phases).
 
 The workloads in `bench/workloads/` are shared. A file of the same name in the `workloads/` directory of the design replaces a shared file. Design `d` has its own `rbac_check` and `write_assign_role`, with the `rbac_` names. The other workloads are in the `workloads/` directory of the design. Each workload runs with pgbench as `authenticated`, under RLS. Writes roll back, so a faster design does not end up with more rows in later phases.
 

@@ -1,33 +1,40 @@
 # Current architecture
 
-`pg_permissions` puts separate permission models in one Postgres schema. RBAC manages roles and assignments. OpenFGA manages authorization models and relationship tuples. Both share subject identity and compose through row level security.
+`pg_permissions` puts three permission models in one Postgres schema. RBAC manages roles and assignments. OpenFGA manages authorization models and relationship tuples. Cedar manages policies, templates and entities. All three share subject identity and compose through row level security (RLS).
 
 ## Separate model APIs
 
-The `rbac_*` and `fga_*` tables and functions follow the rules of their own models. There is no generic API that translates every model into one representation. This lets each model retain its semantics and its own performance optimizations.
+The `rbac_*`, `fga_*` and `cedar_*` tables and functions follow the rules of their own models. Each model retains its semantics and performance optimizations. An RBAC assignment does not create an OpenFGA tuple or a Cedar entity; applications manage each model's data explicitly.
 
 The research compared three earlier implementations: a tuple core (A), a policy-first evaluator (B), and a compiled model (C). Those experiments exposed differences in what a generic role or deny meant. The project chose per-model tables (D) on 2026-10-29 and promoted that implementation to `pg_permissions--0.0.1.sql`.
+
+Cedar (design E) extends that architecture in `pg_permissions--0.1.0.sql`. It is part of the same extension, alongside RBAC and OpenFGA. Existing databases can [upgrade from 0.0.1](../docs/install.md#upgrade-from-001) while keeping their roles, models and tuples.
 
 ## Shared identity and RLS
 
 The extension does not store users or depend on an `auth` schema. It reads the current subject from JWT claims or transaction-local settings. Client functions answer for that subject; admin functions manage data or evaluate an explicit subject.
 
-An application can combine RBAC and OpenFGA on one table. Permissive RLS policies grant access through either model, while restrictive policies can deny access across both. Read policies use lists of accessible scopes or IDs; write policies check the affected row. The [RLS guides](../docs/rls/policies.md) show the supported forms.
+An application can combine all three models on one table. Permissive RLS policies grant access through any model; restrictive policies can deny access across them. A Cedar `forbid` overrides Cedar permits, but needs a restrictive RLS policy to block access granted by RBAC or OpenFGA.
+
+Read policies can list accessible scopes or IDs once per statement. Write policies check the affected row. Cedar also accepts row attributes in `cedar_is_authorized_current`, so a policy can evaluate columns without storing a second copy of them as an entity. The [RLS guides](../docs/rls/policies.md) explain these choices and their performance implications.
 
 ## Conditions and compatibility
 
 OpenFGA conditions use a CEL subset implemented in PL/pgSQL. The extension compiles expressions when it writes a model and evaluates them against tuple and request context. Current-subject helpers accept no request context and deny access that depends on a condition they cannot evaluate.
 
-The OpenFGA test suites are pinned oracles, not a claim that every service feature is supported. Read [OpenFGA compatibility](../docs/models/openfga/compatibility.md) and [CEL support](../docs/reference/cel.md) before relying on a particular feature.
+Cedar accepts policies as text or JSON and evaluates them against entities, their attributes and their hierarchy. Its admin check accepts request context and temporary entities. The RLS helpers use the current subject, accept no request context, and deny access when a relevant `forbid` fails to evaluate.
+
+Pinned upstream test suites check OpenFGA and Cedar behavior. They do not imply support for every feature of the upstream services or libraries. Read [OpenFGA compatibility](../docs/models/openfga/compatibility.md), [CEL support](../docs/reference/cel.md), and [Cedar compatibility](../docs/models/cedar/compatibility.md). Cedar targets 4.14; schema validation and partial evaluation are outside its scope.
 
 ## Future models
 
-The design reserves Cedar as a future, separate model. It is not implemented. The policy-first prototype is research for that work, not a Cedar installation option. A new model would need its own API, compatibility statement, tests, and RLS guidance.
+A new model can add its own tables, API, compatibility statement, tests and RLS helpers while using the existing subject identity. Its documentation should explain its concepts and limits alongside the other models. Cedar is the first addition to the original RBAC and OpenFGA implementation; the earlier policy-first prototype remains historical research.
 
 ## Evidence and design details
 
 - [Per-model tables decision](decision.md#session-4-direction-per-model-tables): why the generic API was dropped.
 - [Per-model implementation](designs/d-per-model.md): tables, evaluation, and testing details.
 - [Condition evaluator](designs/d-conditions.md): design and implementation record.
+- [Cedar implementation](designs/e-cedar.md): parsing, evaluation, RLS helpers, compatibility tests and security review.
 - [Benchmarks](benchmarks/README.md): measured results and limits, including the current implementation.
 - [Historical prototypes](prototypes/README.md): earlier designs and their usage guides.

@@ -59,10 +59,10 @@ function checkNavigation(items) {
   }
 }
 checkNavigation(sidebar);
-const reference = ['shared', 'rbac', 'openfga'].map((name) =>
+const reference = ['shared', 'rbac', 'openfga', 'cedar'].map((name) =>
   fs.readFileSync(path.resolve(docs, `../docs/reference/${name}.md`), 'utf8')).join('\n');
 const functions = [...reference.matchAll(/^### `([^`]+)`/gm)].map((m) => m[1]);
-assert.equal(functions.length, 26, 'The SQL reference must cover all 26 public functions');
-assert.equal(new Set(functions).size, 26, 'Each SQL function must have one canonical entry');
+assert.equal(functions.length, 40, 'The SQL reference must cover all 40 public functions');
+assert.equal(new Set(functions).size, 40, 'Each SQL function must have one canonical entry');
 assert.ok(fs.existsSync(path.join(dist, 'llms.txt')), 'Missing agent index');
-console.log(`check-content: ${pages.length} Markdown exports, ${links} links, ${anchors} legacy anchors, and 26 SQL functions verified`);
+console.log(`check-content: ${pages.length} Markdown exports, ${links} links, ${anchors} legacy anchors, and 40 SQL functions verified`);

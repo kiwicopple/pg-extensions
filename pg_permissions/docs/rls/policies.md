@@ -254,6 +254,213 @@ If a table does not need app-wide roles, use the single check.
 - **Give each policy a role.** Write `to authenticated`, or the role that your requests use, and run `alter table ... enable row level security`. A superuser, or an owner without `force row level security`, bypasses each policy.
 - **Clients never write permission data.** Clients have no privilege on the tables. The functions that write are admin-only.
 
+## Policies for Cedar
+
+Use Cedar when the rule depends on attributes, groups or a deny that beats every grant. A Cedar policy is data in the database, so you change a rule without a migration of your RLS policies.
+
+Start in a fresh database. Complete the walkthrough of [Policies (Cedar)](../models/cedar/overview.md) first: [write policies](../models/cedar/policies.md), [store entities](../models/cedar/entities.md) and [check requests](../models/cedar/checks.md). The examples below use its policies and entities, and the roles `anon`, `authenticated` and `service_role`. Do not run them in the database of the RBAC examples above.
+
+The principal of a policy is the current subject, `current_subject_type()::"current_subject_id()"`. The default type is `user`, so the principal of Alice is `user::"alice"`. A subject that has no stored entity is a valid principal. A policy that tests the groups of the principal needs the stored entity.
+
+The two policies below need one more Cedar policy. It lets the owner of a document view it:
+
+```sql
+select permissions.cedar_put_policy(
+  policy_id => 'owner-view',
+  policy => 'permit (
+  principal,
+  action == Action::"view",
+  resource
+)
+when { resource.owner == principal };'
+);
+```
+
+The table has the documents of the app. It has the owner and the level of each document as columns. The entities of `q3` and `salaries` exist from the walkthrough. The entity of `draft` is new. Keep the entities in step with the rows (see [Keep entities in sync](../models/cedar/entities.md#keep-entities-in-sync)):
+
+```sql
+select permissions.cedar_put_entities(
+  entities => '[
+    {
+      "uid": {"type": "Document", "id": "draft"},
+      "attrs": {
+        "owner": {"__entity": {"type": "user", "id": "alice"}},
+        "level": "internal"
+      }
+    }
+  ]'
+);
+
+create table public.documents (
+  id text primary key,
+  title text not null,
+  owner_id text not null,
+  level text not null
+);
+insert into public.documents (id, title, owner_id, level)
+values
+  ('q3', 'Q3 report', 'bob', 'internal'),
+  ('salaries', 'Salaries', 'alice', 'confidential'),
+  ('draft', 'Draft', 'alice', 'internal');
+grant select, update on public.documents to authenticated;
+alter table public.documents enable row level security;
+```
+
+### Reads: list the ids once
+
+For a read policy, use `cedar_list_resources_current`. It returns the ids of the stored entities that the current subject can view. Postgres runs it once for each query, as an InitPlan, and then uses the index of the table:
+
+```sql
+create policy documents_select
+  on public.documents
+  for select
+  to authenticated
+  using (
+    id = any (
+      array(
+        select permissions.cedar_list_resources_current(
+          action => 'Action::"view"',
+          resource_type => 'Document'
+        )
+      )
+    )
+  );
+```
+
+If the column `id` is a `uuid`, cast inside: `select permissions.cedar_list_resources_current(...)::uuid`. The function returns text. Use the same form as for the other lists (see [Performance](performance.md#plan-time-evaluation)).
+
+The list contains stored entities only. A row whose entity is not stored is not visible. A row of the table that has no entity is hidden for every user. To see what each user gets:
+
+| User | Why | `documents` |
+| --- | --- | --- |
+| Alice | She is in `eng`, and `q3` is in the folder `reports`. She owns `draft`. `no-confidential` forbids `salaries`. | `q3`, `draft` |
+| Bob | He owns `q3`. | `q3` |
+| Carol | She is in `design`, which is in `eng`. | `q3` |
+
+```sql
+begin;
+set local role authenticated;
+select set_config('permissions.subject_id', 'alice', true);
+select id from public.documents order by id;
+-- draft
+-- q3
+commit;
+```
+
+### Writes: check the row
+
+For a write policy, check the row that changes with `cedar_is_authorized_current`. Build the uid of the resource with `cedar_uid`. Pass the columns that the policies read as `resource_attrs`. They replace the stored attributes for this check, so the row does not need an entity, and a stale entity does not matter:
+
+```sql
+create policy documents_update
+  on public.documents
+  for update
+  to authenticated
+  using (
+    permissions.cedar_is_authorized_current(
+      action => 'Action::"edit"',
+      resource => permissions.cedar_uid('Document', id),
+      resource_attrs => jsonb_build_object(
+        'owner', jsonb_build_object(
+          '__entity', jsonb_build_object(
+            'type', 'user',
+            'id', owner_id
+          )
+        ),
+        'level', level
+      )
+    )
+  );
+```
+
+An attribute that is an entity needs the form `{"__entity": {"type", "id"}}`. The other values are strings, numbers, booleans, sets and records. A value that Cedar cannot hold denies the row.
+
+Alice updates the rows that she owns and can see. `owner-edit` allows `draft`. She does not own `q3`, and she cannot see `salaries`:
+
+```sql
+begin;
+set local role authenticated;
+select set_config('permissions.subject_id', 'alice', true);
+update public.documents set title = title || '!';
+-- UPDATE 1: draft only
+commit;
+
+begin;
+set local role authenticated;
+select set_config('permissions.subject_id', 'bob', true);
+update public.documents set title = title || '!';
+-- UPDATE 1: q3 only
+commit;
+```
+
+A check for one row costs more than one entry of a list (see [Performance](performance.md#cedar-policies)). Use it for writes, which touch few rows, and for rules on the columns of a row. If a read policy needs the columns of the row, check each row with `cedar_is_authorized_current`, and keep the number of rows small.
+
+### Always use `cedar_uid` for row ids
+
+The resource is Cedar text. Build it with `cedar_uid(type, id)`, which escapes the id:
+
+| Form | An id with a `"` or a `\` |
+| --- | --- |
+| `permissions.cedar_uid('Document', id::text)` | Works. It is the same id that the policies name. |
+| `'Document::"' \|\| id \|\| '"'` | An id with a `"` is not a Cedar string. The check returns `false` for that row. An id with a backslash can read as another id: `a\nb` reads as `a`, a line break, and `b`. The check is then for another resource than the row. |
+
+A row id that is a `uuid` or a number has no such characters, but use `cedar_uid` anyway. An id that comes from users does not need a rule to check it.
+
+### Fail closed
+
+The two functions deny when they cannot decide. This keeps a mistake in a policy from giving access:
+
+- Without a subject, `cedar_is_authorized_current` returns `false`, and the list is empty.
+- A `forbid` that applies and gives an error denies the row. The row is left out of the list.
+- A `permit` that gives an error is skipped. It gives no access.
+
+The next policy forbids flagged documents. It reads `resource.flagged`. The documents of the example have no attribute `flagged`, so the policy gives an error for every one of them, and every row is denied:
+
+```sql
+select permissions.cedar_put_policy(
+  policy_id => 'block-flagged',
+  policy => 'forbid (principal, action, resource)
+when { resource.flagged };'
+);
+begin;
+set local role authenticated;
+select set_config('permissions.subject_id', 'alice', true);
+select id from public.documents order by id;
+-- (0 rows)
+commit;
+```
+
+`cedar_is_authorized` shows the cause. It lists `block-flagged` in `errors`. Test an attribute with `has` before you read it:
+
+```sql
+select permissions.cedar_put_policy(
+  policy_id => 'block-flagged',
+  policy => 'forbid (principal, action, resource)
+when { resource has flagged && resource.flagged };'
+);
+begin;
+set local role authenticated;
+select set_config('permissions.subject_id', 'alice', true);
+select id from public.documents order by id;
+-- draft
+-- q3
+commit;
+```
+
+After a change to a policy or an entity, the next statement of the same transaction sees it. A statement that starts after another transaction commits sees the commit.
+
+### Which function to use
+
+| Need | Use |
+| --- | --- |
+| Show a page or a count of the rows that a user can read | `cedar_list_resources_current`, in a `select` policy |
+| Check one row for an update or a delete | `cedar_is_authorized_current`, in an `update` or `delete` policy |
+| A rule on the columns of a row, with few rows | `cedar_is_authorized_current` with `resource_attrs` |
+| A rule on the columns of a row, with many rows | Store the column in the entity, and use the list. Or keep the rule in a plain SQL policy. |
+| A check for a row that is not an entity | `cedar_is_authorized_current` with `resource_attrs` |
+
+The list does the work once for each query. The check does part of the work once for each query, and the rest for each row. [Performance](performance.md#cedar-policies) has measurements.
+
 ## Next step
 
 Continue with [Combine permission models](combine-models.md).

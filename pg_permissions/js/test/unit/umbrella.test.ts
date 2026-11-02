@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
+  CedarClient,
   FgaClient,
   PermissionsClient,
   PermissionsError,
@@ -8,7 +9,7 @@ import {
   createClient,
   createServerClient,
 } from '../../src'
-import type { FgaAdminApi, PermissionsSubjectClient, RbacAdminApi, Queryable } from '../../src'
+import type { CedarAdminApi, FgaAdminApi, PermissionsSubjectClient, RbacAdminApi, Queryable } from '../../src'
 
 type Seen = { url: string; headers: Headers; body: unknown }
 
@@ -39,6 +40,19 @@ describe('createClient', () => {
     })
     expect(seen[0]!.url).toBe('http://localhost:3000/rpc/fga_check_current')
     expect(seen[0]!.body).toEqual({ relation: 'viewer', object: 'document:1' })
+  })
+
+  it('cedar: POST /rpc/cedar_is_authorized_current and /rpc/cedar_list_resources_current', async () => {
+    const { seen, fetch } = recordingFetch(() => new Response('["1"]'))
+    const permissions = createClient('https://p', 'anon', { global: { fetch } })
+    await permissions.cedar.isAuthorized({ action: 'Action::"view"', resource: { type: 'Doc', id: '1' } })
+    expect((await permissions.cedar.listResources({ action: 'Action::"view"', resourceType: 'Doc' })).data).toEqual([
+      '1',
+    ])
+    expect(seen.map((r) => [r.url, r.body])).toEqual([
+      ['https://p/rest/v1/rpc/cedar_is_authorized_current', { action: 'Action::"view"', resource: 'Doc::"1"' }],
+      ['https://p/rest/v1/rpc/cedar_list_resources_current', { action: 'Action::"view"', resource_type: 'Doc' }],
+    ])
   })
 
   it('sends apikey, and the key as the bearer token without an access token', async () => {
@@ -105,14 +119,18 @@ describe('createClient', () => {
     expect('admin' in permissions).toBe(false)
     expect('admin' in permissions.rbac).toBe(false)
     expect('admin' in permissions.fga).toBe(false)
+    expect('admin' in permissions.cedar).toBe(false)
     expectTypeOf(permissions.rbac).toEqualTypeOf<RbacClient<'postgrest'>>()
     expectTypeOf(permissions.fga).toEqualTypeOf<FgaClient<'postgrest'>>()
+    expectTypeOf(permissions.cedar).toEqualTypeOf<CedarClient<'postgrest'>>()
     // @ts-expect-error no admin on the browser client
     void permissions.admin
     // @ts-expect-error no admin on a PostgREST RBAC client
     void permissions.rbac.admin
     // @ts-expect-error no admin on a PostgREST FGA client
     void permissions.fga.admin
+    // @ts-expect-error no admin on a PostgREST Cedar client
+    void permissions.cedar.admin
   })
 
   it('narrows names with the generic', () => {
@@ -152,6 +170,8 @@ describe('createServerClient', () => {
     expect(permissions.fga.admin).toBeDefined()
     expectTypeOf(permissions.rbac.admin).toEqualTypeOf<RbacAdminApi>()
     expectTypeOf(permissions.fga.admin).toEqualTypeOf<FgaAdminApi>()
+    expect(permissions.cedar.admin).toBeDefined()
+    expectTypeOf(permissions.cedar.admin).toEqualTypeOf<CedarAdminApi>()
     await permissions.rbac.admin.assignRole({ userId: 'alice', role: 'editor', scope: 'acme' })
     expect(log[0]!.text).toBe(
       'select "permissions".rbac_assign_role(user_id => $1::text, role => $2::text, scope => $3::text)',
@@ -217,7 +237,11 @@ describe('createServerClient', () => {
     expect('admin' in alice).toBe(false)
     expect('admin' in alice.rbac).toBe(false)
     expect('admin' in alice.fga).toBe(false)
+    expect('admin' in alice.cedar).toBe(false)
     expectTypeOf(alice).toEqualTypeOf<PermissionsSubjectClient>()
+    expectTypeOf(alice.cedar).toEqualTypeOf<CedarClient<'subject'>>()
+    // @ts-expect-error no admin on a subject Cedar client
+    void alice.cedar.admin
     expectTypeOf(alice.rbac).toEqualTypeOf<RbacClient<'subject'>>()
     expectTypeOf(alice.fga).toEqualTypeOf<FgaClient<'subject'>>()
     // @ts-expect-error no admin on a subject RBAC client
@@ -243,6 +267,24 @@ describe('createServerClient', () => {
       // @ts-expect-error not a role of the names
       void server.as({ id: 'a' }).rbac.hasRole({ role: 'editor' })
     })
+  })
+
+  it('cedar: admin over SQL, and as() checks in a transaction', async () => {
+    const { log, db } = fakeDb((text) => (text.includes('as value') ? { rows: [{ value: true }] } : { rows: [] }))
+    const permissions = createServerClient(db)
+    await permissions.cedar.admin.putPolicy({ policyId: 'p', policy: 'permit (principal, action, resource);' })
+    expect(log[0]!.text).toBe(
+      'select "permissions".cedar_put_policy(policy_id => $1::text, policy => $2::text)',
+    )
+    const alice = permissions.as({ id: 'alice' })
+    const request = { action: 'Action::"view"', resource: 'Doc::"1"' }
+    expect(await alice.cedar.isAuthorized(request)).toEqual({ data: true, error: null })
+    expect(log.slice(1).map((q) => q.text.split('(')[0])).toEqual([
+      'begin',
+      'select set_config',
+      'select "permissions".cedar_is_authorized_current',
+      'commit',
+    ])
   })
 
   it('validates the subject role at as()', () => {

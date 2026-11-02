@@ -21,5 +21,6 @@
   "cond_list_users":             { "group": "Conditions", "label": "List users (conditioned)", "title": "Conditions: list users through conditioned teams", "kind": "read" },
   "block_list_objects":          { "group": "Not monotone", "label": "List ids: but not blocked", "title": "Not monotone: list ids on viewer but not blocked", "kind": "read" },
   "block_or_mute_list_objects":  { "group": "Not monotone", "label": "List ids: but not (blocked or muted)", "title": "Not monotone: list ids on viewer but not (blocked or muted)", "kind": "read" },
-  "intersect_list_objects":      { "group": "Not monotone", "label": "List ids: editor and viewer", "title": "Not monotone: list ids on editor and viewer", "kind": "read" }
+  "intersect_list_objects":      { "group": "Not monotone", "label": "List ids: editor and viewer", "title": "Not monotone: list ids on editor and viewer", "kind": "read" },
+  "row_select_page":             { "group": "Per row", "label": "First page (every row checked)", "title": "Per row: first page, every row checked (Cedar only)", "kind": "read" }
 }

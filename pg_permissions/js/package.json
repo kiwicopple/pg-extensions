@@ -1,7 +1,7 @@
 {
   "name": "permissions",
-  "version": "0.2.0",
-  "description": "JS client for pg_permissions: RBAC and OpenFGA authorization in Postgres, over PostgREST or SQL.",
+  "version": "0.3.0",
+  "description": "JS client for pg_permissions: RBAC, OpenFGA and Cedar authorization in Postgres, over PostgREST or SQL.",
   "license": "MIT",
   "author": "Paul Copplestone",
   "homepage": "https://permissions.dev",
@@ -17,6 +17,7 @@
     "rbac",
     "openfga",
     "fga",
+    "cedar",
     "authorization",
     "supabase",
     "postgrest",
@@ -58,6 +59,16 @@
       "require": {
         "types": "./dist/fga.d.cts",
         "default": "./dist/fga.cjs"
+      }
+    },
+    "./cedar": {
+      "import": {
+        "types": "./dist/cedar.d.mts",
+        "default": "./dist/cedar.mjs"
+      },
+      "require": {
+        "types": "./dist/cedar.d.cts",
+        "default": "./dist/cedar.cjs"
       }
     },
     "./sql": {

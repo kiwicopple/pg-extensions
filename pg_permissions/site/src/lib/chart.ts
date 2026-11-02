@@ -1,6 +1,6 @@
 // Small helpers for the build-time SVG charts. No runtime dependencies.
 
-export type Design = 'a' | 'b' | 'c' | 'd';
+export type Design = 'a' | 'b' | 'c' | 'd' | 'e';
 
 /** One fixed colour per engine, everywhere. The CSS variables live in styles/viz.css (light and dark). */
 export const ENGINES: { id: Design; letter: string; name: string; css: string }[] = [
@@ -8,6 +8,7 @@ export const ENGINES: { id: Design; letter: string; name: string; css: string }[
 	{ id: 'b', letter: 'B', name: 'Policy first', css: 'var(--eng-b)' },
 	{ id: 'c', letter: 'C', name: 'Compiled model', css: 'var(--eng-c)' },
 	{ id: 'd', letter: 'D', name: 'Per-model tables', css: 'var(--eng-d)' },
+	{ id: 'e', letter: 'E', name: 'Cedar', css: 'var(--eng-e)' },
 ];
 /** Every engine, in legend order. Charts show the ones that have data. */
 export const DESIGN_IDS: Design[] = ENGINES.map((e) => e.id);

@@ -106,6 +106,41 @@ export const pages = [
     "label": "OpenFGA compatibility"
   },
   {
+    "src": "docs/models/cedar/overview.md",
+    "route": "models/cedar/overview",
+    "label": "Overview"
+  },
+  {
+    "src": "docs/models/cedar/policies.md",
+    "route": "models/cedar/policies",
+    "label": "Write policies"
+  },
+  {
+    "src": "docs/models/cedar/entities.md",
+    "route": "models/cedar/entities",
+    "label": "Store entities"
+  },
+  {
+    "src": "docs/models/cedar/templates.md",
+    "route": "models/cedar/templates",
+    "label": "Use policy templates"
+  },
+  {
+    "src": "docs/models/cedar/checks.md",
+    "route": "models/cedar/checks",
+    "label": "Check access"
+  },
+  {
+    "src": "docs/models/cedar/extensions.md",
+    "route": "models/cedar/extensions",
+    "label": "Extension types"
+  },
+  {
+    "src": "docs/models/cedar/compatibility.md",
+    "route": "models/cedar/compatibility",
+    "label": "Cedar compatibility"
+  },
+  {
     "src": "docs/rls/policies.md",
     "route": "rls/policies",
     "label": "Read and write policies"
@@ -139,6 +174,11 @@ export const pages = [
     "src": "docs/reference/openfga.md",
     "route": "reference/openfga",
     "label": "OpenFGA functions"
+  },
+  {
+    "src": "docs/reference/cedar.md",
+    "route": "reference/cedar",
+    "label": "Cedar functions"
   },
   {
     "src": "docs/reference/javascript.md",
@@ -181,6 +221,11 @@ export const pages = [
     "label": "Current implementation"
   },
   {
+    "src": "research/benchmarks/cedar.md",
+    "route": "research/benchmarks/cedar-report",
+    "label": "Cedar model (design E)"
+  },
+  {
     "src": "research/benchmarks/COMPARISON.md",
     "route": "research/benchmarks/comparison",
     "label": "Earlier engine comparison"
@@ -209,6 +254,11 @@ export const pages = [
     "src": "research/designs/d-conditions.md",
     "route": "research/designs/d-conditions",
     "label": "Condition evaluator"
+  },
+  {
+    "src": "research/designs/e-cedar.md",
+    "route": "research/designs/e-cedar",
+    "label": "Cedar model (design E)"
   },
   {
     "src": "research/goals.md",
@@ -436,6 +486,40 @@ export const sidebar = [
             "slug": "models/openfga/compatibility"
           }
         ]
+      },
+      {
+        "label": "Policies (Cedar)",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "models/cedar/overview"
+          },
+          {
+            "label": "Write policies",
+            "slug": "models/cedar/policies"
+          },
+          {
+            "label": "Store entities",
+            "slug": "models/cedar/entities"
+          },
+          {
+            "label": "Use policy templates",
+            "slug": "models/cedar/templates"
+          },
+          {
+            "label": "Check access",
+            "slug": "models/cedar/checks"
+          },
+          {
+            "label": "Extension types",
+            "slug": "models/cedar/extensions"
+          },
+          {
+            "label": "Cedar compatibility",
+            "slug": "models/cedar/compatibility"
+          }
+        ]
       }
     ]
   },
@@ -480,6 +564,10 @@ export const sidebar = [
           {
             "label": "OpenFGA functions",
             "slug": "reference/openfga"
+          },
+          {
+            "label": "Cedar functions",
+            "slug": "reference/cedar"
           }
         ]
       },
@@ -526,6 +614,10 @@ export const sidebar = [
             "slug": "research/benchmarks/design-d-report"
           },
           {
+            "label": "Cedar model (design E)",
+            "slug": "research/benchmarks/cedar-report"
+          },
+          {
             "label": "Comparison dashboard",
             "slug": "research/benchmarks/dashboard"
           },
@@ -562,6 +654,10 @@ export const sidebar = [
           {
             "label": "Per-model implementation",
             "slug": "research/designs/d-per-model"
+          },
+          {
+            "label": "Cedar model (design E)",
+            "slug": "research/designs/e-cedar"
           },
           {
             "label": "Condition evaluator",

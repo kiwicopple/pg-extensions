@@ -1,5 +1,5 @@
 // The umbrella entry: createClient, createServerClient and every public export.
-// The subpaths (permissions/rbac, /fga, /sql, /postgrest) export the same
+// The subpaths (permissions/rbac, /fga, /cedar, /sql, /postgrest) export the same
 // clients and transports one by one.
 
 export { PermissionsClient, PermissionsServerClient, createClient, createServerClient } from './PermissionsClient'
@@ -52,6 +52,40 @@ export type {
   WriteRequest,
 } from './fga/types'
 
+// Cedar
+export { CedarClient } from './cedar/CedarClient'
+export type {
+  CedarClientConstructor,
+  CedarClientMethods,
+  CedarPostgrestClientOptions,
+  CedarTransportClientOptions,
+} from './cedar/CedarClient'
+export type { CedarAdminApi } from './cedar/CedarAdmin'
+export { uid } from './cedar/uid'
+export type {
+  AuthorizationError,
+  AuthorizationRequest,
+  AuthorizationResponse,
+  CedarEntity,
+  CedarRecord,
+  CedarValue,
+  CurrentAuthorizationRequest,
+  Decision,
+  DeletePolicyRequest,
+  DeleteTemplateRequest,
+  Diagnostics,
+  EntityRef,
+  EntityUid,
+  LinkTemplateRequest,
+  ListResourcesRequest,
+  PolicyInfo,
+  PolicyJson,
+  PutPolicyRequest,
+  PutTemplateRequest,
+  ReadEntitiesRequest,
+  TemplateInfo,
+} from './cedar/types'
+
 // Transports
 export { postgrestTransport } from './transport/postgrest'
 export type { PostgrestTransportOptions } from './transport/postgrest'
@@ -64,12 +98,15 @@ export {
   PermissionsError,
   PermissionsFetchError,
   PermissionsHttpError,
+  isCedarError,
   isFgaError,
   isPermissionsError,
   isRbacError,
   parseDetail,
 } from './lib/errors'
 export type {
+  CedarErrorCode,
+  CedarErrorReason,
   FgaErrorName,
   FgaErrorReason,
   PermissionsErrorContext,

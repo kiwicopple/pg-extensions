@@ -1052,3 +1052,24 @@ Orchestrator choices: fixed constant caps (OpenFGA makes them configurable; here
 - **SQL/JavaScript tabs.** The source stays plain Markdown (GitHub shows paired blocks one after the other); the site sync turns adjacent blocks tagged `tab="SQL"` and `tab="JavaScript"` into Starlight `<Tabs syncKey="lang">`. The JS usage moved into the RBAC, FGA and Conditions pages; the JavaScript page became setup only.
 - **The site moved** from the repo root `docs/` into `pg_permissions/site/`, since it documents only this extension. A separate docs revision (task guides, navigation, content checks) was committed first. Suite 56 files / 3,650 assertions; JS 140 unit tests.
 - **Pushed** the `pg_permissions` branch to origin for a PR; not merged, and npm `permissions` 0.2.0 is still unpublished.
+
+## Session 9 (2026-11-02): planning the Cedar model
+
+- **The ask:** plan a third model, Cedar, now that RBAC, FGA and the JS client are done. The research had reserved it since session 4: "Cedar is for later (`cedar_*`), with B as the base", tested against the Cedar corpus.
+- **Research, two agents.** One mapped what Cedar must fit in this repo (the CEL engine to reuse, B's planner lessons, the FGA oracle harness, the toolkit rules); the other read Cedar 4.x itself: grammar, decision algorithm, the ~60,000-request `cedar-integration-tests` corpus, cedar-go's subset, and the one Cedar-to-SQL attempt (luxas/cedar-sql, explicitly not for production).
+- **The decision that mattered most:** Cedar skips a policy that errors, so a broken `forbid` fails open. The user chose spec semantics in `cedar_is_authorized` (so the corpus can pass) and fail-closed RLS helpers (an erroring forbid denies). The same shape as FGA: exact in the API, conservative where a database decides which rows exist.
+- **Other choices:** full Cedar 4.x in v1 (datetime, duration and templates included), stored entities plus a row-attribute overlay for RLS, and version 0.1.0 with an upgrade script.
+- The plan is in `research/plan-cedar.md`.
+
+## Session 10 (2026-11-02 to 11-03): building the Cedar model
+
+- **All ten phases in one unattended run.** The user said "go ahead with as many phases as possible" and left. The orchestrator approved the phase-0 design doc itself and logged that here. Phases ran as one agent each, with two pairs in parallel where the files did not overlap: the oracle and the toolkit rename, then the evaluator and a standalone text parser, then the database integration and the JS client, then the docs and the security review.
+- **The corpus did the steering.** Cedar's integration corpus at v4.14.0 (5,701 tests, 45,494 requests) passes in full in every mode: stored entities, overlay, reduced parents, text policies, parse-to-EST equality (5,708 policies), and 1,276 template links made by templatizing the corpus. `skip.tsv` stays empty. The Cedar surprises came out of the corpus: `isInRange` is one-argument unless an experimental flag is on; decimals have no `<`; IPv4-mapped IPv6 stays IPv6; durations truncate toward zero but `toTime` uses the Euclidean remainder; Postgres has no year 0 but Cedar does.
+- **Ancestors: walk, not closure.** The closure table looked faster on reads (33 vs 144 µs at depth 117) but needed B's global lock; the recursive walk keeps writes flat (58 µs at any depth) and 2.8x the concurrent write throughput.
+- **The RLS cache was the story of the run.** Postgres will not inline a SQL function with a subquery, so the planned once-per-statement InitPlan was impossible. The agent cached the statement work in a transaction-local setting instead and argued that a client who can forge it can already forge the subject. The independent review proved that wrong: a forged entry bypassed `forbid` policies for a subject that does not exist. The fix signs each entry with an HMAC-SHA256 over a secret in an owner-only table, and replaces the client-writable generation counter with a per-backend unlogged table fed by a sequence. Cost: about 3 µs per row.
+- **Quadratic loops everywhere.** `s := s || c` and `acc := acc || jsonb_build_array(...)` are linear-looking and quadratic in PL/pgSQL. The review found two that one crafted row could use to stall a table; the fix found eight more. A 100k-character id went from 42 s to 0.12 s.
+- **Numbers at the end:** suite 262 files / 169,938 assertions on PG 16, 17 and 18, fresh and upgraded from 0.0.1; Cedar RLS reads within noise of FGA at every scale (large share page p50 1.19 vs 1.05 ms); one documented budget miss (`write_nest_team`, row-lock contention between four writers on one entity).
+
+### Angle for the post
+
+- "No weaker than X" is a claim to test, not to accept. The agent that wrote the cache reasoned about trust in one paragraph; the reviewer broke it with eight lines of SQL. The fix cost 3 µs per row.

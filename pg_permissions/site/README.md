@@ -52,7 +52,7 @@ The plain Markdown exports preserve the source code fences without tab markup. `
 
 ## Validation
 
-`npm run build` checks rendered links and fragments, Markdown export links and code preservation, old inbound anchors, sidebar routes, and coverage of all 26 public SQL functions.
+`npm run build` checks rendered links and fragments, Markdown export links and code preservation, old inbound anchors, sidebar routes, and coverage of all 40 public SQL functions.
 
 `npm run check:quickstart` runs the SQL fences directly from the quickstart in an isolated Postgres cluster, then checks the visible rows and transaction-local identity. It needs Postgres binaries (`PGBIN` can select them). The existing usage specs cover the longer walkthroughs:
 

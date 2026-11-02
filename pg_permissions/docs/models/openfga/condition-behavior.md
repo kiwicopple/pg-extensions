@@ -96,7 +96,7 @@ const { data: fayCan } = await asFay.fga.check({
 // true: the tuple holds every parameter
 ```
 
-To use a value that the server can trust, such as the time, write a function of your own. The function calls `fga_check` and passes the value. `fga_check` is for admins only, so make the function `security definer`. See [RLS with both models](../../rls/policies.md).
+To use a value that the server can trust, such as the time, write a function of your own. The function calls `fga_check` and passes the value. `fga_check` is for admins only, so make the function `security definer`. See [RLS integration](../../rls/policies.md).
 
 ## More expressions
 

@@ -12,7 +12,7 @@ services:
     ports: ["127.0.0.1:54420:5432"]
     volumes:
       # Runs in name order on the first start: install the extension, then roles and grants.
-      - ../../pg_permissions--0.0.1.sql:/docker-entrypoint-initdb.d/01-pg_permissions.sql:ro
+      - ../../pg_permissions--0.1.0.sql:/docker-entrypoint-initdb.d/01-pg_permissions.sql:ro
       - ./setup.sql:/docker-entrypoint-initdb.d/02-setup.sql:ro
     tmpfs:
       - /var/lib/postgresql/data

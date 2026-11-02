@@ -1,3 +1,4 @@
+import { CedarClient } from './cedar/CedarClient'
 import { FgaClient } from './fga/FgaClient'
 import { fetchWithAuth } from './lib/fetch'
 import { toResult } from './lib/result'
@@ -22,8 +23,8 @@ function subjectType(transport: Transport, throwOnError: boolean): Promise<Resul
 }
 
 /**
- * The client of {@link createClient}: the RBAC and FGA checks for the user of
- * the access token, over PostgREST. It has no `admin` namespaces: admin calls
+ * The client of {@link createClient}: the RBAC, FGA and Cedar checks for the
+ * user of the access token, over PostgREST. It has no `admin` namespaces: admin calls
  * never go over HTTP.
  */
 export class PermissionsClient<N extends RbacNames = RbacNames> {
@@ -31,6 +32,8 @@ export class PermissionsClient<N extends RbacNames = RbacNames> {
   readonly rbac: RbacClient<'postgrest', N>
   /** The FGA checks for the current user. */
   readonly fga: FgaClient<'postgrest'>
+  /** The Cedar checks for the current user. */
+  readonly cedar: CedarClient<'postgrest'>
   private readonly transport: Transport<'postgrest'>
   private readonly throwOnError: boolean
 
@@ -41,6 +44,7 @@ export class PermissionsClient<N extends RbacNames = RbacNames> {
     this.throwOnError = throwOnError
     this.rbac = new RbacClient<N>({ transport, throwOnError })
     this.fga = new FgaClient({ transport, throwOnError })
+    this.cedar = new CedarClient({ transport, throwOnError })
   }
 
   /**
@@ -148,7 +152,7 @@ export interface SubjectRef {
   id: string
 }
 
-/** The admin calls that are not RBAC or FGA calls. Server side only. */
+/** The admin calls that are not RBAC, FGA or Cedar calls. Server side only. */
 export interface PermissionsAdminApi {
   /**
    * Deletes everything about a subject (`delete_subject`): its RBAC assignments
@@ -176,6 +180,8 @@ export interface PermissionsSubjectClient<N extends RbacNames = RbacNames> {
   readonly rbac: RbacClient<'subject', N>
   /** The FGA checks for the subject. */
   readonly fga: FgaClient<'subject'>
+  /** The Cedar checks for the subject. */
+  readonly cedar: CedarClient<'subject'>
   /**
    * Returns the id of the subject (`current_subject_id()`): `subject.id`.
    *
@@ -208,7 +214,9 @@ export class PermissionsServerClient<N extends RbacNames = RbacNames> {
   readonly rbac: RbacClient<'sql', N>
   /** The FGA client, with `admin`. */
   readonly fga: FgaClient<'sql'>
-  /** The admin calls that are not RBAC or FGA calls. */
+  /** The Cedar client, with `admin`. */
+  readonly cedar: CedarClient<'sql'>
+  /** The admin calls that are not RBAC, FGA or Cedar calls. */
   readonly admin: PermissionsAdminApi
   private readonly transport: SqlTransport
   private readonly throwOnError: boolean
@@ -220,6 +228,7 @@ export class PermissionsServerClient<N extends RbacNames = RbacNames> {
     this.throwOnError = throwOnError
     this.rbac = new RbacClient<N>({ transport, throwOnError })
     this.fga = new FgaClient({ transport, throwOnError })
+    this.cedar = new CedarClient({ transport, throwOnError })
     this.admin = {
       deleteSubject: ({ type, id }) =>
         toResult(
@@ -279,6 +288,10 @@ export class PermissionsServerClient<N extends RbacNames = RbacNames> {
    *   scope: 'acme',
    * })
    * await alice.fga.check({ relation: 'viewer', object: 'document:1' })
+   * await alice.cedar.isAuthorized({
+   *   action: 'Action::"view"',
+   *   resource: 'Document::"q3"',
+   * })
    * ```
    */
   as(subject: Subject): PermissionsSubjectClient<N> {
@@ -286,6 +299,7 @@ export class PermissionsServerClient<N extends RbacNames = RbacNames> {
     return {
       rbac: new RbacClient<N>({ transport, throwOnError: this.throwOnError }),
       fga: new FgaClient({ transport, throwOnError: this.throwOnError }),
+      cedar: new CedarClient({ transport, throwOnError: this.throwOnError }),
       currentSubjectId: () => subjectId(transport, this.throwOnError),
       currentSubjectType: () => subjectType(transport, this.throwOnError),
     }

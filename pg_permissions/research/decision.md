@@ -2,6 +2,8 @@
 
 > Status: this page is a historical record. The user chose D on 2026-10-29, and D is now the extension file `pg_permissions--0.0.1.sql`. All six phases of [`./plan.md`](./plan.md) are done (as of 2026-10-30). The extension has 56 spec files and 3,638 assertions on PG 16, 17 and 18. The user closed the last open question (question 11, the covering index) on 2026-11-01.
 >
+> Note, 2026-11-02: the later `cedar_*` model that this page mentions is now implemented (extension 0.1.0). Its design is [`designs/e-cedar.md`](designs/e-cedar.md), and its user docs are [`../docs/models/cedar/overview.md`](../docs/models/cedar/overview.md). Statements below that Cedar is "for later" are the state at the time of the decision.
+>
 > The sections that compare A, B and C describe the state before D was chosen, and they are not changed. The usage docs that this page names are now the user docs in [`../docs/`](../docs/).
 
 This guide picks no winner among the three designs A, B and C. (See "Session 4 direction" for the direction that the user took after it.) It lays out what the author built and measured. Every claim cites its source.

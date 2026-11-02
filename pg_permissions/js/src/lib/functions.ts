@@ -10,10 +10,11 @@ export interface FunctionSpec {
 
 /**
  * Every `permissions.*` function that the library can call, from
- * pg_permissions--0.0.1.sql. The transports refuse any other name, and any
+ * pg_permissions--0.1.0.sql. The transports refuse any other name, and any
  * argument name not listed. This is what keeps user strings out of SQL
- * identifiers. `plan_time_guard` of `rbac_scopes_with_permission` is
- * deliberately absent: it must never be sent.
+ * identifiers. The `plan_time_guard` arguments of `rbac_scopes_with_permission`
+ * and of `cedar_is_authorized_current` are deliberately absent: they must
+ * never be sent.
  */
 export const FUNCTIONS: Readonly<Record<string, FunctionSpec>> = {
   // Shared
@@ -84,6 +85,29 @@ export const FUNCTIONS: Readonly<Record<string, FunctionSpec>> = {
   fga_check_current: { public: true, args: { relation: 'text', object: 'text' } },
   fga_list_objects_current: { public: true, args: { type: 'text', relation: 'text' } },
   fga_list_object_ids_current: { public: true, args: { type: 'text', relation: 'text' } },
+
+  // Cedar admin
+  cedar_put_policy: { public: false, args: { policy_id: 'text', policy: 'text', policy_json: 'jsonb' } },
+  cedar_delete_policy: { public: false, args: { policy_id: 'text' } },
+  cedar_policies: { public: false, args: {} },
+  cedar_put_template: { public: false, args: { template_id: 'text', template: 'text', template_json: 'jsonb' } },
+  cedar_link_template: {
+    public: false,
+    args: { policy_id: 'text', template_id: 'text', principal: 'text', resource: 'text' },
+  },
+  cedar_delete_template: { public: false, args: { template_id: 'text' } },
+  cedar_templates: { public: false, args: {} },
+  cedar_put_entities: { public: false, args: { entities: 'jsonb' } },
+  cedar_delete_entities: { public: false, args: { uids: 'jsonb' } },
+  cedar_read_entities: { public: false, args: { type: 'text', ids: 'text[]' } },
+  cedar_is_authorized: {
+    public: false,
+    args: { principal: 'text', action: 'text', resource: 'text', context: 'jsonb', entities: 'jsonb' },
+  },
+
+  // Cedar current subject. `plan_time_guard` of `cedar_is_authorized_current` is deliberately absent.
+  cedar_is_authorized_current: { public: true, args: { action: 'text', resource: 'text', resource_attrs: 'jsonb' } },
+  cedar_list_resources_current: { public: true, args: { action: 'text', resource_type: 'text' } },
 }
 
 /** Looks up a function and checks the argument names. Throws a plain `Error` for an unknown function or argument. */

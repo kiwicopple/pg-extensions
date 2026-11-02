@@ -10,6 +10,8 @@ Install `pg_permissions` in the database first. Model guides show SQL and JavaSc
 npm install permissions
 ```
 
+`permissions` 0.3.0 adds Cedar and needs `pg_permissions` 0.1.0 for Cedar. RBAC and OpenFGA work with `pg_permissions` 0.0.1 or 0.1.0.
+
 ## Entry points
 
 The package has two entry points. Choose the entry point from the place where the code runs.
@@ -72,7 +74,7 @@ When `accessToken` returns `null`, the client sends the anon key. Then there is 
 
 ## Check as a subject
 
-On a server, the connection has no subject. The call `as(subject)` returns a client that runs each call for one subject. It gives the same answers as the browser client gives for that user. The client that `as()` returns has `rbac` and `fga` with the client methods only. It has no `admin`.
+On a server, the connection has no subject. The call `as(subject)` returns a client that runs each call for one subject. It gives the same answers as the browser client gives for that user. The client that `as()` returns has `rbac`, `fga` and `cedar` with the client methods only. It has no `admin`.
 
 | Call | What it does |
 | --- | --- |
@@ -91,7 +93,7 @@ const permissions = createServerClient(pool)
 const alice = permissions.as({ id: 'alice', role: 'authenticated' })
 ```
 
-The default `type` is `'user'`. The RBAC functions use the type `user` only. See [RBAC](identity.md#subject-type).
+The default `type` is `'user'`. The RBAC functions use the type `user` only. The Cedar principal is the type and the id, for example `user::"alice"`. See [RBAC](identity.md#subject-type).
 
 A browser client has no `as()`. The subject is the user of the access token.
 
@@ -122,7 +124,7 @@ The package has a UMD bundle for a `<script>` tag. It sets the global `permissio
 
 ```html
 <script
-  src="https://cdn.jsdelivr.net/npm/permissions@0.2/dist/umd/permissions.js"
+  src="https://cdn.jsdelivr.net/npm/permissions@0.3/dist/umd/permissions.js"
 ></script>
 <script>
   const url = 'https://your-project.supabase.co'
@@ -142,4 +144,5 @@ The package has a UMD bundle for a `<script>` tag. It sets the global `permissio
 
 | `permissions` | `pg_permissions` | Runtime |
 | --- | --- | --- |
-| 0.2.x | 0.0.1 | Node 20 or later. Browsers, Deno and Bun that have `fetch`. |
+| 0.3.x | 0.1.0 (Cedar); 0.0.1 or 0.1.0 (RBAC, OpenFGA) | Node 20 or later. Browsers, Deno and Bun that have `fetch`. |
+| 0.2.x (RBAC and OpenFGA) | 0.0.1 or 0.1.0 | Node 20 or later. Browsers, Deno and Bun that have `fetch`. |

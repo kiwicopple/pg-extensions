@@ -8,7 +8,9 @@ The example below continues the [RBAC walkthrough](../models/rbac/overview.md). 
 
 The extension does not track your users table. When you delete a user, the role assignments of the user stay. They accumulate, and reusing an ID can restore the deleted user's access.
 
-`delete_subject` removes a subject from both models in one call. It removes the role assignments of the subject, scoped assignments too. It also removes each OpenFGA tuple that names the subject, as user, as userset or as object. It returns the number of rows that it removed.
+`delete_subject` removes a subject from every model in one call. It removes the role assignments of the subject, scoped assignments too. It also removes each OpenFGA tuple that names the subject, as user, as userset or as object. In the Cedar model, it removes the entity `<subject_type>::"<subject_id>"`, its parent edges, the edges that name it as a parent, and each template link whose `?principal` or `?resource` slot names it. Static Cedar policies and templates stay, because they are your application's code. It returns the number of rows that it removed.
+
+Cleanup does not disable an identity. A static Cedar policy that names the deleted principal can still match a future request for that id, even without a stored entity. Your authentication system must stop issuing requests for a deleted user. Review any static policies that name the user, and avoid reusing subject ids.
 
 ```sql tab="SQL"
 select permissions.rbac_assign_role(
@@ -79,4 +81,4 @@ select permissions.rbac_user_permissions(user_id => :'carol');
 
 ## Clean up when a user is deleted
 
-Integrate the trigger above with your application's user-deletion flow. For a subject type other than `user`, cleanup removes matching OpenFGA tuples; RBAC assignments apply only to users.
+Integrate the trigger above with your application's user-deletion flow. For a subject type other than `user`, cleanup removes matching OpenFGA tuples and Cedar entities and links; RBAC assignments apply only to users.

@@ -1,6 +1,9 @@
 -- Goal: installs as a non-superuser that owns the database; no superuser-only
 -- features, no C. If pg_tle is available, also installs through
--- pgtle.install_extension (research/plan.md §10, G14).
+-- pgtle.install_extension (research/plan.md §10, G14), and, as the same
+-- non-superuser, updates a pg_tle install of 0.0.1 through
+-- pgtle.install_update_path and makes 0.1.0 the default version with
+-- pgtle.set_default_version (docs/install.md, "Upgrade from 0.0.1").
 --
 -- The runner's per-spec database already has the implementation installed as
 -- superuser, so this file builds its own scratch databases owned by a
@@ -33,12 +36,18 @@ select exists (select 1 from pg_available_extensions where name = 'pg_tle')
 \set smoke_has ''
 \set smoke_not ''
 \set tle_installed ''
+\set tle_up_version ''
+\set tle_new_version ''
+\set ext_dir `dirname :'impl_path'`
+\set old_path :ext_dir '/pg_permissions--0.0.1.sql'
+\set up_path :ext_dir '/pg_permissions--0.0.1--0.1.0.sql'
 \set tle_has ''
 \set tle_members ''
 
 -- Leftovers from an earlier run
 drop database if exists pgperm_tle_scratch with (force);
 drop database if exists pgperm_tle_scratch2 with (force);
+drop database if exists pgperm_tle_scratch3 with (force);
 drop role if exists tle_owner;
 
 create role tle_owner nosuperuser createdb nologin;
@@ -82,7 +91,7 @@ select permissions.rbac_has_permission('tle.write')::text as smoke_not \gset
     set session authorization tle_owner;
     -- Backticks interpolate :name and :'name' (shell-quoted), not :"name".
     \set impl_body `cat :'impl_path'`
-    select pgtle.install_extension('pg_permissions', '0.0.1', 'pg_permissions test install', :'impl_body');
+    select pgtle.install_extension('pg_permissions', '0.1.0', 'pg_permissions test install', :'impl_body');
     create extension pg_permissions;
     select count(*)::text as tle_installed from pg_extension where extname = 'pg_permissions' \gset
     -- functions in schema permissions that belong to the extension (0 if the body was empty)
@@ -95,12 +104,35 @@ select permissions.rbac_has_permission('tle.write')::text as smoke_not \gset
     select permissions.rbac_create_role('tle_reader', '{tle.read}');
     select permissions.rbac_assign_role(:'alice', 'tle_reader');
     select permissions.rbac_has_permission('tle.read')::text as tle_has \gset
+
+    -- 3. the update path, as the same non-superuser (a member of pgtle_admin)
+    \connect postgres
+    create database pgperm_tle_scratch3 owner tle_owner;
+    \connect pgperm_tle_scratch3
+    create extension pg_tle;
+    set session authorization tle_owner;
+    \set old_body `cat :'old_path'`
+    \set up_body `cat :'up_path'`
+    select pgtle.install_extension('pg_permissions', '0.0.1', 'pg_permissions test install', :'old_body');
+    create extension pg_permissions;
+    select set_config('permissions.subject_id', :'alice', false);
+    select permissions.rbac_create_role('tle_reader', '{tle.read}');
+    select permissions.rbac_assign_role(:'alice', 'tle_reader');
+    select pgtle.install_update_path('pg_permissions', '0.0.1', '0.1.0', :'up_body');
+    alter extension pg_permissions update to '0.1.0';
+    select extversion || ' ' || permissions.rbac_has_permission('tle.read')::text as tle_up_version
+    from pg_extension where extname = 'pg_permissions' \gset
+    -- a later create extension without a version gets 0.1.0 (0.0.1, then the update path)
+    select pgtle.set_default_version('pg_permissions', '0.1.0');
+    drop extension pg_permissions;
+    create extension pg_permissions;
+    select extversion as tle_new_version from pg_extension where extname = 'pg_permissions' \gset
 \endif
 
 -- Back to the spec database as the superuser for the assertions.
 \connect :"orig_db"
 
-select tap.plan(9);
+select tap.plan(11);
 
 select tap.is(:'own_super'::text, 'off', 'the install session is not a superuser');
 select tap.is(:'role_super'::text, 'false', 'tle_owner is not a superuser role');
@@ -116,15 +148,22 @@ select tap.is(:'c_funcs'::text, '0', 'no function in the schema is written in C 
     select tap.ok(:'tle_installed'::text = '1' and :'tle_members'::text ~ '^[1-9]' and :'tle_has'::text = 'true',
                   'pgtle.install_extension + create extension works as a non-superuser and rbac_has_permission works (extension functions: '
                   || :'tle_members'::text || ', rbac_has_permission: ' || :'tle_has'::text || ')');
+    select tap.is(:'tle_up_version'::text, '0.1.0 true',
+                  'pgtle.install_update_path + alter extension update to 0.1.0 works as a non-superuser and keeps the data');
+    select tap.is(:'tle_new_version'::text, '0.1.0',
+                  'after pgtle.set_default_version, create extension without a version installs 0.1.0');
 \else
     \echo '# pg_tle is not available on this server (not in pg_available_extensions or shared_preload_libraries)'
     \echo '# only the non-superuser plain install was checked; the pgtle.install_extension path was NOT tested'
     select tap.pass('SKIP pg_tle not available: pgtle.install_extension path not tested');
+    select tap.pass('SKIP pg_tle not available: pgtle.install_update_path as a non-superuser not tested');
+    select tap.pass('SKIP pg_tle not available: pgtle.set_default_version not tested');
 \endif
 
 -- Cleanup
 drop database if exists pgperm_tle_scratch with (force);
 drop database if exists pgperm_tle_scratch2 with (force);
+drop database if exists pgperm_tle_scratch3 with (force);
 drop role if exists tle_owner;
 
 select * from tap.finish();

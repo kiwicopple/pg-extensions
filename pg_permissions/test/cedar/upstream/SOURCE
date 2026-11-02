@@ -1,0 +1,14 @@
+Repository: https://github.com/cedar-policy/cedar-integration-tests
+Commit:     b157547fb8856911b293b7214768922c731878de (tag v4.14.0, branch release/4.14.x)
+Corpus:     corpus-tests.tar.gz, sha256 67a3698263d2a4530464b88c3094e5930570862c7123362bd7e848b305ad20ec
+            generated from cedar bcb8bd93a292b59ae8f1dcf53b9b4176a2d3405d and cedar-spec 4748ff0980c4b5a14daaf5b9e74035a234c186b5 (submodules)
+License:    Apache-2.0 (upstream/LICENSE, upstream/NOTICE). Copyright Cedar Contributors.
+Translated: Cedar-text policies and schemas to JSON with cedar-policy-cli 4.14.0
+            (crates.io, cargo install --locked) in rust:1.89-slim-bookworm@sha256:d7fc7de78bb8c1469933aeecbf801314d30d7d6e9f0578bba4cfa285bfa37fe6
+Vendored:   2026-11-02 by test/cedar/vendor.sh
+
+upstream/tests and upstream/sample-data are verbatim. cases/ is derived from
+them and from the corpus by convert.py: one test per line, policies split per
+policy id with their JSON form, entity and context JSON in the schema-free
+(escaped) form, action entities from the schema added. Expectations are not
+modified.

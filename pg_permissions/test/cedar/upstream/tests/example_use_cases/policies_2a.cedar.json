@@ -1,0 +1,1 @@
+{"templates":{},"staticPolicies":{"policy0":{"effect":"permit","principal":{"op":"in","entity":{"type":"UserGroup","id":"jane_friends"}},"action":{"op":"==","entity":{"type":"Action","id":"view"}},"resource":{"op":"==","entity":{"type":"Photo","id":"VacationPhoto94.jpg"}},"conditions":[]}},"templateLinks":[]}

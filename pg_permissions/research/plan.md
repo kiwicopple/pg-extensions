@@ -2,6 +2,8 @@
 
 > Status: this page is a historical record of the plan. D is the chosen design (end of session 4). From phase 1 of session 5, D is the extension file `pg_permissions--0.0.1.sql`. Phases 1 to 6 of the work plan are all done (as of 2026-10-30), and each phase has a status line. The extension has 56 spec files and 3,638 assertions, and they pass on PG 16, 17 and 18. The user docs are in [`../docs/`](../docs/).
 >
+> Note, 2026-11-02: the `cedar_*` model that this page calls "later" is now implemented (extension 0.1.0). See [`./designs/e-cedar.md`](./designs/e-cedar.md) and the user docs in [`../docs/models/cedar/overview.md`](../docs/models/cedar/overview.md).
+>
 > The page has the requirements and a summary, with the session 4 direction (per-model tables, RBAC and OpenFGA first) in "Current plan" below. The ordered work plan is "Next work (session 5 onward)", right after it. The decisions are in [`./decision.md`](./decision.md), "Decisions at the end of session 4". A section that assumed one generic API has a "Superseded" note. It stays as history. The requirements and the A/B/C comparison below were written before that decision.
 >
 > Earlier status (history, before the session 4 decision): the page had the requirements and a summary. The extension was not yet written, and `pg_permissions--0.0.1.sql` was empty. All three designs were built as prototypes in [`../prototypes/`](../prototypes/). They passed the test suite and the benchmarks had measured them. The choice between them was open (see [`./decision.md`](./decision.md)).

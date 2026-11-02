@@ -10,6 +10,7 @@ The status is implemented (phases 1-6). The code and its TSDoc are now the sourc
 - **`deleteStore` needs the owner.** `service_role` has no grant on `fga_delete_store`, as the docs say. Use the role that installed the extension.
 - **Node.** Development uses Node 24 (`.nvmrc`). The runtime needs Node 20 or later (`engines`).
 - **CDN bundle.** A UMD bundle is at `dist/umd/permissions.js`, with the global `permissions` (`unpkg` and `jsdelivr` fields).
+- **Cedar (phase 7 of the Cedar plan).** `CedarClient` at `permissions/cedar`, and `cedar` on the umbrella clients. `admin.isAuthorized` returns the shape of the `response` of `@cedar-policy/cedar-wasm` (`{ decision, diagnostics: { reason, errors: [{ policyId, error: { message } }] } }`), not the SQL shape. A uid argument is Cedar text or `{ type, id }`; `uid(type, id)` escapes the id. The two Cedar current-subject functions bring the PUBLIC functions to 10. It needs pg_permissions 0.1.0.
 
 ## Goal
 

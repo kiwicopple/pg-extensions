@@ -36,7 +36,7 @@ dbdev.publish.%:
 	@echo "\n\nPublishing $* \n"
 	dbdev publish --path $(REPO_DIR)/$*
 # pg_permissions: test suite and benchmarks (see pg_permissions/test/README.md)
-IMPL ?= pg_permissions--0.0.1.sql
+IMPL ?= pg_permissions--0.1.0.sql
 SCALE ?= small
 
 .PHONY: test.pg_permissions bench.pg_permissions

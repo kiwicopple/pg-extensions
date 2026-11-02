@@ -109,3 +109,18 @@ medium-wide	parents_select_page	46
 medium-wide	parents_select_count	40
 medium-wide	write_nest_team	1
 medium-wide	nest_check	2
+# Cedar (design e, bench/designs/e/), added on 2026-11-02 (Cedar phase 5):
+# the e workloads reuse the workload names above, so the rows above are their
+# budgets (3x the fastest reference p95, here D's FGA and RBAC on the same
+# data); no row was added or loosened for them. Misses at every scale:
+# write_nest_team (1 ms; e p95 1.5-1.8 ms). It re-parents one entity
+# (Team::"nest-src") in every transaction, and the 4 clients serialize on its
+# row lock: with 1 client p95 is 0.41 ms. D writes a new tuple each time and
+# never waits. research/benchmarks/cedar.md, "Budgets".
+# row_select_page has no equivalent in another engine: no other design has a
+# select policy that checks every row. Its budget follows the same rule with e
+# itself as the only reference: 3x e's p95 on 2026-11-02 (PG 18.6, Docker),
+# rounded up.
+small	row_select_page	179
+medium	row_select_page	488
+large	row_select_page	938

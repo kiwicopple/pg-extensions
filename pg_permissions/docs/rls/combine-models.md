@@ -383,6 +383,143 @@ In a restrictive policy on a nullable column, write `org_id is null or`. A compa
 select null::uuid <> all (array[:'acme'::uuid]);   -- null, not true
 ```
 
+## Add Cedar as a third model
+
+Cedar fits into the same pattern. A list policy is another permissive arm, and a Cedar check can be a restrictive gate. This section is separate. The next pages do not use it. Run it in a copy of the database, or after you finish the walkthrough.
+
+Cedar holds its own data (see [Policies (Cedar)](../models/cedar/overview.md)). A policy of Cedar does not see the roles of RBAC or the tuples of OpenFGA. The two Cedar policies below make the group `auditors` read every document, and they let a Cedar forbid block a group of users everywhere:
+
+```sql
+select permissions.cedar_put_policy(
+  policy_id => 'auditors-view',
+  policy => 'permit (
+  principal in Team::"auditors",
+  action == Action::"view",
+  resource is Document
+);'
+);
+select permissions.cedar_put_policy(
+  policy_id => 'access-open',
+  policy => 'permit (
+  principal,
+  action == Action::"access",
+  resource
+);'
+);
+select permissions.cedar_put_policy(
+  policy_id => 'suspended',
+  policy => 'forbid (
+  principal in Team::"suspended",
+  action == Action::"access",
+  resource
+);'
+);
+```
+
+Store the documents as entities, for the list, and put Erin in `auditors` and Dave in `suspended`. The ids of the entities are the ids of the rows:
+
+```sql
+select permissions.cedar_put_entities(
+  entities => (
+    select jsonb_agg(
+      jsonb_build_object(
+        'uid', jsonb_build_object(
+          'type', 'Document',
+          'id', id::text
+        )
+      )
+    )
+    from public.documents
+  )
+);
+select permissions.cedar_put_entities(
+  entities => jsonb_build_array(
+    jsonb_build_object(
+      'uid', jsonb_build_object(
+        'type', 'user',
+        'id', :'erin'
+      ),
+      'parents', jsonb_build_array(
+        jsonb_build_object(
+          'type', 'Team',
+          'id', 'auditors'
+        )
+      )
+    ),
+    jsonb_build_object(
+      'uid', jsonb_build_object(
+        'type', 'user',
+        'id', :'dave'
+      ),
+      'parents', jsonb_build_array(
+        jsonb_build_object(
+          'type', 'Team',
+          'id', 'suspended'
+        )
+      )
+    )
+  )
+);
+```
+
+Add the two policies to the table. The first policy is a third permissive arm. It combines with the RBAC arm and the OpenFGA arm with OR. The second policy is restrictive. It combines with AND. It checks the Cedar action `access`, which every user has unless a Cedar `forbid` applies:
+
+```sql
+create policy documents_select_cedar
+  on public.documents
+  for select
+  to authenticated
+  using (
+    id = any (
+      array(
+        select permissions.cedar_list_resources_current(
+          action => 'Action::"view"',
+          resource_type => 'Document'
+        )::uuid
+      )
+    )
+  );
+create policy documents_cedar_gate
+  on public.documents
+  as restrictive
+  for select
+  to authenticated
+  using (
+    permissions.cedar_is_authorized_current(
+      action => 'Action::"access"',
+      resource => permissions.cedar_uid(
+        'Document',
+        id::text
+      )
+    )
+  );
+```
+
+Now Erin sees every document through `auditors-view`. She holds no role and no tuple. Dave sees nothing, although his RBAC role and his tuples give him documents. The Cedar `forbid` applies to every row, and the restrictive policy requires the Cedar answer:
+
+```sql
+begin;
+set local role authenticated;
+select set_config('permissions.subject_id', :'erin', true);
+select count(*) from public.documents;
+-- 5
+commit;
+
+begin;
+set local role authenticated;
+select set_config('permissions.subject_id', :'dave', true);
+select count(*) from public.documents;
+-- 0
+commit;
+```
+
+Some points to keep in mind:
+
+- A Cedar `forbid` blocks only through a Cedar check. It does not stop an RBAC arm or an OpenFGA arm. Use a restrictive policy with an action like `access` when a Cedar rule must deny across models. The restrictive policy needs a Cedar `permit` for that action, because the default of Cedar is deny.
+- The restrictive policy checks each row. A row check is cheap when no `forbid` applies to the user, and it costs more for a user that a `forbid` applies to. See [Performance](performance.md#cedar-policies).
+- For a deny that you can express as a list, a restrictive policy on `fga_list_object_ids_current`, as above, does its work once for each query.
+- With no subject, the gate is `false`. The other arms are `false` as well.
+
 ## Next step
 
 Continue with [Denies, row attributes, and trusted context](denies-and-context.md).

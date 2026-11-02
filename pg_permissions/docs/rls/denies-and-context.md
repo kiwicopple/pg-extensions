@@ -106,6 +106,8 @@ where d.id = :'notes';
 
 This needs `fga_check`, which is admin-only. The current-subject functions take no contextual tuples, because a client could pass any tuple. An attribute on a relationship, such as an expiry or an IP range, is an [OpenFGA condition](../models/openfga/conditions.md). The next section shows conditions in policies.
 
+Cedar takes row attributes in the policy itself. The function `cedar_is_authorized_current` has the argument `resource_attrs`, which gives the columns of the row to the Cedar policies. A Cedar policy can then read `resource.status` and still be a check on a trusted subject. See [Writes: check the row](policies.md#writes-check-the-row).
+
 ## Conditions in policies
 
 The current-subject functions take no request `context` either. A client could claim any time or address. In a policy, a conditioned tuple counts when its condition is true with the context stored in the tuple only.
