@@ -7,6 +7,7 @@
 #   test/run.sh --design b --impl X.sql               # force the design (a|b|c|d|none)
 #   test/run.sh -v                                    # show every assertion, not just failures
 #   test/run.sh --external                            # use the server from PGHOST/PGPORT/PGUSER
+#   test/run.sh --no-cedar-oracle                     # skip the generated Cedar oracle files
 #
 # Spec files in test/spec/ are the shared RBAC, RLS and install specs in the
 # API the prototypes have (unprefixed create_role, has_permission, ...); they
@@ -20,6 +21,11 @@
 #
 # Each spec file runs in a fresh database cloned from a template that has the
 # implementation installed. Exit status is 0 only if every file passes.
+#
+# For the extension, test/spec/d/7[0-5]_cedar_oracle*.sql are generated from
+# Cedar's integration tests before the run (python3 -I test/cedar/generate.py
+# suite, about 3 seconds; git ignores them). Without python3 the files already
+# there run as they are. --no-cedar-oracle skips them.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -30,6 +36,7 @@ IMPL="pg_permissions--0.1.0.sql"
 VERBOSE=0
 EXTERNAL=0
 DESIGN=
+CEDAR_ORACLE=1
 PATTERNS=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -38,8 +45,9 @@ while [ $# -gt 0 ]; do
         --design) DESIGN=$2; shift 2 ;;
         --design=*) DESIGN=${1#--design=}; shift ;;
         --external) EXTERNAL=1; shift ;;
+        --no-cedar-oracle) CEDAR_ORACLE=0; shift ;;
         -v|--verbose) VERBOSE=1; shift ;;
-        -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) PATTERNS+=("$1"); shift ;;
     esac
 done
@@ -59,6 +67,26 @@ case "$DESIGN" in
     a|b|c|d|none) ;;
     *) echo "error: unknown design: $DESIGN (expected a, b, c, d or none)" >&2; exit 2 ;;
 esac
+
+# The generated Cedar oracle files (design d): regenerate them when this run
+# would select any of them.
+CEDAR_GLOB='7[0-5]_cedar_oracle*'
+if [ "$DESIGN" = d ] && [ $CEDAR_ORACLE = 1 ]; then
+    want=0
+    [ ${#PATTERNS[@]} = 0 ] && want=1
+    for p in ${PATTERNS[@]+"${PATTERNS[@]}"}; do
+        case "70_cedar_oracle_00 72_cedar_oracle_overlay_00 74_cedar_oracle_reduced_00" in *"$p"*) want=1 ;; esac
+    done
+    if [ $want = 1 ]; then
+        if command -v python3 >/dev/null 2>&1; then
+            python3 -I "$HERE/cedar/generate.py" suite >/dev/null || { echo "error: test/cedar/generate.py suite failed" >&2; exit 2; }
+        elif ! ls "$HERE"/spec/d/$CEDAR_GLOB >/dev/null 2>&1; then
+            echo "warning: python3 not found and no generated Cedar oracle files: they are not run" >&2
+        else
+            echo "note: python3 not found: running the Cedar oracle files already generated" >&2
+        fi
+    fi
+fi
 
 if [ -t 1 ]; then GREEN=$'\033[32m'; RED=$'\033[31m'; DIM=$'\033[2m'; RESET=$'\033[0m'
 else GREEN=; RED=; DIM=; RESET=; fi
@@ -93,6 +121,8 @@ while IFS= read -r line; do SPECS+=("${line#*$'\t'}"); done < <(
 
 for f in "${SPECS[@]}"; do
     name=$(basename "$f" .sql)
+    # shellcheck disable=SC2254
+    if [ $CEDAR_ORACLE = 0 ]; then case "$name" in $CEDAR_GLOB) continue ;; esac; fi
     label=$name
     [ "$(dirname "$f")" = "$HERE/spec" ] || label="$DESIGN/$name"
     if [ ${#PATTERNS[@]} -gt 0 ]; then

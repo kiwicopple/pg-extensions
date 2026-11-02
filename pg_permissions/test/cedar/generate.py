@@ -4,7 +4,8 @@
     python3 -I test/cedar/generate.py --stats                       # counts by format, feature, ...; writes nothing
     python3 -I test/cedar/generate.py --dry-run [SELECT]            # the files a run would write; writes nothing
     python3 -I test/cedar/generate.py [SELECT]                      # write test/cedar/spec/*.sql (not run by test/run.sh)
-    python3 -I test/cedar/generate.py --suite [SELECT]              # write test/spec/d/7[0-2]_cedar_*.sql (run by test/run.sh)
+    python3 -I test/cedar/generate.py --suite [SELECT]              # write test/spec/d/7[0-5]_cedar_oracle*.sql
+    python3 -I test/cedar/generate.py suite                         # the SUITE runs below; test/run.sh calls this
     test/run.sh -v cedar > /tmp/cedar.out
     python3 -I test/cedar/generate.py report /tmp/cedar.out [SELECT]  # run, passed, failed, skipped by reason
 
@@ -19,9 +20,13 @@ SELECT chooses the cases and how they reach the database:
                     original id (the corpus has no templates; phase 4c)
     --check-est     text format only: also assert, per policy, that the EST stored from
                     the text equals the CLI's translation (the parser oracle, phase 3)
+    --reduce-parents  stored mode only: keep only each entity's direct parents (the
+                    transitive reduction; Cedar's JSON lists every ancestor), so `in` must
+                    follow the hierarchy itself; runs only the cases that lose a link
 
-Until phase 2 adds the cedar_* functions, only --stats, --dry-run and the default
-output directory are safe: --suite would add files that fail (README.md).
+`suite` writes the files that test/run.sh runs: the runs in SUITE, each with
+--suite. The files are generated, not committed (test/spec/d/.gitignore). A
+phase that adds features extends SUITE.
 
 Input: test/cedar/cases/*.jsonl[.gz] (convert.py, via vendor.sh) and
 test/cedar/skip.tsv. Each case: the stored state is reset, the policies are put
@@ -57,7 +62,8 @@ OUT_DIR = os.path.join(HERE, 'spec')                   # default: outside test/r
 SUITE_DIR = os.path.join(ROOT, 'test', 'spec', 'd')
 CASES_DIR = os.path.join(HERE, 'cases')
 FILE_PREFIX = {('json', 'stored'): '70_cedar_oracle', ('text', 'stored'): '71_cedar_oracle_text',
-               ('json', 'overlay'): '72_cedar_oracle_overlay', ('text', 'overlay'): '73_cedar_oracle_text_overlay'}
+               ('json', 'overlay'): '72_cedar_oracle_overlay', ('text', 'overlay'): '73_cedar_oracle_text_overlay',
+               ('json', 'reduced'): '74_cedar_oracle_reduced', ('text', 'reduced'): '75_cedar_oracle_text_reduced'}
 MAX_ASSERTIONS = 1000        # per file
 MAX_BYTES = 1_500_000        # per file (a case is never split)
 OVERLAY_MAX = 1024           # overlay mode: compact entity JSON bytes per case
@@ -73,6 +79,15 @@ PHASES = {
     '4c':  dict(format='json', mode='stored', features=('template',), templatize=True),
     'all': dict(format='json', mode='stored', features=GATED),
 }
+
+# What `suite` (and so test/run.sh) generates into test/spec/d/: phase 2, the
+# core features, with entities stored, in the request overlay, and stored with
+# only direct parents (so `in` must follow the hierarchy).
+SUITE = (
+    ['--phase', '2'],
+    ['--phase', '2', '--mode', 'overlay'],
+    ['--phase', '2', '--reduce-parents'],
+)
 
 EXT_FEATURE = {
     'decimal': 'decimal', 'lessThan': 'decimal', 'lessThanOrEqual': 'decimal',
@@ -289,6 +304,41 @@ def ancestor_depth(entities):
     return max((d(u, frozenset()) for u in par), default=0)
 
 
+def uid_key(u):
+    u = u.get('__entity', u)
+    return (u['type'], u['id'])
+
+
+def reduce_parents(entities):
+    """The entities with only their direct parents (the transitive reduction:
+    a parent that is also an ancestor of another parent goes), and the number
+    of parent links removed."""
+    par = {uid_key(e['uid']): [uid_key(p) for p in e.get('parents') or []] for e in entities}
+    memo = {}
+
+    def anc(u, stack=frozenset()):
+        if u in memo:
+            return memo[u]
+        r = set()
+        for p in par.get(u, []):
+            if p not in stack:
+                r.add(p)
+                r |= anc(p, stack | {u})
+        memo[u] = r
+        return r
+    out, removed = [], 0
+    for e in entities:
+        ps = par[uid_key(e['uid'])]
+        keep = [p for p in ps if not any(p in anc(q) for q in ps if q != p)]
+        removed += len(ps) - len(keep)
+        out.append(dict(e, parents=[{'type': t, 'id': i} for t, i in keep]))
+    return out, removed
+
+
+def label_mode(sel):
+    return 'reduced' if sel.get('reduce_parents') else sel['mode']
+
+
 def eligible(case, sel):
     """None if the case runs under SELECT, else the reason it is left out (not a skip)."""
     gated = (case['features'] & set(GATED)) - set(sel['features'])
@@ -298,6 +348,8 @@ def eligible(case, sel):
         return 'no-text'        # a JSON-format upstream policy set
     if sel['mode'] == 'overlay' and case['metrics']['entity_bytes'] > OVERLAY_MAX:
         return 'overlay-size'
+    if sel.get('reduce_parents') and not reduce_parents(case['entities'])[1]:
+        return 'parents-already-direct'
     return None
 
 
@@ -423,6 +475,9 @@ def case_sql(case, sel, skips, stats):
                  templateLinks=sub_nul(c['templateLinks']))
     if sel.get('templatize') and fmt == 'json':
         c = templatize(c)
+    if sel.get('reduce_parents'):
+        c = dict(c, entities=reduce_parents(c['entities'])[0])
+    lm = label_mode(sel)
     out = [f"\n-- {c['name']}", 'select cedar_test.reset();']
     for p in c['policies']:
         fn = 'cedar_put_policy' if p['kind'] == 'static' else 'cedar_put_template'
@@ -448,7 +503,7 @@ def case_sql(case, sel, skips, stats):
             if p['kind'] != 'static':
                 continue
             out.append("select tap.is((select p.est from permissions.cedar_policies() p where p.policy_id = %s), %s, %s);" % (
-                lit(p['id']), jlit(p['est']), lit(f"{mode}:{fmt}:{case['name']}:est:{p['id']}")))
+                lit(p['id']), jlit(p['est']), lit(f"{lm}:{fmt}:{case['name']}:est:{p['id']}")))
             n += 1
     for i, r in enumerate(c['requests']):
         reason = skip_reason(skips, case, fmt, mode, i)
@@ -457,7 +512,7 @@ def case_sql(case, sel, skips, stats):
             continue
         out.append("select tap.is(cedar_test.authz(%s, %s, %s, %s, %s), %s, %s);" % (
             lit(uid_text(r['principal'])), lit(uid_text(r['action'])), lit(uid_text(r['resource'])),
-            jlit(r['context']), overlay, jlit(expected(r)), lit(f"{mode}:{fmt}:{case['name']}:r{i}")))
+            jlit(r['context']), overlay, jlit(expected(r)), lit(f"{lm}:{fmt}:{case['name']}:r{i}")))
         n += 1
     # reset() clears policies and entities; templates go here, after their links.
     for link in c['templateLinks']:
@@ -473,7 +528,7 @@ def select_from_args(args):
     i = 0
     while i < len(args):
         a = args[i]
-        if a in ('--check-est', '--templatize'):
+        if a in ('--check-est', '--templatize', '--reduce-parents'):
             sel[a[2:].replace('-', '_')] = True
             i += 1
             continue
@@ -500,13 +555,15 @@ def select_from_args(args):
             i += 2
         else:
             sys.exit(__doc__)
+    if sel.get('reduce_parents') and sel['mode'] != 'stored':
+        sys.exit('--reduce-parents needs --mode stored')
     return sel
 
 
 def plan_files(cases, sel, skips):
     """[(file name, sql, assertions, case names)], deterministic."""
     stats = {'skipped': Counter(), 'left_out': Counter(), 'nul_substituted': 0}
-    prefix = FILE_PREFIX[(sel['format'], sel['mode'])]
+    prefix = FILE_PREFIX[(sel['format'], label_mode(sel))]
     files, cur, cur_n, cur_bytes, cur_names = [], [], 0, 0, []
     for c in cases:
         why = eligible(c, sel)
@@ -529,7 +586,8 @@ def plan_files(cases, sel, skips):
     for k, (parts, n, names) in enumerate(files, 1):
         head = [
             f"-- Generated by test/cedar/generate.py --format {sel['format']} --mode {sel['mode']} "
-            f"--features {','.join(sel['features']) or '(none)'}. Do not edit.",
+            f"--features {','.join(sel['features']) or '(none)'}"
+            f"{' --reduce-parents' if sel.get('reduce_parents') else ''}. Do not edit.",
             '-- cedar-integration-tests, Apache-2.0: see test/cedar/upstream/SOURCE.',
             '\\set ON_ERROR_STOP off',
             '\\ir ../../cedar/fixture.sql',
@@ -539,11 +597,11 @@ def plan_files(cases, sel, skips):
     return out, stats
 
 
-def generate(dest, sel, dry_run):
-    cases = load_cases()
+def generate(dest, sel, dry_run, cases=None):
+    cases = cases or load_cases()
     skips = load_skips()
     files, stats = plan_files(cases, sel, skips)
-    prefix = FILE_PREFIX[(sel['format'], sel['mode'])]
+    prefix = FILE_PREFIX[(sel['format'], label_mode(sel))]
     total = sum(n for _, _, n, _ in files)
     size = sum(len(sql.encode('utf-8')) for _, sql, _, _ in files)
     if not dry_run:
@@ -556,7 +614,8 @@ def generate(dest, sel, dry_run):
     verb = 'would write' if dry_run else 'wrote'
     print(f'{verb} {len(files)} files {os.path.relpath(dest, ROOT)}/{prefix}_NN.sql: '
           f'{total} assertions, {size / 1e6:.1f} MB')
-    print(f"  selection: format {sel['format']}, mode {sel['mode']}, features {','.join(sel['features']) or '(none)'}")
+    print(f"  selection: format {sel['format']}, mode {sel['mode']}, features {','.join(sel['features']) or '(none)'}"
+          f"{', parents reduced' if sel.get('reduce_parents') else ''}")
     print(f"  cases with U+0000 substituted: {stats['nul_substituted']}")
     for r, k in sorted(stats['left_out'].items()):
         print(f'  left out ({r}): {k} requests')
@@ -631,11 +690,11 @@ def report(path, sel):
             continue
         for i in range(len(c['requests'])):
             if not skip_reason(skips, c, sel['format'], sel['mode'], i):
-                want[f"{sel['mode']}:{sel['format']}:{c['name']}:r{i}"] = c['name']
+                want[f"{label_mode(sel)}:{sel['format']}:{c['name']}:r{i}"] = c['name']
         if sel.get('check_est') and sel['format'] == 'text':
             for p in c['policies']:
                 if p['kind'] == 'static':
-                    want[f"{sel['mode']}:text:{c['name']}:est:{p['id']}"] = c['name']
+                    want[f"{label_mode(sel)}:text:{c['name']}:est:{p['id']}"] = c['name']
     got = {}
     pat = re.compile(r'^\s*(ok|not ok) \d+ - (\S+:(?:r\d+|est:\S+))')
     with open(path, encoding='utf-8', errors='replace') as f:
@@ -665,7 +724,12 @@ if __name__ == '__main__':
         generate(OUT_DIR, select_from_args(argv[1:]), dry_run=True)
     elif argv[:1] == ['--suite']:
         generate(SUITE_DIR, select_from_args(argv[1:]), dry_run=False)
-    elif argv[:1] in ([], ['--phase'], ['--format'], ['--mode'], ['--features'], ['--check-est'], ['--templatize']):
+    elif argv == ['suite']:
+        all_cases = load_cases()
+        for run in SUITE:
+            generate(SUITE_DIR, select_from_args(run), dry_run=False, cases=all_cases)
+    elif argv[:1] in ([], ['--phase'], ['--format'], ['--mode'], ['--features'], ['--check-est'], ['--templatize'],
+                      ['--reduce-parents']):
         generate(OUT_DIR, select_from_args(argv), dry_run=False)
     else:
         sys.exit(__doc__)

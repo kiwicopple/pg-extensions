@@ -1,8 +1,9 @@
 -- Goal: every error the extension raises is descriptive (research/decision.md, end of
 -- session 4, point 5; research/designs/d-per-model.md section 7). One row per raise
--- site, rbac_* and fga_* alike: the statement that triggers it, the SQLSTATE,
+-- site, rbac_*, fga_* and cedar_* alike: the statement that triggers it, the SQLSTATE,
 -- the DETAIL (OpenFGA's 'openfga:<code> <name>' on fga_* errors, 'rbac:<code>'
--- and the offending argument or role on rbac_* errors), a pattern for the
+-- and the offending argument or role on rbac_* errors, 'cedar:<code>' and the
+-- offending argument or value on cedar_* errors), a pattern for the
 -- MESSAGE (it names the offending values) and the HINT, which must never be
 -- empty and, where given, matches a pattern (the nearest name, the allowed
 -- user types, the model ids, the call to make first).
@@ -13,7 +14,10 @@
 --
 -- Guard: a static scan of the extension's function bodies (pg_proc.prosrc)
 -- finds every raise site: each `raise`, and each call of the error helpers
--- _fga_error (and _fga_unsupported, gone since conditions are supported).
+-- _fga_error and _cedar_error (and _fga_unsupported, gone since conditions
+-- are supported). _cedar_eval_fail raises only inside cedar_is_authorized,
+-- which catches it (an evaluation error is a value there, not an exception),
+-- so like the helpers' own raises it is not a site.
 -- Each must pass a hint, and the number of
 -- sites must equal the number of rows below, so a new raise site fails this
 -- file until it has a hint and a row.
@@ -61,6 +65,10 @@ select permissions.fga_write('[{"user": "user:anne", "relation": "editor", "obje
 select permissions.fga_write((select jsonb_agg(jsonb_build_object('user', 'team:t' || (g + 1) || '#member', 'relation', 'member', 'object', 'team:t' || g))
                               from generate_series(0, 29) g));
 select permissions.fga_write_tuple('user:deep', 'member', 'team:t30');
+
+-- Cedar: a policy (for the nearest-id hint) and a hierarchy Group::"a" -> Group::"b"
+select permissions.cedar_put_policy(policy_id => 'view-own', policy_json => '{"effect": "permit", "principal": {"op": "All"}, "action": {"op": "All"}, "resource": {"op": "All"}, "conditions": []}');
+select permissions.cedar_put_entities(entities => '[{"uid": {"type": "Group", "id": "a"}, "parents": [{"type": "Group", "id": "b"}]}, {"uid": {"type": "Group", "id": "b"}}]');
 
 
 create temp table sites (n serial, site text, stmt text, st text, detail text, msg text, hint text);
@@ -223,27 +231,63 @@ insert into sites (site, stmt, st, detail, msg, hint) values
 ('list_users: object type', $$ select permissions.fga_list_users('documnt:1', 'viewer', '{user}') $$,
  '22023', 'openfga:2021 type_not_found', '^type ''documnt'' not found$', '^Did you mean ''document''\?'),
 ('list_users: relation', $$ select permissions.fga_list_users('document:1', 'viewr', '{user}') $$,
- '22023', 'openfga:2022 relation_not_found', '^relation ''document#viewr'' not found$', '^Did you mean ''viewer''\?');
+ '22023', 'openfga:2022 relation_not_found', '^relation ''document#viewr'' not found$', '^Did you mean ''viewer''\?'),
+-- cedar_*
+('cedar uid', $$ select permissions.cedar_is_authorized(principal => 'alice', action => 'Action::"view"', resource => 'Doc::"d1"') $$,
+ '22023', 'cedar:invalid_uid value=''alice''', '^invalid entity uid for principal: alice: it is not Type::"id"$', 'principal => ''User::"alice"'''),
+('cedar entity json', $$ select permissions.cedar_put_entities(entities => '[{"uid": {"type": "User", "id": "a"}, "attrs": {"n": 1.5}}]') $$,
+ '22023', 'cedar:invalid_entity index=0', '^invalid entity at index 0 of entities: User::"a": attrs\.n: 1\.5 is not a Long', '"__entity": \{"type": "User", "id": "alice"\}'),
+('cedar policy json', $$ select permissions.cedar_put_policy(policy_id => 'p1', policy_json => '{"effect": "allow", "principal": {"op": "All"}, "action": {"op": "All"}, "resource": {"op": "All"}, "conditions": []}') $$,
+ '22023', 'cedar:invalid_policy path=''$.effect''', '^invalid policy ''p1'' at \$\.effect: effect is "permit" or "forbid", got "allow"$', 'cedar translate-policy'),
+('cedar context', $$ select permissions.cedar_is_authorized(principal => 'User::"a"', action => 'Action::"view"', resource => 'Doc::"d1"', context => '[1]') $$,
+ '22023', 'cedar:invalid_context', '^invalid context: the context must be a record \(a JSON object\), got \[1\]$', '^Pass context => '),
+('cedar_is_authorized: null', $$ select permissions.cedar_is_authorized(principal => null, action => 'Action::"view"', resource => 'Doc::"d1"') $$,
+ '22004', 'cedar:null_argument argument=''principal''', '^principal is required to authorize a request$', 'principal => ''User::"alice"'''),
+('cedar_put_policy: null', $$ select permissions.cedar_put_policy(policy_id => null, policy_json => '{}') $$,
+ '22004', 'cedar:null_argument argument=''policy_id''', '^policy_id is required to put a policy$', '^select permissions\.cedar_put_policy\(policy_id => '),
+('cedar_put_policy: both', $$ select permissions.cedar_put_policy(policy_id => 'p1', policy => 'permit(principal, action, resource);', policy_json => '{}') $$,
+ '22023', 'cedar:invalid_argument argument=''policy''', '^policy ''p1'' has both policy and policy_json$', '^Pass exactly one'),
+('cedar_put_policy: text', $$ select permissions.cedar_put_policy(policy_id => 'p1', policy => 'permit(principal, action, resource);') $$,
+ '0A000', 'cedar:unsupported feature=''policy text''', '^policy ''p1'' is Cedar text, which is not supported yet$', 'policy_json => '),
+('cedar_delete_policy: unknown', $$ select permissions.cedar_delete_policy(policy_id => 'view-on') $$,
+ '22023', 'cedar:unknown_policy policy_id=''view-on''', '^unknown policy ''view-on''$', '^Did you mean ''view-own''\? Policy ids: view-own\.$'),
+('cedar_put_entities: null', $$ select permissions.cedar_put_entities(entities => null) $$,
+ '22004', 'cedar:null_argument argument=''entities''', '^entities is required to put entities$', '^select permissions\.cedar_put_entities\(entities => '),
+('cedar_put_entities: cycle', $$ select permissions.cedar_put_entities(entities => '[{"uid": {"type": "Group", "id": "b"}, "parents": [{"type": "Group", "id": "a"}]}]') $$,
+ '22023', 'cedar:invalid_entity uid=''Group::"a"''', '^the entity hierarchy has a cycle through Group::"a"$', 'own ancestor'),
+('cedar_delete_entities: not an array', $$ select permissions.cedar_delete_entities(uids => '{}') $$,
+ '22023', 'cedar:invalid_uid value=''{}''', '^uids must be a JSON array of uids, got a JSON object$', '^select permissions\.cedar_delete_entities\(uids => '),
+('cedar_delete_entities: uid', $$ select permissions.cedar_delete_entities(uids => '[{"type": "User"}]') $$,
+ '22023', 'cedar:invalid_uid value=''{"type": "User"}''', '^invalid entity uid in uids: \{"type": "User"\}$', '"type": "User", "id": "alice"'),
+('cedar_read_entities: ids without type', $$ select permissions.cedar_read_entities(ids => '{a}') $$,
+ '22004', 'cedar:null_argument argument=''type''', '^type is required with ids$', 'type => ''User''');
 
 -- static scan of the function bodies: every raise and every call of an error helper
 create temp table raise_sites as
 select p.proname::text as fn, m[1] as stmt
 from pg_proc p
-cross join lateral regexp_matches(p.prosrc, '(((?:\m_fga_error|\m_fga_unsupported)\s*\(|\mraise\M)[^;]*)', 'g') m
+cross join lateral regexp_matches(p.prosrc, '(((?:\m_fga_error|\m_fga_unsupported|\m_cedar_error)\s*\(|\mraise\M)[^;]*)', 'g') m
 where p.pronamespace = 'permissions'::regnamespace;
 
-select tap.plan((select count(*)::int from sites) + 8);
+select tap.plan((select count(*)::int from sites) + 10);
 
 select tap.is(
     (select array_agg(fn || ': ' || left(regexp_replace(stmt, '\s+', ' ', 'g'), 80) order by fn) from raise_sites
       where stmt !~* '\mhint\s*=' and stmt !~* '\mhint\s*=>'),
-    null::text[], 'guard: every raise and every _fga_error/_fga_unsupported call in the extension passes a hint');
+    null::text[], 'guard: every raise and every _fga_error/_fga_unsupported/_cedar_error call in the extension passes a hint');
 -- the helpers' own raise statements forward the caller's message, so they are not sites
-select tap.is((select count(*)::int from raise_sites where fn not in ('_fga_error', '_fga_unsupported')),
+select tap.is((select count(*)::int from raise_sites where fn not in ('_fga_error', '_fga_unsupported', '_cedar_error', '_cedar_eval_fail')),
               (select count(*)::int from sites), 'guard: one row below per raise site in the extension');
 select tap.is((select count(distinct site)::int from sites), (select count(*)::int from sites), 'each row is a different site');
-select tap.is((select count(*)::int from raise_sites where fn in ('_fga_error', '_fga_unsupported')), 1,
-              'the error helper raises once');
+select tap.is((select array_agg(fn || ' ' || n order by fn)
+               from (select fn, count(*) as n from raise_sites
+                     where fn in ('_fga_error', '_fga_unsupported', '_cedar_error', '_cedar_eval_fail') group by fn) h),
+              '{"_cedar_error 1","_cedar_eval_fail 1","_fga_error 1"}',
+              'each error helper raises once');
+-- _cedar_eval_fail raises SQLSTATE CE001, and only cedar_is_authorized handles it
+select tap.is((select array_agg(p.proname::text order by p.proname) from pg_proc p
+               where p.pronamespace = 'permissions'::regnamespace and p.prosrc ~ 'CE001'),
+              '{_cedar_eval_fail,cedar_is_authorized}', 'only cedar_is_authorized catches the evaluation errors _cedar_eval_fail raises');
 
 -- every error carries a DETAIL code, and the rbac_* ones carry an rbac: code
 select tap.is((select array_agg(site order by n) from sites where detail is null), null::text[],
@@ -254,6 +298,8 @@ select tap.is((select array_agg(distinct substring(detail from '^rbac:([a-z_]+)'
                  from sites where detail like 'rbac:%'),
               array['name_overlap', 'null_argument', 'role_exists', 'role_in_use', 'unknown_role'],
               'the rbac_* errors use five codes');
+select tap.is((select array_agg(site order by n) from sites where site ~ '^cedar' and detail !~ '^cedar:[a-z_]+( |$)'), null::text[],
+              'guard: every cedar row expects a DETAIL that starts with cedar:<code>');
 -- a direct raise (that is, any raise outside the _fga_error helper) must set a DETAIL
 select tap.is(
     (select array_agg(fn || ': ' || left(regexp_replace(stmt, '\s+', ' ', 'g'), 80) order by fn) from raise_sites

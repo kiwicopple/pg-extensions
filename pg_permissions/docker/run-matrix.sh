@@ -94,6 +94,11 @@ exec > >(tee -a "$LOG") 2>&1
 SUMMARY=()
 FAILED=0
 START_ALL=$(date +%s)
+# The client containers have no python3: generate the Cedar oracle spec files
+# here, on the host (test/run.sh runs the files it finds).
+if [ "$MODE" = test ] && command -v python3 >/dev/null 2>&1; then
+    python3 -I "$EXT_DIR/test/cedar/generate.py" suite >/dev/null || { echo "error: test/cedar/generate.py suite failed"; exit 2; }
+fi
 for v in "${VERSION_LIST[@]}"; do
     svc="pg$v"
     echo "==== $svc: stopping other servers, starting $svc"
