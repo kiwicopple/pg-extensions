@@ -41,7 +41,7 @@ begin
     end loop;
 end $$;
 
-select tap.plan(48);
+select tap.plan(49);
 
 select tap.is(
     (select array_agg(name order by name) from api_fn
@@ -72,8 +72,9 @@ select tap.set_eq(
           'fga_check_current', 'fga_list_objects_current', 'fga_list_object_ids_current',
           'cedar_put_policy', 'cedar_delete_policy', 'cedar_policies', 'cedar_put_entities', 'cedar_delete_entities',
           'cedar_read_entities', 'cedar_is_authorized', 'cedar_is_authorized_current', 'cedar_list_resources_current',
+          'cedar_uid',
           'cedar_put_template', 'cedar_link_template', 'cedar_delete_template', 'cedar_templates'],
-    'the public functions are the 39 called below');
+    'the public functions are the 40 called below');
 
 -- one call per public function, every argument named
 
@@ -179,6 +180,7 @@ select tap.is(permissions.cedar_is_authorized_current(action => 'Action::"view"'
               true, 'cedar_is_authorized_current(action, resource, resource_attrs, plan_time_guard)');
 select tap.is(array(select permissions.cedar_list_resources_current(action => 'Action::"view"', resource_type => 'User')),
               '{bob}', 'cedar_list_resources_current(action, resource_type)');
+select tap.is(permissions.cedar_uid(type => 'Doc', id => 'd1'), 'Doc::"d1"', 'cedar_uid(type, id)');
 select set_config('permissions.subject_id', '', false);
 select set_config('permissions.subject_type', '', false);
 select tap.is(permissions.cedar_delete_entities(uids => '[{"type": "User", "id": "bob"}]'), 1::bigint, 'cedar_delete_entities(uids)');

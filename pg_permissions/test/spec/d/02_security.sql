@@ -44,8 +44,9 @@ select tap.set_eq(
           'permissions.rbac_scopes_with_permission(text,boolean)',
           'permissions.fga_check_current(text,text)', 'permissions.fga_list_objects_current(text,text)',
           'permissions.fga_list_object_ids_current(text,text)',
-          'permissions.cedar_is_authorized_current(text,text,jsonb,boolean)', 'permissions.cedar_list_resources_current(text,text)'],
-    'PUBLIC can execute exactly the current-subject functions and _unfolded_null');
+          'permissions.cedar_is_authorized_current(text,text,jsonb,boolean)', 'permissions.cedar_list_resources_current(text,text)',
+          'permissions.cedar_uid(text,text)'],
+    'PUBLIC can execute exactly the current-subject functions, cedar_uid and _unfolded_null');
 select tap.is(
     (select array_agg(p.oid::regprocedure::text order by 1) from pg_proc p
      where p.pronamespace = 'permissions'::regnamespace and p.proname ~ '^cedar_'
@@ -54,9 +55,9 @@ select tap.is(
 select tap.is(
     (select array_agg(p.oid::regprocedure::text order by 1) from pg_proc p
      where p.pronamespace = 'permissions'::regnamespace and p.proname ~ '^_?cedar_'
-       and p.proname not in ('cedar_is_authorized_current', 'cedar_list_resources_current')
+       and p.proname not in ('cedar_is_authorized_current', 'cedar_list_resources_current', 'cedar_uid')
        and (has_function_privilege('authenticated', p.oid, 'execute') or has_function_privilege('anon', p.oid, 'execute'))),
-    null, 'authenticated and anon can execute no cedar_* or _cedar_* function but the two current-subject helpers');
+    null, 'authenticated and anon can execute no cedar_* or _cedar_* function but the two current-subject helpers and cedar_uid');
 select tap.ok(
     (select count(*) from pg_class c where c.relnamespace = 'permissions'::regnamespace and c.relkind = 'r' and c.relname ~ '^cedar_') = 5
     and not exists (select 1 from pg_class c where c.relnamespace = 'permissions'::regnamespace and c.relkind = 'r' and c.relname ~ '^cedar_'

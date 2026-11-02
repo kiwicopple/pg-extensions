@@ -6051,16 +6051,21 @@ as $$
     select p_type || '::"' || p_id || '"'
 $$;
 
--- A uid as Cedar text, Type::"id" with Cedar's string escapes (messages).
+-- A uid as Cedar text, Type::"id" with Cedar's string escapes. The escapes
+-- match uid() in js/src/cedar/uid.ts: \" \\ \n \r \t, and \u{hex} for the
+-- other control characters and DEL. Messages and cedar_uid use it.
 create function permissions._cedar_uid_text(p_type text, p_id text)
 returns text
 language sql immutable
 as $$
-    select p_type || '::"' || coalesce((select string_agg(case when c = '"' then '\"' when c = '\' then '\\'
-                                                      when ascii(c) < 32 or ascii(c) = 127 then format('\u{%s}', to_hex(ascii(c)))
-                                                      else c end, '' order by o)
-                               from regexp_split_to_table(p_id, '') with ordinality s(c, o) where c <> ''), '')
-                         || '"'
+    select p_type || '::"' || case
+        when coalesce(p_id, '') !~ '[\x01-\x1f"\\\x7f]' then coalesce(p_id, '')
+        else (select string_agg(case when c = '"' then '\"' when c = '\' then '\\'
+                                     when c = chr(10) then '\n' when c = chr(13) then '\r' when c = chr(9) then '\t'
+                                     when ascii(c) < 32 or ascii(c) = 127 then format('\u{%s}', to_hex(ascii(c)))
+                                     else c end, '' order by o)
+              from regexp_split_to_table(p_id, '') with ordinality s(c, o) where c <> '')
+        end || '"'
 $$;
 
 -- A valid entity type name: Ident(::Ident)*.
@@ -10162,10 +10167,24 @@ begin
 end;
 $$;
 
+-- A uid as Cedar text, for resource arguments built from row ids:
+--   resource => permissions.cedar_uid('Document', id::text)
+-- It escapes " and \ and control characters, as uid() does in the JS client,
+-- so an id never changes how the text parses. The type is not checked here;
+-- a bad type gives cedar:invalid_uid when the uid is used. A null argument
+-- gives null. Pure, so any role may call it (granted to PUBLIC below).
+create function permissions.cedar_uid(type text, id text)
+returns text
+language sql immutable strict parallel safe security definer
+set search_path = ''
+as $$
+    select permissions._cedar_uid_text(cedar_uid.type, cedar_uid.id)
+$$;
+
 -- Privileges. Every cedar_* function and table is for the owner and the
 -- trusted roles the app grants (e.g. service_role), never PUBLIC, except the
 -- two current-subject helpers, cedar_is_authorized_current and
--- cedar_list_resources_current, which the Privileges section at the end of
+-- cedar_list_resources_current, and cedar_uid, which the Privileges section at the end of
 -- each file grants to PUBLIC after this. A fresh install revokes everything
 -- from PUBLIC at the end of the file; this does the same for the objects
 -- above when the upgrade script adds them.
@@ -10262,7 +10281,8 @@ grant execute on function
     permissions.fga_list_objects_current(text, text),
     permissions.fga_list_object_ids_current(text, text),
     permissions.cedar_is_authorized_current(text, text, jsonb, boolean),
-    permissions.cedar_list_resources_current(text, text)
+    permissions.cedar_list_resources_current(text, text),
+    permissions.cedar_uid(text, text)
 to public;
 
 -- Everything else (role and model management, tuple writes, explicit-subject

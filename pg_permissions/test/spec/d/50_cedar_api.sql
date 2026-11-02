@@ -165,7 +165,7 @@ select tap.throws_ok($$ select permissions.cedar_read_entities() $$, '42501', 'c
 reset role;
 select tap.is((select array_agg(p.proname::text order by p.proname) from pg_proc p where p.pronamespace = 'permissions'::regnamespace
                  and p.proname ~ '^_?cedar_' and has_function_privilege('authenticated', p.oid, 'execute')),
-              '{cedar_is_authorized_current,cedar_list_resources_current}',
-              'clients can execute only the two current-subject cedar_* helpers (granted to PUBLIC)');
+              '{cedar_is_authorized_current,cedar_list_resources_current,cedar_uid}',
+              'clients can execute only the two current-subject cedar_* helpers and cedar_uid (granted to PUBLIC)');
 
 select * from tap.finish();
