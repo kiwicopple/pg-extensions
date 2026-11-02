@@ -1,6 +1,6 @@
 # Design E: the Cedar model (`cedar_*`) in PL/pgSQL
 
-> Status: phase 0 of [`plan-cedar.md`](../plan-cedar.md), approved with its deviations (static limits, the `ast` column, errors as SQL null, the verbatim principal type, `resource_attrs` replacing attributes). Phases 2, 3, 4a, 4b, 4c, 5 and 6 are implemented in `pg_permissions--0.1.0.sql`: the core evaluator, the text parser, the extension types, templates, the policy index and RLS helpers, and the integration (`delete_subject`, grants, the upgrade path). Section 12 has the phase 2 measurements and decisions, section 13 the decisions of phases 3 and 4c, section 14 those of the extension types, section 15 those of phase 5, and section 16 those of phase 6. The whole corpus passes. The oracle is vendored in [`test/cedar/`](../../test/cedar/README.md).
+> Status: phase 0 of [`plan-cedar.md`](../plan-cedar.md), approved with its deviations (static limits, the `ast` column, errors as SQL null, the verbatim principal type, `resource_attrs` replacing attributes). Phases 2, 3, 4a, 4b, 4c, 5, 6 and the fixes of the phase 9 security review are implemented in `pg_permissions--0.1.0.sql`: the core evaluator, the text parser, the extension types, templates, the policy index and RLS helpers, the integration (`delete_subject`, grants, the upgrade path), and the authenticated statement cache. Section 12 has the phase 2 measurements and decisions, section 13 the decisions of phases 3 and 4c, section 14 those of the extension types, section 15 those of phase 5, section 16 those of phase 6, and section 17 those of the security review. The whole corpus passes. The oracle is vendored in [`test/cedar/`](../../test/cedar/README.md).
 
 The sources for this page are:
 
@@ -333,11 +333,12 @@ API and argument errors raise. The `DETAIL` is `cedar:<code>`, followed by conte
 | `cedar:id_in_use id='…'` | `23505` | the put and link functions | The id belongs to the other kind: a static policy, a template or a link. |
 | `cedar:invalid_link slot='…'` | `22023` | `cedar_link_template` | A slot of the template has no value, or a value has no slot. |
 | `cedar:invalid_uid value='…'` | `22023` | every function that takes a UID | The text is not `Type::"id"`. |
-| `cedar:invalid_entity index=<n>` | `22023` | `cedar_put_entities`, the `entities` argument | The entity JSON is wrong: a duplicate UID, a value that is not a Long, a bad extension literal, or a cycle. |
+| `cedar:invalid_entity index=<n>` | `22023` | `cedar_put_entities`, the `entities` argument | The entity JSON is wrong: a duplicate UID, a value that is not a Long, a bad extension literal. A cycle is `invalid_entity uid='…'`. |
+| `cedar:invalid_argument …` | `22023` | `cedar_put_policy`, `cedar_put_template` (`argument='policy'`), `cedar_list_resources_current` (`value='…'`) | Both the text and the JSON are passed, or `resource_type` is not an entity type name. |
 | `cedar:invalid_context` | `22023` | `cedar_is_authorized` | The context is not a record, or a value is wrong. |
 | `cedar:unsupported feature='…'` | `0A000` | puts and requests | U+0000 in a string, or a record whose only key is `__entity` or `__extn`. |
 | `cedar:null_argument argument='…'` | `22004` | all functions | A required argument is `null`. |
-| `cedar:limit_exceeded limit='…'` | `54000` | puts and requests | A limit of section 6 is exceeded. |
+| `cedar:limit_exceeded limit='…'` | `54000` | puts and requests | A limit of section 6 is exceeded. In entity JSON a value too deep also has `index=<n>` (section 17.5). |
 
 Evaluation errors never raise. In `cedar_is_authorized`, each one is `{"policy_id","message"}`. The message starts with a code that follows Cedar's `EvaluationError` kinds, then a colon and a detail:
 
@@ -360,11 +361,11 @@ The limits are fixed. Each one is set well above the corpus maximum:
 | Nodes in one policy | 4,096 | 489 | `limit_exceeded` (put) |
 | Expression nesting depth | 64 | 14 | `limit_exceeded` (put). The parser checks it too. |
 | Value nesting in entity data and context | 32 | 4 | `limit_exceeded` |
-| Entities in one `cedar_put_entities` call | 10,000 | 151 | `limit_exceeded` |
-| Entities in a request overlay | 1,000 | 151 | `limit_exceeded` |
+| Entities in one `cedar_put_entities` call | 10,000 | 151 | `limit_exceeded limit='put_entities'` |
+| Entities in a request overlay | 1,000 | 151 | `limit_exceeded limit='request_entities'` |
 | Depth of the entity hierarchy | none. Cycles are rejected. | 117 | — |
 
-There is no cap on the number of policies, and the `_current` helpers do not cap their results, as for FGA. `statement_timeout` bounds the time.
+There is no cap on the number of policies, and the `_current` helpers do not cap their results, as for FGA. `statement_timeout` bounds the time. Since phase 9 the cost of every path is linear (or n log n) in the size of its input (section 17.4), so a large id, set or policy within these limits costs milliseconds, not minutes.
 
 ## 7. The current subject, RLS and lists
 
@@ -732,16 +733,17 @@ With 1,000 policies, a request is three times faster. With 2 policies it costs a
 
 **No InitPlan.** Section 7.2 planned an inlinable SQL wrapper that passes `(select _cedar_prefilter_current(...))` to the per-row function, so that Postgres would run the prefilter once as an InitPlan. Postgres does not inline a SQL function whose body has a subquery (`inline_function` gives up on `hasSubLinks`). The wrapper is then an ordinary function call, and the subquery runs on every call. A probe showed it: a SQL wrapper with `(select pf(a))` called on 5 rows ran `pf` 5 times, and `EXPLAIN` showed the wrapper as a plain filter. No other way to get an InitPlan exists without asking the policy author to write the subquery.
 
-**The setting.** The doc's alternative, a transaction-local setting keyed by the statement, is what the helper does. On the first row of a statement, `_cedar_current_filter` walks the principal's and the action's ancestors, collects the candidate policies of the scope index (principal and action match, any resource), and stores the result with `set_config(..., true)` in `permissions.cedar_filter_<md5(action)>`. Each action has its own setting, so a statement that checks two actions (a select and an update policy) does not evict its own entry. The value starts with a key:
+**The setting.** The doc's alternative, a transaction-local setting keyed by the statement, is what the helper does. On the first row of a statement, `_cedar_current_filter` walks the principal's and the action's ancestors, collects the candidate policies of the scope index (principal and action match, any resource), and stores the result with `set_config(..., true)` in `permissions.cedar_filter_<md5(action)>`. Each action has its own setting, so a statement that checks two actions (a select and an update policy) does not evict its own entry. The value starts with a key (as of phase 9, section 17):
 
+- `current_database()`: a database made from a template has the same secret (section 17.1).
 - `pg_current_snapshot()`. A commit by another transaction changes the snapshot text, so a new statement in read committed recomputes. Statements that share a snapshot see the same committed data.
 - the raw values of `request.jwt.claims`, `permissions.subject_id` and `permissions.subject_type`: the settings the subject comes from.
-- `permissions.cedar_generation`: statement-level triggers on `cedar_policies`, `cedar_entities` and `cedar_entity_parents` set it to a new uuid, so the transaction's own writes end its cache at once. A rolled-back subtransaction rolls the setting back with the data.
+- the generation of the transaction's own Cedar writes: statement-level triggers on `cedar_policies`, `cedar_entities` and `cedar_entity_parents` give the backend a new generation in the owner-only table `_cedar_write_gen`, so the transaction's own writes end its cache at once (section 17.2). Until phase 9 this was the setting `permissions.cedar_generation`, which a client could reset.
 - the action text.
 
-**Trust.** A client that can write a setting could forge this cache. It is not a new hole: such a client can also write `request.jwt.claims` or `permissions.subject_id`, the settings `current_subject_id()` trusts, and be any subject. The cache is exactly as trusted as the subject itself (docs, "Identity"). PostgREST clients cannot set these settings at all. Phase 9 should review this argument.
+**Trust.** A client that runs SQL can write any setting. Phase 5 argued that such a client could as well set `request.jwt.claims` or `permissions.subject_id` and be any subject, so a forged cache would be no weaker than a forged subject. The phase 9 review showed the argument is wrong: a forged entry gives every row, past every forbid, even to a subject that no policy names or that is not stored, and a forged "deny" turns a `not cedar_is_authorized_current(...)` policy into an allow. Choosing a subject only gives that subject's access. Each entry now carries MACs under an owner-only secret, and the helper ignores an entry it did not write (section 17.1).
 
-**Layout and the per-row decision.** The value has two parts:
+**Layout and the per-row decision.** After the key and mac1 (section 17.1), the value has two parts:
 
 1. Flags, then one entry for each permit that matches the principal and the action: its resource scope in upper case when the permit has no conditions (`E:<uid>`, `I:<uid>`, `T:<type>`, `A:*`), in lower case otherwise (and for `is ... in`). The flag `F` says that a forbid matches the principal and the action.
 2. Only when a forbid or a lower-case permit exists: those policies grouped by resource scope, with the environment of the request without its resource (principal and action data and ancestors), as jsonb text.
@@ -814,7 +816,7 @@ Every workload is within its budget except `write_nest_team` (p95 1.5 to 1.8 ms 
 
 ### 15.5 For phases 6 to 9
 
-- **Security review (phase 9).** The setting cache of section 15.2 rests on the argument that a client who can write settings can already choose the subject. Review it, and the triggers that end the cache on the transaction's own writes.
+- **Security review (phase 9).** The setting cache of section 15.2 rests on the argument that a client who can write settings can already choose the subject. Review it, and the triggers that end the cache on the transaction's own writes. (Done: the argument was wrong; section 17.)
 - **Not in the plan's API:** `cedar_is_authorized_current` has a fourth argument, `plan_time_guard`, as `rbac_scopes_with_permission` has. The JS client (phase 7) should not pass it.
 - **Resource text.** A resource is Cedar text, so an id with `"` or `\` must be escaped, or the call raises `cedar:invalid_uid`. RLS policies on uuid or integer ids are safe; the docs (phase 8) should say so, and could offer an escaping helper.
 - **`delete_subject` (phase 6)** must also delete the `cedar_entities` row of the subject; its links (`cedar_policies` with a principal slot of that uid) are a decision for phase 6.
@@ -845,7 +847,7 @@ Subject ids and stored entity ids were already handled raw: the helpers pass `(t
 
 `02_security.sql` pins PUBLIC's execute grants to the eleven current-subject functions (`_unfolded_null` included) and checks that every `cedar_*` function is security definer with `search_path=''`, that clients can execute no `cedar_*` or `_cedar_*` function but the two helpers, and that they have no privilege on the five `cedar_*` tables. `04_api_naming` and `35_error_hints` already covered every Cedar function and raise site.
 
-It also documents the cache-forgery behaviour for the phase 9 review: a client that can run `set_config` computes the key (`pg_current_snapshot()`, the subject settings, `cedar_generation`, the action) and writes `permissions.cedar_filter_<md5(action)>` = key `chr(29)` `chr(30)` `A:*` `chr(30)` `chr(28)`; `cedar_is_authorized_current` then returns true for a resource no policy allows. An entry with a stale key is ignored. The same client can as well set `permissions.subject_id` and act as another subject, the argument of section 15.2.
+In phase 6 it also documented the cache forgery for the phase 9 review: a client that can run `set_config` computed the key (`pg_current_snapshot()`, the subject settings, `cedar_generation`, the action) and wrote `permissions.cedar_filter_<md5(action)>` = key `chr(29)` `chr(30)` `A:*` `chr(30)` `chr(28)`; `cedar_is_authorized_current` then returned true for a resource no policy allows. Phase 9 closed it (section 17.1), and the spec now asserts that the forgeries fail.
 
 `test/run.sh --upgrade-from 0.0.1` runs the whole suite on 0.0.1 plus the upgrade script: 259 files and 169,777 assertions pass, as on a fresh install. Every run of the extension's suite starts with `tools/sync-upgrade.sh --check`. `03_tle_install.sql` updates a pg_tle install of 0.0.1 as a non-superuser with `pgtle_admin` and checks `pgtle.set_default_version`.
 
@@ -874,5 +876,109 @@ Only `cedar_list_resources_current` needs `set jit = off`, which it has; the las
 
 ### 16.5 For phases 8 and 9
 
-- **Phase 9:** the cache forgery above; the separator handling of 16.2; the unescaped-backslash ambiguity.
+- **Phase 9:** the cache forgery above; the separator handling of 16.2; the unescaped-backslash ambiguity. (Section 17 records the fixes.)
 - **Phase 8:** document the resource-id rule of 16.2 and the escaping expression, or add a helper; the `delete_subject` semantics (the reference and `docs/integrations/cleanup.md` have a minimal update); `site/scripts/sync.mjs` still calls Cedar a future direction.
+
+## 17. Phase 9: the security review
+
+The phase 9 review confirmed one high finding (a forged statement cache), one low one (a replay of the cache after a write in the same transaction) and two medium ones (quadratic time on ids with escapes and on large sets), with repro scripts and a differential fuzz. This section records the fixes. The laptop measurements ran on PostgreSQL 16.4 (Postgres.app) on Apple silicon on 2026-11-02, best of 3; the benchmarks are in section 17.3. The specs are `02_security.sql` (rewritten) and `59_cedar_large_inputs.sql` (new).
+
+### 17.1 The statement filter is authenticated
+
+**The finding.** The filter of section 15.2 lives in a setting that any client running SQL can write. A client that wrote `key chr(29) chr(30) A:* chr(30) chr(28)` under the right key saw every row, past every forbid, even as a subject that is not stored. Phase 5's argument, that such a client could as well choose its subject, does not hold: choosing a subject gives that subject's access, while a forged filter gives access no policy gives anyone. A forged "deny" is not harmless either, because a policy can be written as `not cedar_is_authorized_current(...)`.
+
+**The design.** The helper trusts only entries it wrote:
+
+- **The secret.** `permissions._cedar_secret` has one row, owner only: 48 bytes from three `gen_random_uuid()` (366 bits from `pg_strong_random`). No pgcrypto. The cedar section creates and fills it, so a fresh install and the upgrade script both make one. A dump of an extension install does not hold it, and `create extension` on restore makes a new one; a database made from a template copies it, so the key holds `current_database()`. Without the row no entry verifies and every row recomputes: slow, never wrong. The owner, superusers and `pg_read_all_data` can read it; they can already write policies or bypass RLS.
+- **The entry.** `key chr(29) mac1 part1 chr(28) mac2 chr(31) part2`, where `_cedar_mac(s, m)` is `hex(sha256(s || sha256(s || m)))` (the built-in `sha256(bytea)`, nested as in HMAC, so sha256's length extension does not apply), mac1 = `_cedar_mac(s, octet_length(key) ':' key part1)` (the length makes the split between key and part 1 unambiguous) and mac2 = `_cedar_mac(s, mac1 part2)`, which binds part 2 to its part 1 and key.
+- **The checks.** mac1 on every row, also on rows that part 1 denies (the `not` case above). mac2 only on the rows that parse part 2.
+- **Byte-wise splits.** The helper splits the entry with `split_part` on chr(28) and chr(31), which search bytes, and never takes `substr` or `left` of part 2: on a UTF-8 database those count the characters of the whole text, about 2 ns a byte (15 µs for 8 KiB), and part 2 can be 8 KiB. chr(31) after mac2 is for that split. Part 1 never holds chr(28) (section 16.2), and part 2, jsonb text, holds no control character. A key that holds chr(28), which only a subject setting can bring, never verifies: every row is a miss, and only that client's queries get slower.
+- **On failure.** An entry under another key, with a bad mac1 or with a bad shape is a miss: the helper computes the filter again and overwrites the setting. A bad mac2 under a good mac1 sends that row to `_cedar_current_check`, the check from scratch. Nothing raises: until a MAC verifies, only string functions read the entry, and part 2 is parsed as jsonb only after mac2.
+- **What a client can still do.** Read its own entries with `current_setting` and write them back. An entry is valid only under its key, which pins the database, the snapshot, the subject settings, the own-write generation (section 17.2) and the action, so a replay gives the answer the helper computed for that same state. A direct-SQL client still chooses its subject through the settings (docs, "Identity"); that is unchanged and documented.
+- **Not constant-time.** The MAC is compared with `=`. A timing attack on a comparison of 64 hex digits inside a SQL function call is not practical; this is noted, not fixed.
+
+`02_security.sql` asserts that each forgery gives the policies' answer: a forged part 1 (`A:*`) with the real key and mac1, the same with made-up MACs, a truncated entry, an entry cut inside mac1, a part 2 whose permit lost its condition under a valid mac1, another action's entry under this action's key and as it is, and a forged entry for a subject that is not stored. Each runs as `authenticated` over a three-row view, so the rows are checked too. The reviewer's forge script now returns the restricted rows (`open` for bob, none for the unknown subject) instead of all three.
+
+### 17.2 Own writes: a generation only the owner writes
+
+**The finding.** The key's own-write generation was the setting `permissions.cedar_generation`. A client could read an entry, let a Cedar write happen in the same transaction (a security definer function of the app, for example), reset the setting and write the old entry back: the helper then answered from the state before the write.
+
+**The design.** The `cedar_changed` triggers (security definer now) upsert the backend's row of `permissions._cedar_write_gen (pid int primary key, xid xid8, gen bigint)`, an owner-only unlogged table, with `pg_current_xact_id()` and a new value of the sequence `_cedar_write_seq`. The key holds that `gen` when the row's xid is the current transaction's, else 0.
+
+- **Reads only with an xid.** The helper reads the table only if `pg_current_xact_id_if_assigned()` is not null. A transaction without an xid has written nothing, so its generation is 0, and most reads skip the lookup.
+- **Replicas.** A standby cannot plan a query on an unlogged table ("cannot access temporary or unlogged relations during recovery"). PL/pgSQL plans the lookup only when it runs, and a standby never assigns an xid, so the lookup never runs there; the generation is 0, which is right, as a replica never writes Cedar. This is reasoned from the code paths; the harness has no standby to test it.
+- **Why a sequence.** A rolled-back subtransaction rolls the row back with the data, and the next write gets a new value. With a counter in the row, a write after the rollback would reuse the rolled-back value, and an entry captured inside the rolled-back subtransaction would match again.
+- **No contention.** Each backend writes only its own row. A row of an earlier transaction (another xid) does not count, and a reused pid finds a stale xid. A crash empties the table, which ends no live transaction.
+- **Alternatives.** `pg_current_xact_id_if_assigned()` alone cannot work: the xid is assigned at the first write and does not change with later ones. `currval` of a sequence is per session and only the owner can advance it, but it raises before the session's first `nextval`, and catching that costs a subtransaction per row.
+
+`02_security.sql` reads, puts a policy as the owner in the same transaction, writes the earlier entry back and reads again: the second read sees the new policy, and the new entry's key holds a generation. With the generation forced to 0, the same assertions fail.
+
+### 17.3 Cost
+
+Per row, on the reviewer's data: 1,000 documents, 5 of them shared with the user (`view`) and a condition on every document for another action (`edit`), 20,000 calls in one statement, in µs. The last row adds 20 permits with conditions for `edit`, so part 2 is about 8 KiB (5,000 calls):
+
+| Per row | before | after |
+| --- | --- | --- |
+| `view`: decided from part 1 (most rows denied) | 4.3 | 7.1 |
+| `edit`: part 2 (0.5 KB) parsed and a condition evaluated | 25.4 | 28.5 |
+| `edit` with part 2 of about 8 KiB and 21 conditions | 285 | 262 |
+
+Variants of the function split the added cost on `view` into the secret read (an SPI query on a one-row table, 1.1 µs), mac1 (1.3 µs) and the key and splits. `edit` adds mac2, about 0.5 ns a byte of part 2 plus the call. A row in a transaction that has an xid adds the lookup in `_cedar_write_gen`, about 1 to 2 µs. The 8 KiB case is faster than before because the phase 5 code took `substr` of part 2 on every row, which the byte-wise splits replace. `_cedar_mac` is `stable`, not `immutable`, so Postgres inlines it (`getdatabaseencoding()` is stable): declared immutable, it cost 1.45 µs a call instead of 0.9. A first version that took `substr` of part 2 to strip mac2 made `row_select_page` 26 to 34% slower on the benchmark; the splits fixed that before the runs below.
+
+The benchmark (Postgres 18.6, Docker, `docker/run-matrix.sh bench --versions 18 --designs e -- --scale <scale> --tag p9`, serially, 10 s per workload, 4 clients) against `p5`, p50 / p95 in ms. The checksums are the same as `p5`'s. Differences under about 20% are noise.
+
+| Workload | small p5 | small p9 | medium p5 | medium p9 | Budget p95 (small, medium) |
+| --- | --- | --- | --- | --- | --- |
+| rbac_check | 0.29 / 0.50 | 0.30 / 0.52 | 0.31 / 0.52 | 0.31 / 0.47 | 1, 1 |
+| rbac_select_page | 0.36 / 0.68 | 0.37 / 0.69 | 0.50 / 0.85 | 0.49 / 0.70 | 2, 2 |
+| rbac_select_count | 0.32 / 0.51 | 0.32 / 0.61 | 0.45 / 0.63 | 0.40 / 0.61 | 2, 2 |
+| rbac_update_one | 0.48 / 0.79 | 0.52 / 0.84 | 0.56 / 0.78 | 0.58 / 1.08 | 4, 3 |
+| write_assign_role | 0.25 / 0.43 | 0.26 / 0.45 | 0.25 / 0.34 | 0.26 / 0.42 | 1, 1 |
+| share_list_objects | 0.36 / 0.57 | 0.35 / 0.50 | 0.39 / 0.52 | 0.39 / 0.62 | 2, 1 |
+| share_select_page | 0.56 / 0.91 | 0.56 / 0.90 | 0.78 / 1.05 | 0.79 / 1.30 | 5, 3 |
+| write_share | 0.25 / 0.53 | 0.26 / 0.62 | 0.25 / 0.42 | 0.26 / 0.47 | 1, 1 |
+| parents_proj_select_page | 0.68 / 1.06 | 0.67 / 1.15 | 0.94 / 1.44 | 0.93 / 1.61 | 2, 3 |
+| parents_proj_select_count | 0.65 / 0.94 | 0.66 / 1.06 | 1.32 / 1.89 | 1.27 / 2.23 | 2, 3 |
+| parents_select_page | 0.58 / 0.93 | 0.59 / 0.99 | 0.86 / 1.94 | 0.84 / 1.88 | 4, 16 |
+| parents_select_count | 0.57 / 0.97 | 0.57 / 0.83 | 1.26 / 2.24 | 1.19 / 2.41 | 4, 14 |
+| write_nest_team | 1.03 / **1.53** | 1.10 / **1.81** | 1.16 / **1.72** | 1.17 / **1.76** | 1, 1 |
+| nest_check | 0.34 / 0.58 | 0.35 / 0.63 | 0.36 / 0.51 | 0.37 / 0.52 | 1, 1 |
+| row_select_page | 39.91 / 59.57 | 35.15 / 47.47 | 107.81 / 162.43 | 97.49 / 138.88 | 179, 488 |
+
+Every workload is within its budget except `write_nest_team`, the documented miss of section 15.4 (one entity re-parented from every client). The workloads that check one row per statement (`rbac_update_one`, `nest_check`) and the lists are unchanged within noise. `row_select_page`, which checks hundreds of rows per statement (about 500 at small scale), each parsing part 2, is 10% faster at p50 for the reason above.
+
+### 17.4 Linear time on large inputs
+
+Appending to a jsonb or a text in a PL/pgSQL loop copies the whole value each time, so several paths were quadratic in their input. An expanded array assigned element by element (`a[n] := v`) grows in place, but not when the right side is a subquery: then each assignment flattens the array (8,000 assignments took 0.29 s, 16,000 took 1.08 s). The fixes collect pieces in arrays and join them once with `array_to_string`, `to_jsonb`, `jsonb_object_agg` or one aggregate query.
+
+| Input | before | after |
+| --- | --- | --- |
+| a resource id of 100,000 characters, 50,000 of them `\"` (`_cedar_uid`, per row) | 42 s | 0.12 s |
+| `resource_attrs` with a set of 20,000 Longs (`_cedar_value_in`) | 3.1 s | 0.03 s |
+| the same with 100,000 Longs | more than 2 minutes | 0.16 s |
+| `containsAll` and `containsAny` on sets of 20,000 and 10,000 (`cedar_is_authorized`) | 3.9 s | 0.07 s |
+| put a policy with a like pattern of 20,000 `\*` | 71 s | 0.16 s |
+| put a policy with a set literal of 4,000 elements | 1.33 s | 0.10 s |
+| put a policy with a record literal of 4,000 keys | 1.76 s | 0.11 s |
+| put a policy with 6,000 annotations | 0.60 s | 0.08 s |
+
+- `_cedar_uid` tokenizes the id with `regexp_matches` (a run of plain characters, or one escape) as the parser does, and joins the decoded pieces once. Its messages are unchanged. `_cedar_uid_text` was already linear (`string_agg`).
+- `_cedar_value_in` keeps Bools, Strings and Longs (`_cedar_is_plain`) in one query and converts the other elements one by one, in order, so the first error is still the first in the array; the set is sorted and deduplicated once. A record replaces its converted values once. A set of 100,000 Strings still costs about 0.46 s: the sort into the canonical order compares jsonb strings with the database collation, and the order must not change.
+- `containsAll` is `not exists (y except x)` and `containsAny` is `exists (y intersect x)`, hashed or sorted by the planner, with jsonb `=`, which is Cedar `==` on the canonical form. jsonb `@>` is not used: on records and sets it matches partially (`[{"r": 1, "s": 2}] @> [{"r": 1}]`), and the spec asserts the difference. `e in [set]` intersects the set's keys with the ancestors' instead of a `?` scan of the ancestors per element. On small sets the set operations cost the same as before (about 3 µs).
+- The parser and the compiler build sets, records, call arguments, annotations, conditions, action lists, `has` paths and like patterns once. `_cedar_unescape` collects the pieces of a like pattern and splits them into characters in one query. Repeated record keys and annotations are found once, after the list. When a literal has both a repeated key and a later syntax error, the later error is now the one reported; both are `cedar:parse_error`, and the corpus and the specs are unchanged.
+- Entity parents are checked and collected in one query, the overlay walk of `_cedar_ancestors` is a recursive query like the walk over storage, and `cedar_is_authorized` collects its errors in an array. An entity with 100,000 parents is put in about 1.5 s (mostly the rows written) and walked in 0.1 s.
+
+`59_cedar_large_inputs.sql` puts 100,000-element inputs through the RLS helper (an id, sets of Longs, `containsAll` and `containsAny`), 20,000 converted sets, and policies at the 64 KiB limit, each under `statement_timeout` with a loose bound on the time.
+
+**Equivalence.** The reviewer's differential fuzz (random entities, hierarchies and policies, each document checked by `cedar_is_authorized` under the fail-closed rule, by `cedar_is_authorized_current` with and without `resource_attrs`, from scratch and by `cedar_list_resources_current`) found 0 divergences in 1,400 seeds. The parser mutation fuzz (4,000 mutated policies) found no error without a `cedar:` detail and no put over 200 ms. The oracle passes unchanged.
+
+### 17.5 Error detail of the entity limits
+
+The limit on the number of entities raised `cedar:limit_exceeded index=0`, with the message "invalid entity at index 0 of entities: too many entities: …", although no entity was at fault. It now names the limit like the others: `limit='put_entities'` for `cedar_put_entities` and `limit='request_entities'` for the `entities` of `cedar_is_authorized`, with the message `too many entities in entities: 10001 (the limit is 10000)`. A value nested too deep in an entity is `limit='value_depth' index=<n>`. The shape of the detail (`code key=value ...`) is unchanged, so the JS client's parser needs no change. `docs/reference/errors.md` and `limits.md` show the new details.
+
+### 17.6 Not fixed
+
+- **Ancestors against part 1.** Per row, each ancestor of the resource is looked up in part 1 with `strpos`, so a resource with very many ancestors and a statement with very many permits cost the product of the two. Both come from data the application writes.
+- **The sort of large String sets** (section 17.4) stays, to keep the canonical order.
+- **`_cedar_parse_policies`**, the internal multi-policy parser that only the oracle generator uses, still grows its maps of policies in place.
+- **The standby behaviour** of section 17.2 is reasoned, not tested.

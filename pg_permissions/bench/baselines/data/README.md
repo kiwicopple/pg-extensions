@@ -11,6 +11,7 @@ The file groups are these:
 - `pg18-docker-d-*-opt2`: design D after its second optimization pass (`tag: "opt2"`, a separate series; section "opt2" of [`D.md`](../../../research/benchmarks/D.md)).
 - `pg18-docker-d-*-opt3`: design D after its third pass (`tag: "opt3"`; section "opt3" of [`D.md`](../../../research/benchmarks/D.md)).
 - `pg18-docker-{a,b,c,d}-{small,medium,large}-default-p6`: the phase 6 runs (`tag: "p6"`; section "Phase 6" of [`D.md`](../../../research/benchmarks/D.md)). `pg18-docker-d-large-default-p6check` is the `--check` run.
+- `pg18-docker-e-{small,medium,large}-default-p5`: design E, the Cedar model, at phase 5 (`tag: "p5"`; [`cedar.md`](../../../research/benchmarks/cedar.md)). `pg18-docker-e-{small,medium}-default-p9`: the same after the phase 9 security fixes (`tag: "p9"`; section "Phase 9" of `cedar.md`).
 
 The name of a file is `<run_id>.json`. A later run with the same settings replaces the file.
 

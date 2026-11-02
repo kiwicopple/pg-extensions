@@ -469,7 +469,7 @@ const CEDAR_FIXTURES: Array<[string, string, Record<string, string>]> = [
   ["cedar:unsupported feature='nul'", 'unsupported', { feature: 'nul' }],
   ["cedar:null_argument argument='policy_id'", 'null_argument', { argument: 'policy_id' }],
   ["cedar:limit_exceeded limit='policy_bytes'", 'limit_exceeded', { limit: 'policy_bytes' }],
-  ['cedar:limit_exceeded index=0', 'limit_exceeded', { index: '0' }],
+  ["cedar:limit_exceeded limit='value_depth' index=0", 'limit_exceeded', { limit: 'value_depth', index: '0' }],
 ]
 
 describe('parseDetail: cedar', () => {

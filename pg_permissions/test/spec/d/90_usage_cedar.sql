@@ -816,7 +816,7 @@ select permissions.cedar_put_entities(
     from generate_series(1, 10001) g
   )
 )
-$$), '54000 cedar:limit_exceeded index=0', 'limits: 10,001 entities is limit_exceeded');
+$$), '54000 cedar:limit_exceeded limit=''put_entities''', 'limits: 10,001 entities is limit_exceeded');
 select tap.is((cedar_t.msg($$
 select permissions.cedar_put_entities(
   entities => (
@@ -831,7 +831,7 @@ select permissions.cedar_put_entities(
     from generate_series(1, 10001) g
   )
 )
-$$)).message, 'invalid entity at index 0 of entities: too many entities: 10001 (the limit is 10000)', 'limits: the message');
+$$)).message, 'too many entities in entities: 10001 (the limit is 10000)', 'limits: the message');
 select tap.is((cedar_t.msg($$
 select permissions.cedar_put_entities(
   entities => (
@@ -846,7 +846,7 @@ select permissions.cedar_put_entities(
     from generate_series(1, 10001) g
   )
 )
-$$)).hint, 'An argument holds at most 10000 entities, and sets and records in attributes and tags nest at most 32 levels.', 'limits: the hint');
+$$)).hint, 'An argument holds at most 10000 entities: put them in batches.', 'limits: the hint');
 select permissions.cedar_delete_entities(
   uids => (select jsonb_agg(e -> 'uid') from jsonb_array_elements(permissions.cedar_read_entities(type => 'Item')) e)
 );

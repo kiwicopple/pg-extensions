@@ -7,6 +7,7 @@ Design E is the extension's Cedar model (`cedar_*`, [`research/designs/e-cedar.m
 | Design | Reports | Date | Server |
 | --- | --- | --- | --- |
 | E (Cedar) | [`pg18-docker-e-{small,medium,large}-default-p5.md`](../../bench/baselines/) | 2026-11-02 | Postgres 18.6, Docker (`docker/run-matrix.sh bench --versions 18 --designs e -- --scale <scale> --tag p5`) |
+| E after the phase 9 fixes | [`pg18-docker-e-{small,medium}-default-p9.md`](../../bench/baselines/) | 2026-11-02 | the same (`--tag p9`); see "Phase 9" below |
 | D (RBAC and FGA) | [`pg18-docker-d-{small,medium,large}-default-p6.md`](../../bench/baselines/) | 2026-10-30 | the same image and container limits (4 CPUs, 6 GB) |
 
 Each configuration ran once, serially, 10 s per workload with 4 clients. Treat differences under about 20% as noise. The runs of the two designs are three days apart; the image, the limits and the data are the same. Other containers on the host were idle.
@@ -109,6 +110,10 @@ E reuses the budget rows of the workloads it shares with A to D; they follow the
 **Miss: `write_nest_team`, at every scale (p95 1.5 to 1.8 ms against 1 ms).** The workload nests the same team in a random team in every transaction, which in Cedar is a re-parent of one entity, `Team::"nest-src"`. Each transaction upserts that entity's row and replaces its parent rows, so the 4 clients wait for each other's row locks until the rollback. With one client the same write takes 0.31 ms p50 and 0.41 ms p95 (local, small); with four, throughput barely rises (3,036 to 3,392 tps) while p95 grows. D writes a new tuple each time and never waits. The cost of one write is in budget; the contention comes from the workload writing one row from every client. The budget stays at 1 ms.
 
 Two misses of the first runs were fixed before these runs (e-cedar.md section 15.3): the org list at medium and large scale (a hashed subplan over every stored entity), and the document list at large scale on Postgres 18 (JIT compiling a generic plan on every call, 10 ms). The intermediate reports were not kept.
+
+## Phase 9
+
+The security review made the statement cache of `cedar_is_authorized_current` authenticated (MACs under an owner-only secret) and moved its own-write generation out of a client-writable setting ([`e-cedar.md`](../designs/e-cedar.md) section 17). The `p9` runs at small and medium scale have the same checksums as `p5`. Every workload is within the noise of `p5` except `row_select_page`, which is about 10% faster at p50 (35.2 against 39.9 ms small, 97.5 against 107.8 ms medium): the new code splits the cached entry byte-wise instead of taking `substr` of its second part on every row. `write_nest_team` still misses its budget, as above. The full table is in section 17.3 of the design doc.
 
 ## For later phases
 

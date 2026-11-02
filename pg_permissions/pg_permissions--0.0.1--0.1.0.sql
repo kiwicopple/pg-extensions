@@ -1533,22 +1533,28 @@ $$;
 
 -- Cedar entity JSON (an array of entities), checked and in internal form:
 -- [{"t", "i", "attrs", "tags", "parents": [[type, id], ...]}]. p_arg names
--- the argument for the messages and p_max is the limit on the number of
--- entities. Raises cedar:invalid_entity or cedar:limit_exceeded at the first bad entity.
-create function permissions._cedar_entities_in(p_entities jsonb, p_arg text, p_max int)
+-- the argument for the messages and p_limit the limit on the number of
+-- entities (put_entities or request_entities of _cedar_limits). Raises
+-- cedar:invalid_entity index=<n> at the first bad entity, or
+-- cedar:limit_exceeded limit='<name>' (value_depth: with index=<n>).
+create function permissions._cedar_entities_in(p_entities jsonb, p_arg text, p_limit text)
 returns jsonb
 language plpgsql stable
 as $$
 declare
     r jsonb;
     res jsonb;
+    p_max int := case p_limit when 'put_entities' then (permissions._cedar_limits()).put_entities
+                              else (permissions._cedar_limits()).request_entities end;
 begin
     if jsonb_typeof(p_entities) <> 'array' then
         r := jsonb_build_object('n', 0, 'code', 'invalid',
                                 'err', format('%s must be a JSON array of entities, got a JSON %s', p_arg, jsonb_typeof(p_entities)));
     elsif jsonb_array_length(p_entities) > p_max then
-        r := jsonb_build_object('n', 0, 'code', 'limit',
-                                'err', format('too many entities: %s (the limit is %s)', jsonb_array_length(p_entities), p_max));
+        perform permissions._cedar_error('limit_exceeded',
+            format('too many entities in %s: %s (the limit is %s)', p_arg, jsonb_array_length(p_entities), p_max),
+            hint => format('An argument holds at most %s entities: put them in batches.', p_max),
+            p_detail => format('limit=%L', p_limit));
     else
         select jsonb_agg(jsonb_build_object('t', x.t, 'i', x.i, 'attrs', x.attrs, 'tags', x.tags, 'parents', x.parents)
                          order by x.n) filter (where x.code is null),
@@ -1569,11 +1575,12 @@ begin
     perform permissions._cedar_error(case r ->> 'code' when 'limit' then 'limit_exceeded' else 'invalid_entity' end,
         format('invalid entity at index %s of %s: %s', r ->> 'n', p_arg, r ->> 'err'),
         hint => case r ->> 'code'
-            when 'limit' then format('An argument holds at most %s entities, and sets and records in attributes and tags nest at most %s levels.',
-                                     p_max, (permissions._cedar_limits()).value_depth)
+            when 'limit' then format('Sets and records in attributes and tags nest at most %s levels.',
+                                     (permissions._cedar_limits()).value_depth)
             when 'extension' then 'Write an extension value as {"__extn": {"fn": "decimal", "arg": "12.34"}}, with fn one of decimal, ip, datetime and duration and an arg its constructor accepts: decimal("12.34"), ip("10.0.0.0/8"), datetime("2024-10-15T11:35:00Z"), duration("1h30m").'
             else 'Each entity is {"uid": {"type": "User", "id": "alice"}, "attrs": {...}, "parents": [{"type": "Group", "id": "staff"}], "tags": {...}}; write an entity reference in an attribute as {"__entity": {"type": "User", "id": "alice"}}.' end,
-        p_detail => format('index=%s', r ->> 'n'));
+        p_detail => case r ->> 'code' when 'limit' then format('limit=''value_depth'' index=%s', r ->> 'n')
+                                      else format('index=%s', r ->> 'n') end);
 end;
 $$;
 
@@ -3846,7 +3853,7 @@ begin
     from permissions._cedar_env(p.type, p.id, a.type, a.id, r.type, r.id,
                                 permissions._cedar_context(context),
                                 case when entities is not null and entities <> 'null'
-                                     then permissions._cedar_entities_in(entities, 'entities', (permissions._cedar_limits()).request_entities) end);
+                                     then permissions._cedar_entities_in(entities, 'entities', 'request_entities') end);
     env := e.env;
     pk := e.pk;
     ak := e.ak;
@@ -4950,7 +4957,7 @@ begin
             hint => 'select permissions.cedar_put_entities(entities => ''[{"uid": {"type": "User", "id": "alice"}, "attrs": {}, "parents": []}]''::jsonb);',
             p_detail => 'argument=''entities''');
     end if;
-    v := permissions._cedar_entities_in(entities, 'entities', (permissions._cedar_limits()).put_entities);
+    v := permissions._cedar_entities_in(entities, 'entities', 'put_entities');
     -- The statements below go from the put entities to the tables through
     -- index probes (lateral subqueries with offset 0 or limit 1): the planner
     -- would otherwise hash a whole table for a few entities.

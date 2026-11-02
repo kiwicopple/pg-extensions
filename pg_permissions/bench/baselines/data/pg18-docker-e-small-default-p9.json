@@ -1,0 +1,37 @@
+{
+  "run_id": "pg18-docker-e-small-default-p9",
+  "tag": "p9",
+  "date": "2026-11-02T10:39:11Z",
+  "environment": "docker",
+  "host": "Apple M4, 10 CPU, 24 GB; container cpus=4 mem=6g",
+  "pg_version": "18.6",
+  "design": "e",
+  "scale": "small", "shape": "default", "clients": 4, "duration_s": 10,
+  "workloads": [
+    {"name": "rbac_check", "p50_ms": 0.3, "p95_ms": 0.52, "tps": 13046, "budget_ms": 1},
+    {"name": "rbac_select_page", "p50_ms": 0.37, "p95_ms": 0.69, "tps": 10046, "budget_ms": 2},
+    {"name": "rbac_select_count", "p50_ms": 0.32, "p95_ms": 0.61, "tps": 11635, "budget_ms": 2},
+    {"name": "rbac_update_one", "p50_ms": 0.52, "p95_ms": 0.84, "tps": 7680, "budget_ms": 4},
+    {"name": "write_assign_role", "p50_ms": 0.26, "p95_ms": 0.45, "tps": 14566, "budget_ms": 1},
+    {"name": "share_list_objects", "p50_ms": 0.35, "p95_ms": 0.5, "tps": 11787, "budget_ms": 2},
+    {"name": "share_select_page", "p50_ms": 0.56, "p95_ms": 0.9, "tps": 6825, "budget_ms": 5},
+    {"name": "write_share", "p50_ms": 0.26, "p95_ms": 0.62, "tps": 12762, "budget_ms": 1},
+    {"name": "parents_proj_select_page", "p50_ms": 0.67, "p95_ms": 1.15, "tps": 5322, "budget_ms": 2},
+    {"name": "parents_proj_select_count", "p50_ms": 0.66, "p95_ms": 1.06, "tps": 5737, "budget_ms": 2},
+    {"name": "parents_select_page", "p50_ms": 0.59, "p95_ms": 0.99, "tps": 6165, "budget_ms": 4},
+    {"name": "parents_select_count", "p50_ms": 0.57, "p95_ms": 0.83, "tps": 6719, "budget_ms": 4},
+    {"name": "write_nest_team", "p50_ms": 1.1, "p95_ms": 1.81, "tps": 3318, "budget_ms": 1},
+    {"name": "nest_check", "p50_ms": 0.35, "p95_ms": 0.63, "tps": 10583, "budget_ms": 1},
+    {"name": "row_select_page", "p50_ms": 35.15, "p95_ms": 47.47, "tps": 111, "budget_ms": 179}
+  ],
+  "seeds": [
+    {"phase": "rbac", "seconds": 0.1, "size_mb": 1.5},
+    {"phase": "sharing", "seconds": 1.15, "size_mb": 7.8},
+    {"phase": "parents_proj", "seconds": 0.08, "size_mb": 8.1},
+    {"phase": "parents", "seconds": 0.54, "size_mb": 10.6},
+    {"phase": "nesting", "seconds": 0.02, "size_mb": 10.6},
+    {"phase": "rowcheck", "seconds": 0.03, "size_mb": 10.6}
+  ],
+  "checksums": {"rbac": "8d25a1e0", "sharing": "577076ec", "parents_proj": "ca5b4e06", "parents": "ca5b4e06", "rowcheck": "ca5b4e06"},
+  "report": "bench/baselines/pg18-docker-e-small-default-p9.md"
+}

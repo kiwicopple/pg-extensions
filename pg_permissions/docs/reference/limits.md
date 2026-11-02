@@ -88,9 +88,9 @@ The limits are fixed. You cannot change them. Each limit is well above the maxim
 | Text of one policy or template | 64 KiB | Error `cedar:limit_exceeded` with `limit='policy_bytes'`. |
 | Expression nodes in one policy | 4,096 | Error `cedar:limit_exceeded` with `limit='policy_nodes'`. |
 | Nesting depth of one expression | 64 | Error `cedar:limit_exceeded` with `limit='policy_depth'`. The parser checks it too. |
-| Nesting of sets and records in entity data and in the context | 32 | Error `cedar:limit_exceeded`. The context error has `limit='value_depth'`. The entity error has the `index` of the entity. |
-| Entities in one `cedar_put_entities` call | 10,000 | Error `cedar:limit_exceeded`, with the `index` `0`. |
-| Entities in the `entities` argument of one `cedar_is_authorized` call | 1,000 | Error `cedar:limit_exceeded`, with the `index` `0`. |
+| Nesting of sets and records in entity data and in the context | 32 | Error `cedar:limit_exceeded` with `limit='value_depth'`. The entity error also has the `index` of the entity. |
+| Entities in one `cedar_put_entities` call | 10,000 | Error `cedar:limit_exceeded` with `limit='put_entities'`. |
+| Entities in the `entities` argument of one `cedar_is_authorized` call | 1,000 | Error `cedar:limit_exceeded` with `limit='request_entities'`. |
 | Depth of the entity hierarchy | None. A cycle is an error. | Not applicable. |
 | Number of policies, templates and links | None | Not applicable. |
 | Results of `cedar_list_resources_current` | None | Not applicable. |
@@ -147,7 +147,7 @@ select permissions.cedar_put_entities(
     from generate_series(1, 10001) g
   )
 );
--- ERROR:  invalid entity at index 0 of entities: too many entities: 10001 (the limit is 10000)
--- DETAIL:  cedar:limit_exceeded index=0
--- HINT:  An argument holds at most 10000 entities, and sets and records in attributes and tags nest at most 32 levels.
+-- ERROR:  too many entities in entities: 10001 (the limit is 10000)
+-- DETAIL:  cedar:limit_exceeded limit='put_entities'
+-- HINT:  An argument holds at most 10000 entities: put them in batches.
 ```

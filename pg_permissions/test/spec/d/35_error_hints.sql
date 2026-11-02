@@ -244,6 +244,8 @@ insert into sites (site, stmt, st, detail, msg, hint) values
  '22023', 'cedar:invalid_uid value=''alice''', '^invalid entity uid for principal: alice: it is not Type::"id"$', 'principal => ''User::"alice"'''),
 ('cedar entity json', $$ select permissions.cedar_put_entities(entities => '[{"uid": {"type": "User", "id": "a"}, "attrs": {"n": 1.5}}]') $$,
  '22023', 'cedar:invalid_entity index=0', '^invalid entity at index 0 of entities: User::"a": attrs\.n: 1\.5 is not a Long', '"__entity": \{"type": "User", "id": "alice"\}'),
+('cedar entity count', $$ select permissions.cedar_put_entities(entities => (select jsonb_agg(jsonb_build_object('uid', jsonb_build_object('type', 'U', 'id', g::text))) from generate_series(1, 10001) g)) $$,
+ '54000', 'cedar:limit_exceeded limit=''put_entities''', '^too many entities in entities: 10001 \(the limit is 10000\)$', '^An argument holds at most 10000 entities: put them in batches\.$'),
 ('cedar policy json', $$ select permissions.cedar_put_policy(policy_id => 'p1', policy_json => '{"effect": "allow", "principal": {"op": "All"}, "action": {"op": "All"}, "resource": {"op": "All"}, "conditions": []}') $$,
  '22023', 'cedar:invalid_policy path=''$.effect''', '^invalid policy ''p1'' at \$\.effect: effect is "permit" or "forbid", got "allow"$', 'cedar translate-policy'),
 ('cedar context', $$ select permissions.cedar_is_authorized(principal => 'User::"a"', action => 'Action::"view"', resource => 'Doc::"d1"', context => '[1]') $$,
