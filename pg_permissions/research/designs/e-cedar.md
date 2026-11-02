@@ -1,6 +1,6 @@
 # Design E: the Cedar model (`cedar_*`) in PL/pgSQL
 
-> Status: phase 0 of [`plan-cedar.md`](../plan-cedar.md), approved with its deviations (static limits, the `ast` column, errors as SQL null, the verbatim principal type, `resource_attrs` replacing attributes). Phases 2, 3, 4a, 4b, 4c and 5 are implemented in `pg_permissions--0.1.0.sql`: the core evaluator, the text parser, the extension types, templates, and the policy index and RLS helpers. Section 12 has the phase 2 measurements and decisions, section 13 the decisions of phases 3 and 4c, section 14 those of the extension types, and section 15 those of phase 5. The whole corpus passes. The oracle is vendored in [`test/cedar/`](../../test/cedar/README.md).
+> Status: phase 0 of [`plan-cedar.md`](../plan-cedar.md), approved with its deviations (static limits, the `ast` column, errors as SQL null, the verbatim principal type, `resource_attrs` replacing attributes). Phases 2, 3, 4a, 4b, 4c, 5 and 6 are implemented in `pg_permissions--0.1.0.sql`: the core evaluator, the text parser, the extension types, templates, the policy index and RLS helpers, and the integration (`delete_subject`, grants, the upgrade path). Section 12 has the phase 2 measurements and decisions, section 13 the decisions of phases 3 and 4c, section 14 those of the extension types, section 15 those of phase 5, and section 16 those of phase 6. The whole corpus passes. The oracle is vendored in [`test/cedar/`](../../test/cedar/README.md).
 
 The sources for this page are:
 
@@ -754,7 +754,7 @@ For each row the helper parses the resource uid inline (the common case without 
 
 Part 2 is capped at 8 KiB. jsonb parses at about 5 ns a byte, so 8 KiB costs about 40 µs, close to a check from scratch. Above the cap part 2 is dropped (flag `X`) and the rows that need it are checked from scratch by `_cedar_current_check`, which runs the walks, `_cedar_candidates` with the resource's keys, and the evaluation. `58_cedar_rls.sql` covers both paths and compares every answer with `cedar_is_authorized` under the fail-closed rule.
 
-`resource_attrs` replaces the resource's stored attrs. Its tags and parents still come from storage. A record whose values are all Strings, Bools, Longs or entity references is already in the internal form, and `_cedar_attrs_plain` checks that in about 6 µs instead of converting it (`_cedar_value_in`, 14 µs for one entity reference). A value Cedar cannot hold denies the row. Bad action or resource text raises `cedar:invalid_uid`, like `fga_check_current` raises on an unknown type or relation.
+`resource_attrs` replaces the resource's stored attrs. Its tags and parents still come from storage. A record whose values are all Strings, Bools, Longs or entity references is already in the internal form, and `_cedar_attrs_plain` checks that in about 6 µs instead of converting it (`_cedar_value_in`, 14 µs for one entity reference). A value Cedar cannot hold denies the row. Bad action or resource text raises `cedar:invalid_uid`, like `fga_check_current` raises on an unknown type or relation (phase 6 narrowed this for resource ids, section 16.2).
 
 **Evidence that the work runs once.** No plan node shows it, because the helper is a plain filter. The call counts show it. This is one statement over 1,000 rows, with 5 shares:
 
@@ -821,3 +821,58 @@ Every workload is within its budget except `write_nest_team` (p95 1.5 to 1.8 ms 
 - **The docs site** accepts bench designs `a` to `d` only and skips E's JSON with a warning (`site/src/lib/bench.ts`).
 - **JIT.** Only `cedar_list_resources_current` has `set jit = off`. Check the other helpers on a server with JIT, and the FGA list helpers too.
 - **Per-row cost.** A policy on row attributes costs about 37 µs a row on the laptop, and the benchmark's worst case about 80 µs on Docker. A further step would be a cheaper walk of the resource's ancestors and no jsonb parse for small statement parts; compiling Cedar to SQL is still out of v1.
+
+## 16. Phase 6: integration and release
+
+### 16.1 `delete_subject`
+
+`delete_subject(subject_type, subject_id)` also forgets the Cedar entity `<subject_type>::"<subject_id>"` (the principal type is the subject type verbatim, section 7.1). It deletes, and counts in its result with the RBAC assignments and FGA tuples:
+
+- the template links whose `?principal` or `?resource` slot names the entity (their scope rows go with them), so an id that is reused later gets none of their access;
+- the entity's parent edges (its memberships) and the edges that name it as a parent (the memberships in it), so nothing stays `in` a deleted group. `cedar_delete_entities` keeps the second kind, as Cedar does: a parent need not be stored. `delete_subject` means "forget everywhere", as it does for FGA tuples that name the subject as the object;
+- the entity row.
+
+Static policies and templates stay: they are the application's code. A static `principal == User::"x"` therefore still applies to a reused id, and references to the entity in other entities' attrs and tags stay too. Spec `59_cedar_delete_subject.sql` covers each case, ids with `"` and `\`, and a current-subject check in the same transaction (the `cedar_changed` triggers end the cached filter). In the upgrade script the function sits in a synced `cleanup` section with `create or replace`, which keeps 0.0.1's privileges.
+
+### 16.2 Ids are data
+
+Subject ids and stored entity ids were already handled raw: the helpers pass `(type, id)` pairs and build keys with `_cedar_key`, never uid text, so `"`, `\` and control characters in them work (spec `58_cedar_rls_ids.sql`). Two gaps were in `cedar_is_authorized_current`:
+
+1. **A row id concatenated without escaping.** `'Document::"' || id || '"'` with an id that holds `"` or `\` is not a Cedar string, and the helper raised `cedar:invalid_uid` on that row: one bad row made the table unreadable for everyone. Now resource text of the shape `Type::"..."` that does not parse denies the row; any other text, and a bad action, still raise as the caller's typo. This follows `fga_check_current`, which raises on a malformed object and never on an id. An unescaped id can still be read as a different id when its backslashes form a valid escape (`a\nb` becomes a newline): the policy must escape such ids, `'Doc::"' || replace(replace(id, '\', '\\'), '"', '\"') || '"'`, or use uuid or integer ids. A public escaping helper is a phase 8 decision.
+2. **The separators of the statement filter.** Part 1 of the filter (section 15.2) delimits entries with chr(30) and ends at chr(28). A resource id that spelled `x"<chr(30)>E:Doc::"y` matched two adjacent allowed entries and was allowed; a policy uid with chr(28) cut the filter. Now a resource or ancestor key with chr(30) is decided from scratch (`_cedar_current_check`), and a filter whose policies hold chr(28) or chr(30) in a resource uid sends every row there (flag `X`, entry `a:*`). The common path gains one `strpos` per row: 4.2 µs per row before and after in the phase 5 measurement.
+
+### 16.3 Grants, specs and the upgrade
+
+`02_security.sql` pins PUBLIC's execute grants to the eleven current-subject functions (`_unfolded_null` included) and checks that every `cedar_*` function is security definer with `search_path=''`, that clients can execute no `cedar_*` or `_cedar_*` function but the two helpers, and that they have no privilege on the five `cedar_*` tables. `04_api_naming` and `35_error_hints` already covered every Cedar function and raise site.
+
+It also documents the cache-forgery behaviour for the phase 9 review: a client that can run `set_config` computes the key (`pg_current_snapshot()`, the subject settings, `cedar_generation`, the action) and writes `permissions.cedar_filter_<md5(action)>` = key `chr(29)` `chr(30)` `A:*` `chr(30)` `chr(28)`; `cedar_is_authorized_current` then returns true for a resource no policy allows. An entry with a stale key is ignored. The same client can as well set `permissions.subject_id` and act as another subject, the argument of section 15.2.
+
+`test/run.sh --upgrade-from 0.0.1` runs the whole suite on 0.0.1 plus the upgrade script: 259 files and 169,777 assertions pass, as on a fresh install. Every run of the extension's suite starts with `tools/sync-upgrade.sh --check`. `03_tle_install.sql` updates a pg_tle install of 0.0.1 as a non-superuser with `pgtle_admin` and checks `pgtle.set_default_version`.
+
+### 16.4 JIT
+
+Measured on Postgres 18.6 in Docker (4 CPUs, `jit = on`, `jit_above_cost = 100000`), the large scale of the benchmark (1 million documents, 10,000 users), seeded by `bench/run.sh --scale large` for design D and then design E. Each figure is the mean of 30 calls with different users (5 for the page), best of two rounds, with the session's `jit` on and off. `auto_explain` with nested statements showed no JIT in any of these helpers: the most expensive inner plan cost about 10,000.
+
+| ms per call | `jit` on | `jit` off |
+| --- | --- | --- |
+| `rbac_has_permission` | 0.019 | 0.018 |
+| `rbac_has_role` | 0.017 | 0.017 |
+| `rbac_scopes_with_permission` | 0.020 | 0.019 |
+| `fga_check_current` (viewer, nested team) | 0.237 | 0.238 |
+| `fga_check_current` (conditioned) | 0.414 | 0.355 |
+| `fga_list_object_ids_current` (viewer) | 0.289 | 0.281 |
+| `fga_list_objects_current` (viewer) | 0.320 | 0.279 |
+| `fga_list_object_ids_current` (conditioned) | 0.386 | 0.383 |
+| `cedar_is_authorized_current` (`nest_check`) | 0.275 | 0.237 |
+| `cedar_is_authorized_current` (`rbac_check`) | 0.136 | 0.114 |
+| `cedar_is_authorized` | 0.157 | 0.169 |
+| `row_select_page` (the per-row policy, 50 rows) | 196.5 | 180.9 |
+| `cedar_list_resources_current` (`share_list_objects`) | 0.52 | 0.47 |
+| the same without its `set jit = off` | 12.27 | 0.51 |
+
+Only `cedar_list_resources_current` needs `set jit = off`, which it has; the last row confirms the phase 5 finding on this data. No other function gets the setting. The FGA list helpers were measured at the default shape only; a wider shape could raise their plan costs.
+
+### 16.5 For phases 8 and 9
+
+- **Phase 9:** the cache forgery above; the separator handling of 16.2; the unescaped-backslash ambiguity.
+- **Phase 8:** document the resource-id rule of 16.2 and the escaping expression, or add a helper; the `delete_subject` semantics (the reference and `docs/integrations/cleanup.md` have a minimal update); `site/scripts/sync.mjs` still calls Cedar a future direction.
