@@ -66,7 +66,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 EXT_DIR=$(dirname "$HERE")
 . "$EXT_DIR/test/lib/cluster.sh"
 
-IMPL="pg_permissions--0.0.1.sql"
+IMPL="pg_permissions--0.1.0.sql"
 SCALE=small
 SHAPE=default
 DURATION=10

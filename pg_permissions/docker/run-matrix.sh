@@ -13,7 +13,7 @@
 #   --versions 16,17,18   which servers, in this order (default all three)
 #   --designs ext,a,b,c   which implementations, in this order (default ext);
 #                         `ext` (or `d`) is the extension file
-#                         pg_permissions--0.0.1.sql, `a`, `b` and `c` are the
+#                         pg_permissions--0.1.0.sql, `a`, `b` and `c` are the
 #                         prototypes in prototypes/ (measured history)
 #   --keep-running        leave the last server running (default: compose down)
 #   -- ARGS               passed to test/run.sh or bench/run.sh
@@ -64,7 +64,7 @@ impl_for() {
         a) echo prototypes/a-tuple-core.sql ;;
         b) echo prototypes/b-policy-first.sql ;;
         c) echo prototypes/c-compiled-model.sql ;;
-        d|ext) echo pg_permissions--0.0.1.sql ;;
+        d|ext) echo pg_permissions--0.1.0.sql ;;
         *) echo "unknown design: $1 (expected a, b, c, d or ext)" >&2; return 1 ;;
     esac
 }

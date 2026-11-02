@@ -6,7 +6,7 @@ EXT_DIR=$(cd "$DOCS_DIR/.." && pwd)
 . "$EXT_DIR/test/lib/cluster.sh"
 EXTERNAL=0
 start_cluster
-psql_admin -f "$EXT_DIR/pg_permissions--0.0.1.sql" >/dev/null
+psql_admin -f "$EXT_DIR/pg_permissions--0.1.0.sql" >/dev/null
 node --input-type=module - "$EXT_DIR/docs/get-started/quickstart.md" "$PGBIN/psql" <<'JS'
 import fs from 'node:fs';
 import assert from 'node:assert/strict';

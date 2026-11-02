@@ -15,7 +15,7 @@ The tests need only the Postgres binaries: `initdb`, `pg_ctl` and `psql`. The be
 Run these commands from the `pg_permissions/` directory:
 
 ```bash
-./test/run.sh                                     # the extension: pg_permissions--0.0.1.sql
+./test/run.sh                                     # the extension: pg_permissions--0.1.0.sql
 ./test/run.sh --impl prototypes/a-tuple-core.sql  # a prototype
 ./test/run.sh rbac                                # only spec files whose name contains "rbac"
 ./test/run.sh --design b --impl my.sql            # force the design (a|b|c|d|none)
@@ -36,7 +36,7 @@ By default, the runner starts a throwaway Postgres in a temporary directory. The
 
 To use a server that already runs, pass `--external` and set `PGHOST`, `PGPORT` and `PGUSER`. The user must be able to create databases and roles.
 
-To test on Postgres 16, 17 and 18 with pg_tle, use Docker. The command `docker/run-matrix.sh test` runs the extension on each version, one server at a time. Add `--designs ext,a,b,c` to run the prototypes too. See [`../docker/README.md`](../docker/README.md). This is the only way to run the `pgtle.install_extension` branch of `03_tle_install.sql`. Without pg_tle, the test passes with a `SKIP` assertion.
+To test on Postgres 16, 17 and 18 with pg_tle, use Docker. The command `docker/run-matrix.sh test` runs the extension on each version, one server at a time. Add `--designs ext,a,b,c` to run the prototypes too. See [`../docker/README.md`](../docker/README.md). This is the only way to run the `pgtle.install_extension` branch of `03_tle_install.sql` and the `pgtle.install_update_path` branch of `d/05_upgrade.sql`. Without pg_tle, these tests pass with `SKIP` assertions.
 
 The runner creates the client roles of Supabase: `anon`, `authenticated` and `service_role`. RLS tests then run like Supabase clients.
 
@@ -65,7 +65,7 @@ The scenarios and the work plan are in [`../research/plan.md`](../research/plan.
 
 | Prefix | Area | Where |
 | --- | --- | --- |
-| `0x_` | Identity, security, install, names of the API (`d/04`) | `spec/` (shared) and `spec/d/` |
+| `0x_` | Identity, security, install, names of the API (`d/04`), upgrade from 0.0.1 (`d/05`) | `spec/` (shared) and `spec/d/` |
 | `1x_` | `rbac` preset | `spec/` (shared) and `spec/d/` |
 | `2x_` | RLS | `spec/` (shared) and `spec/d/` |
 | `3x_`, `4x_`, `5x_` | Zanzibar-level API, graduation, v0.0.2 scenarios (see `research/plan.md`) | `spec/<design>/` (per design) |

@@ -82,7 +82,7 @@ select permissions.rbac_has_permission('tle.write')::text as smoke_not \gset
     set session authorization tle_owner;
     -- Backticks interpolate :name and :'name' (shell-quoted), not :"name".
     \set impl_body `cat :'impl_path'`
-    select pgtle.install_extension('pg_permissions', '0.0.1', 'pg_permissions test install', :'impl_body');
+    select pgtle.install_extension('pg_permissions', '0.1.0', 'pg_permissions test install', :'impl_body');
     create extension pg_permissions;
     select count(*)::text as tle_installed from pg_extension where extname = 'pg_permissions' \gset
     -- functions in schema permissions that belong to the extension (0 if the body was empty)

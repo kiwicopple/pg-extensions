@@ -1,5 +1,5 @@
 -- Roles and grants for the integration tests, as in Supabase. Runs after
--- pg_permissions--0.0.1.sql (see docker-compose.yml).
+-- pg_permissions--0.1.0.sql (see docker-compose.yml).
 
 create role anon nologin;
 create role authenticated nologin;

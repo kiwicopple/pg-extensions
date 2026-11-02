@@ -57,7 +57,7 @@ Each run happens in a throwaway client container (`docker compose run`). The con
 docker compose -f docker/compose.yaml up -d --wait pg18
 docker compose -f docker/compose.yaml run --rm --no-deps -T --entrypoint bash -u postgres \
     -e PGHOST=/var/run/postgresql -e PGUSER=postgres -e BENCH_ENVIRONMENT=docker \
-    pg18 /pg_permissions/bench/run.sh --external --impl pg_permissions--0.0.1.sql --scale medium
+    pg18 /pg_permissions/bench/run.sh --external --impl pg_permissions--0.1.0.sql --scale medium
 ```
 
 You can also run the harness from the host: `PGHOST=localhost PGPORT=54318 PGUSER=postgres ./test/run.sh --external --impl ...`. Then the client is your local Postgres version, and each query crosses the network layer of Docker Desktop. This adds latency. Use it for tests, but not for benchmark numbers.

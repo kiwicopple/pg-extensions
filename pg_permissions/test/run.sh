@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run the pg_permissions test suite.
 #
-#   test/run.sh                                       # against the extension (pg_permissions--0.0.1.sql)
+#   test/run.sh                                       # against the extension (pg_permissions--0.1.0.sql)
 #   test/run.sh --impl prototypes/a-tuple-core.sql    # against a prototype
 #   test/run.sh rbac                                  # only spec files whose name contains "rbac"
 #   test/run.sh --design b --impl X.sql               # force the design (a|b|c|d|none)
@@ -26,7 +26,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 EXT_DIR=$(dirname "$HERE")
 . "$HERE/lib/cluster.sh"
 
-IMPL="pg_permissions--0.0.1.sql"
+IMPL="pg_permissions--0.1.0.sql"
 VERBOSE=0
 EXTERNAL=0
 DESIGN=

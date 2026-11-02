@@ -26,7 +26,7 @@ Run the SQL file once in a fresh database, from this directory:
 
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
-  -f pg_permissions--0.0.1.sql
+  -f pg_permissions--0.1.0.sql
 ```
 
 Then follow [Protect a table](docs/get-started/quickstart.md). It creates a role, grants Alice access to one organization, and verifies that Bob sees no rows. The walkthrough includes request identity and tests queries as an application database role.

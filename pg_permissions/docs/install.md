@@ -19,7 +19,7 @@ Use one installation method per database. Each creates the `permissions` schema 
 - No other extension for a direct install. The database.dev method needs the extension pg_tle.
 - No C code and no superuser rights. The extension is pure SQL.
 
-The extension is one file, [`pg_permissions--0.0.1.sql`](../pg_permissions--0.0.1.sql), and a control file, [`pg_permissions.control`](../pg_permissions.control). The control file is for the pg_tle path and for tools that read it. A plain install uses only the SQL file.
+The extension is one file, [`pg_permissions--0.1.0.sql`](../pg_permissions--0.1.0.sql), and a control file, [`pg_permissions.control`](../pg_permissions.control). The control file is for the pg_tle path and for tools that read it. A plain install uses only the SQL file.
 
 ## Install directly
 
@@ -30,12 +30,12 @@ Use these methods when you do not use database.dev. Each method installs the sam
 Run the file once in each database:
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f pg_permissions--0.0.1.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f pg_permissions--0.1.0.sql
 ```
 
 The file creates the schema `permissions` with its tables and functions. The role that you connect as owns all of them.
 
-Do not run the file twice in one database. A second run fails with `already exists` errors. There is no upgrade path yet.
+Do not run the file twice in one database. A second run fails with `already exists` errors. To move a database from 0.0.1 to 0.1.0, see [Upgrade from 0.0.1](#upgrade-from-001).
 
 To install again, drop the schema first with `drop schema permissions cascade;`. Do this only in a database that has no data that you need. You will lose all roles, models and tuples.
 
@@ -53,7 +53,7 @@ psql -U postgres \
   -c "create database app owner app_owner"
 psql -U postgres -d app -v ON_ERROR_STOP=1 \
   -c "set session authorization app_owner" \
-  -f pg_permissions--0.0.1.sql
+  -f pg_permissions--0.1.0.sql
 ```
 
 The second command is a fragment. It needs the role and the database from the first command, and your own connection options. The test suite checks this install on each supported Postgres version. A non-superuser that owns the database installs the file. Each object belongs to that role. No function is written in C.
@@ -70,10 +70,10 @@ grant pgtle_admin to app_owner;   -- the role that installs
 Then, as that role in psql, install the file as a pg_tle extension and create the extension:
 
 ```sql
-\set body `cat pg_permissions--0.0.1.sql`
+\set body `cat pg_permissions--0.1.0.sql`
 select pgtle.install_extension(
   'pg_permissions',
-  '0.0.1',
+  '0.1.0',
   'pg_permissions',
   :'body'
 );
@@ -92,7 +92,7 @@ docker compose build
 docker compose up -d --wait pg17
 cd ..
 psql -h localhost -p 54317 -U postgres -v ON_ERROR_STOP=1 \
-  -f pg_permissions--0.0.1.sql
+  -f pg_permissions--0.1.0.sql
 ```
 
 The containers use `trust` authentication on 127.0.0.1. Use them for local tests only.
@@ -118,6 +118,32 @@ To list the RBAC functions, use this psql command:
 
 If the first query fails with `schema "permissions" does not exist`, the file did not run in this database. Run it again with `-v ON_ERROR_STOP=1` and read the first error.
 
+## Upgrade from 0.0.1
+
+A database that has 0.0.1 upgrades with the script [`pg_permissions--0.0.1--0.1.0.sql`](../pg_permissions--0.0.1--0.1.0.sql). The script keeps your roles, models and tuples. Run it once, as the role that owns the schema `permissions`.
+
+For a plain install, run the script with `psql` in one transaction:
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 \
+  -f pg_permissions--0.0.1--0.1.0.sql
+```
+
+For a pg_tle install, register the script as an update path, then update the extension:
+
+```sql
+\set body `cat pg_permissions--0.0.1--0.1.0.sql`
+select pgtle.install_update_path(
+  'pg_permissions',
+  '0.0.1',
+  '0.1.0',
+  :'body'
+);
+alter extension pg_permissions update to '0.1.0';
+```
+
+The test suite installs 0.0.1, runs the script, and compares every function, table and index with a fresh 0.1.0 install. It checks the pg_tle update path on Postgres 16, 17 and 18.
+
 ## Install with database.dev
 
 [database.dev](https://database.dev/kiwicopple/pg_permissions) is a package registry for Postgres extensions. The package name is `kiwicopple@pg_permissions`. The package is not published yet. These steps are for the time after publication. Until then, [install directly](#install-directly).
@@ -140,7 +166,7 @@ Then install the package:
 1. Make the migration file. The command writes a file to the folder `migrations`:
 
    ```bash
-   dbdev add -o "./migrations/" -v 0.0.1 \
+   dbdev add -o "./migrations/" -v 0.1.0 \
      package -n kiwicopple@pg_permissions
    ```
 
@@ -154,7 +180,7 @@ Then install the package:
 The file calls `pgtle.install_extension` with the SQL of the package. It then runs this statement:
 
 ```sql
-create extension "kiwicopple@pg_permissions" version '0.0.1';
+create extension "kiwicopple@pg_permissions" version '0.1.0';
 ```
 
 Do not add the option `-s` to `dbdev add`. Do not write `with schema` in `create extension`. The extension file creates the schema `permissions` and puts each object in it, so a `schema` clause does not change where the objects are. You call each function as `permissions.name(...)`.
