@@ -904,8 +904,9 @@ end;
 $$;
 
 -- A uid argument in Cedar text, Type::"id" (Cedar's string escapes: \n \r \t
--- \\ \0 \' \" \xHH \u{H..}). Raises cedar:invalid_uid.
-create function permissions._cedar_uid(p_text text, p_arg text, out type text, out id text)
+-- \\ \0 \' \" \xHH \u{H..}). Raises cedar:invalid_uid, or with p_quiet
+-- returns nulls.
+create function permissions._cedar_uid(p_text text, p_arg text, p_quiet boolean default false, out type text, out id text)
 language plpgsql immutable
 as $$
 declare
@@ -971,6 +972,9 @@ begin
             id := r;
             return;
         end if;
+    end if;
+    if p_quiet then
+        return;
     end if;
     perform permissions._cedar_error('invalid_uid', format('invalid entity uid for %s: %s: %s', p_arg, p_text, bad),
         hint => format('Write a uid as Cedar text, a type and a quoted id: %s => ''User::"alice"'' (a namespaced type: ''App::User::"alice"'').', p_arg),
@@ -3957,6 +3961,11 @@ begin
                'free', x.effect = 'permit' and x.ast is null and not (x.resource_op = 'is' and x.resource_uid is not null))), '[]')
     into cs
     from permissions._cedar_principal_candidates(k.pk, k.ak, p_pt) x;
+    if exists (select 1 from jsonb_array_elements(cs) c where strpos(c ->> 'v', chr(28)) > 0 or strpos(c ->> 'v', chr(30)) > 0) then
+        -- a resource scope holds a separator of this layout: every row that
+        -- a permit can match is checked from scratch (flag X, entry a:*)
+        return 'X' || chr(30) || 'a:*' || chr(30) || chr(28);
+    end if;
     f := case when exists (select 1 from jsonb_array_elements(cs) c where (c ->> 'f')::boolean) then 'F' else '' end || chr(30)
          || coalesce((select string_agg(case when (c ->> 'free')::boolean then upper(c ->> 'k') else c ->> 'k' end
                                         || ':' || (c ->> 'v') || chr(30), '')
@@ -4092,7 +4101,11 @@ $$;
 -- resource_attrs replaces the stored entity's attrs; its parents and tags
 -- still come from storage, and a resource that is not stored has no parents
 -- and no tags. Attributes Cedar can't hold (a fraction, a null) deny, as
--- does a null action or resource. plan_time_guard is ignored: its volatile
+-- does a null action or resource, and a resource Type::"..." whose id is
+-- not a Cedar string (a row's id with " or \ concatenated unescaped): data
+-- never raises. Other resource text, and an action that is not a uid, are
+-- the caller's typos and raise cedar:invalid_uid. Ids may hold any
+-- character. plan_time_guard is ignored: its volatile
 -- default keeps a constant call out of plan-time evaluation (see
 -- _unfolded_null); don't pass it.
 --
@@ -4125,6 +4138,7 @@ declare
     anc jsonb;
     free boolean;
     cond boolean;
+    sep boolean;
     attrs jsonb;
 begin
     if action is null or resource is null then
@@ -4155,7 +4169,16 @@ begin
         rt := left(resource, i - 1);
         ri := substr(resource, i + 3, char_length(resource) - i - 3);
     else
-        select * into x from permissions._cedar_uid(resource, 'resource');
+        select * into x from permissions._cedar_uid(resource, 'resource', true);
+        if x.type is null then
+            -- Type::"..." whose id is not a Cedar string, as when a row's id
+            -- with " or \ is concatenated unescaped: data, so the row is
+            -- denied. Any other text is the caller's typo and raises.
+            if resource !~ '^\s*[_a-zA-Z][_a-zA-Z0-9]*(::[_a-zA-Z][_a-zA-Z0-9]*)*::".*"\s*$' then
+                perform permissions._cedar_uid(resource, 'resource');
+            end if;
+            return false;
+        end if;
         rt := x.type;
         ri := x.id;
     end if;
@@ -4168,12 +4191,21 @@ begin
             or strpos(f, chr(30) || 'T:' || rt || chr(30)) > 0;
     cond := strpos(f, chr(30) || 'a:*' || chr(30)) > 0 or strpos(f, chr(30) || 'e:' || rk || chr(30)) > 0
             or strpos(f, chr(30) || 't:' || rt || chr(30)) > 0;
+    sep := strpos(rk, chr(30)) > 0;
     if (not free and strpos(f, chr(30) || 'I:') > 0) or (not cond and strpos(f, chr(30) || 'i:') > 0) then
         anc := permissions._cedar_ancestors(rt, ri, null);
         select free or coalesce(bool_or(strpos(f, chr(30) || 'I:' || k.k || chr(30)) > 0), false),
-               cond or coalesce(bool_or(strpos(f, chr(30) || 'i:' || k.k || chr(30)) > 0), false)
-        into free, cond
+               cond or coalesce(bool_or(strpos(f, chr(30) || 'i:' || k.k || chr(30)) > 0), false),
+               sep or coalesce(bool_or(strpos(k.k, chr(30)) > 0), false)
+        into free, cond, sep
         from jsonb_array_elements_text(anc || to_jsonb(rk)) k(k);
+    end if;
+    if sep then
+        -- the resource's key or an ancestor's holds chr(30), the separator
+        -- of the entries, so the matches above can be false: from scratch
+        f := 'X';
+        free := false;
+        cond := true;
     end if;
     if not free and not cond then
         return false;
