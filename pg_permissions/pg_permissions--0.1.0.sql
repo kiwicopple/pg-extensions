@@ -11,8 +11,9 @@
  *           error codes, tested against OpenFGA's own test suite (test/fga/)
  *
  * They share only the toolkit: subject identity, the plan-time guard
- * (_unfolded_null) and the grants. An app composes them in RLS: permissive
- * policies OR, restrictive policies AND.
+ * (_unfolded_null), error hints, value helpers (IP, timestamp, duration) and
+ * the grants. An app composes them in RLS: permissive policies OR,
+ * restrictive policies AND.
  *
  * This file is the extension (design D, chosen at the end of session 4). The
  * A, B and C prototypes in prototypes/ are measured history.
@@ -113,6 +114,98 @@ as $$
         case when cardinality(p_names) > 20 then format(' and %s more', cardinality(p_names) - 20) end,
         '.')
     where cardinality(p_names) > 0
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Toolkit: value helpers (shared by FGA conditions and Cedar)
+-- ---------------------------------------------------------------------------
+
+-- Canonical text of an IP address, a timestamp and a duration. FGA's CEL
+-- conditions use them for OpenFGA's ipaddress, timestamp and duration
+-- parameters; Cedar's ipaddr, datetime and duration extensions build on them.
+-- Each returns null for input it does not accept, and the caller reports the
+-- model's own error.
+
+-- netip.ParseAddr, then Unmap (an IPv4-mapped IPv6 address is its IPv4
+-- address): the address's text, or null. IPv6 zones (fe80::1%eth0) are not
+-- accepted (inet has none).
+create function permissions._ip_canon(s text)
+returns text
+language plpgsql immutable
+as $$
+declare
+    ip inet;
+begin
+    if s ~ '^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$' then
+        return host(s::inet);
+    end if;
+    if s !~ ':' or s ~ '[/%]' or not pg_input_is_valid(s, 'inet') then
+        return null;
+    end if;
+    ip := s::inet;
+    if ip <<= '::ffff:0:0/96'::inet then
+        return host(('0.0.0.0'::inet + (ip - '::ffff:0:0'::inet)));
+    end if;
+    return host(ip);
+end;
+$$;
+
+-- RFC 3339 as Go's time.Parse(time.RFC3339) reads it (OpenFGA's timestamp
+-- parameters and cel-go's timestamp()): upper-case T and Z, seconds required,
+-- an optional fraction, Z or +hh:mm. The canonical text in UTC with
+-- microseconds (CEL keeps nanoseconds: the digits beyond are dropped), or null.
+create function permissions._ts_canon(s text)
+returns text
+language plpgsql immutable
+as $$
+declare
+    m text[];
+    t text;
+begin
+    m := regexp_match(s, '^([0-9]{4}-[0-9]{2}-[0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:[.,]([0-9]+))?(Z|[+-]([0-9]{2}):([0-9]{2}))$');
+    if m is null or m[2]::int > 23 or m[3]::int > 59 or m[4]::int > 59
+       or coalesce(m[7]::int, 0) > 23 or coalesce(m[8]::int, 0) > 59
+       or not pg_input_is_valid(m[1], 'date') or m[1] < '0001' then
+        return null;
+    end if;
+    t := m[1] || ' ' || m[2] || ':' || m[3] || ':' || m[4] || coalesce('.' || left(m[5], 6), '')
+         || case when m[6] = 'Z' then '+00:00' else m[6] end;
+    return to_char(t::timestamptz at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"');
+end;
+$$;
+
+-- Go's time.ParseDuration ("1h30m", "300ms", "-1.5h"; units ns us µs μs ms s
+-- m h): integer nanoseconds, or null (also beyond int64).
+create function permissions._duration_ns(s text)
+returns numeric
+language plpgsql immutable
+as $$
+declare
+    body text;
+    total numeric := 0;
+    m text[];
+begin
+    if s = '0' or s = '+0' or s = '-0' then
+        return 0;
+    end if;
+    if s !~ '^[+-]?(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+$' then
+        return null;
+    end if;
+    body := ltrim(s, '+-');
+    for m in select regexp_matches(body, '([0-9]*\.?[0-9]*)(ns|us|µs|μs|ms|s|m|h)', 'g') loop
+        total := total + (case when m[1] like '.%' then '0' || m[1] when m[1] like '%.' then m[1] || '0' else m[1] end)::numeric
+                 * case m[2] when 'ns' then 1 when 'ms' then 1000000 when 's' then 1000000000 when 'm' then 60000000000
+                             when 'h' then 3600000000000 else 1000 end;
+    end loop;
+    total := trunc(total);
+    if left(s, 1) = '-' then
+        total := -total;
+    end if;
+    if total not between -9223372036854775808 and 9223372036854775807 then
+        return null;
+    end if;
+    return total;
+end;
 $$;
 
 -- ============================================================================
@@ -2012,29 +2105,8 @@ $$;
 -- Values: parsing and formatting
 -- ---------------------------------------------------------------------------
 
--- RFC 3339 as Go's time.Parse(time.RFC3339) reads it (OpenFGA's timestamp
--- parameters and cel-go's timestamp()): upper-case T and Z, seconds required,
--- an optional fraction, Z or +hh:mm. The canonical text in UTC with
--- microseconds (CEL keeps nanoseconds: the digits beyond are dropped), or null.
-create function permissions._fga_cel_ts(s text)
-returns text
-language plpgsql immutable
-as $$
-declare
-    m text[];
-    t text;
-begin
-    m := regexp_match(s, '^([0-9]{4}-[0-9]{2}-[0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:[.,]([0-9]+))?(Z|[+-]([0-9]{2}):([0-9]{2}))$');
-    if m is null or m[2]::int > 23 or m[3]::int > 59 or m[4]::int > 59
-       or coalesce(m[7]::int, 0) > 23 or coalesce(m[8]::int, 0) > 59
-       or not pg_input_is_valid(m[1], 'date') or m[1] < '0001' then
-        return null;
-    end if;
-    t := m[1] || ' ' || m[2] || ':' || m[3] || ':' || m[4] || coalesce('.' || left(m[5], 6), '')
-         || case when m[6] = 'Z' then '+00:00' else m[6] end;
-    return to_char(t::timestamptz at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"');
-end;
-$$;
+-- IP addresses, timestamps and durations are parsed by the toolkit's value
+-- helpers (_ip_canon, _ts_canon, _duration_ns), which Cedar shares.
 
 -- A timestamptz as the canonical value, or null outside CEL's range (years
 -- 1 to 9999).
@@ -2044,64 +2116,6 @@ language sql immutable
 as $$
     select case when ts >= '0001-01-01 00:00:00+00' and ts < '10000-01-01 00:00:00+00'
                 then to_jsonb(to_char(ts at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')) end
-$$;
-
--- Go's time.ParseDuration ("1h30m", "300ms", "-1.5h"; units ns us µs μs ms s
--- m h): integer nanoseconds, or null (also beyond int64).
-create function permissions._fga_cel_du(s text)
-returns numeric
-language plpgsql immutable
-as $$
-declare
-    body text;
-    total numeric := 0;
-    m text[];
-begin
-    if s = '0' or s = '+0' or s = '-0' then
-        return 0;
-    end if;
-    if s !~ '^[+-]?(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+$' then
-        return null;
-    end if;
-    body := ltrim(s, '+-');
-    for m in select regexp_matches(body, '([0-9]*\.?[0-9]*)(ns|us|µs|μs|ms|s|m|h)', 'g') loop
-        total := total + (case when m[1] like '.%' then '0' || m[1] when m[1] like '%.' then m[1] || '0' else m[1] end)::numeric
-                 * case m[2] when 'ns' then 1 when 'ms' then 1000000 when 's' then 1000000000 when 'm' then 60000000000
-                             when 'h' then 3600000000000 else 1000 end;
-    end loop;
-    total := trunc(total);
-    if left(s, 1) = '-' then
-        total := -total;
-    end if;
-    if total not between -9223372036854775808 and 9223372036854775807 then
-        return null;
-    end if;
-    return total;
-end;
-$$;
-
--- netip.ParseAddr, then Unmap (an IPv4-mapped IPv6 address is its IPv4
--- address): the address's text, or null. IPv6 zones (fe80::1%eth0) are not
--- accepted (inet has none).
-create function permissions._fga_cel_ip(s text)
-returns text
-language plpgsql immutable
-as $$
-declare
-    ip inet;
-begin
-    if s ~ '^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$' then
-        return host(s::inet);
-    end if;
-    if s !~ ':' or s ~ '[/%]' or not pg_input_is_valid(s, 'inet') then
-        return null;
-    end if;
-    ip := s::inet;
-    if ip <<= '::ffff:0:0/96'::inet then
-        return host(('0.0.0.0'::inet + (ip - '::ffff:0:0'::inet)));
-    end if;
-    return host(ip);
-end;
 $$;
 
 -- Go's FormatFloat(f, 'g', -1, 64), as cel-go's string(double) prints it,
@@ -2183,7 +2197,7 @@ begin
         return row(to_jsonb(num), null::text, 0);
     elsif tn = 'duration' then
         if jt = 'string' then
-            num := permissions._fga_cel_du(v #>> '{}');
+            num := permissions._duration_ns(v #>> '{}');
             if num is not null then
                 return row(to_jsonb(num), null::text, 0);
             end if;
@@ -2192,7 +2206,7 @@ begin
         return row(null::jsonb, format('expected a duration string, but found: %s', v), 0);
     elsif tn = 'timestamp' then
         if jt = 'string' then
-            s := permissions._fga_cel_ts(v #>> '{}');
+            s := permissions._ts_canon(v #>> '{}');
             if s is not null then
                 return row(to_jsonb(s), null::text, 0);
             end if;
@@ -2201,7 +2215,7 @@ begin
         return row(null::jsonb, format('expected RFC 3339 formatted timestamp string, but found: %s', v), 0);
     elsif tn = 'ipaddress' then
         if jt = 'string' then
-            s := permissions._fga_cel_ip(v #>> '{}');
+            s := permissions._ip_canon(v #>> '{}');
             if s is not null then
                 return row(to_jsonb(s), null::text, 0);
             end if;
@@ -2520,7 +2534,7 @@ begin
         end if;
         s1 := substring(k1 from '^(.*)/(?:0|[1-9][0-9]{0,2})$');
         i := substring(k1 from '/([0-9]+)$')::int;
-        s2 := permissions._fga_cel_ip(s1);
+        s2 := permissions._ip_canon(s1);
         if s1 is null or s2 is null or s1 ~ '%' or i > (case when s1 ~ ':' then 128 else 32 end) then
             return row(null::jsonb, format('''%s'' is a malformed CIDR string', k1), c);
         end if;
