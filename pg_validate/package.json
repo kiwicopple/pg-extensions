@@ -1,0 +1,20 @@
+{
+  "name": "pg-validate-workspace",
+  "private": true,
+  "description": "One entry point for the pg_validate folder: the extension tests and the docs site (site/). Run `npm run <script>` from this directory.",
+  "scripts": {
+    "test": "./test/run.sh",
+    "test:docker": "./docker/run-matrix.sh",
+    "test:all": "npm run test && npm run test:docker",
+    "docs:install": "npm --prefix site ci",
+    "docs:sync": "npm --prefix site run sync",
+    "docs:dev": "npm --prefix site run dev",
+    "docs:build": "npm --prefix site run build",
+    "docs:preview": "npm --prefix site run preview",
+    "docs:publish": "npx vercel deploy --prod",
+    "check": "npm run docs:build"
+  },
+  "engines": {
+    "node": ">=22.23.4"
+  }
+}

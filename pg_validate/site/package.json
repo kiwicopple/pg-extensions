@@ -1,0 +1,23 @@
+{
+  "name": "pg-validate-docs",
+  "type": "module",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "sync": "node scripts/sync.mjs",
+    "predev": "node scripts/sync.mjs",
+    "dev": "astro dev",
+    "start": "astro dev",
+    "prebuild": "node scripts/sync.mjs",
+    "build": "astro build && node scripts/check-links.mjs && node scripts/check-content.mjs",
+    "preview": "astro preview",
+    "astro": "astro",
+    "check-links": "node scripts/check-links.mjs"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.42.7",
+    "astro": "^7.4.4",
+    "sharp": "^0.35.5",
+    "starlight-links-validator": "^0.27.0"
+  }
+}

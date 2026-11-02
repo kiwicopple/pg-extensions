@@ -1,0 +1,6 @@
+# pg_validate extension
+comment = 'Validators for common string formats (email, URL, UUID, IBAN, ISO 8601, ...) for CHECK constraints, and a registry of named formats.'
+default_version = '0.0.1'
+relocatable = false
+schema = validate
+superuser = false
