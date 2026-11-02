@@ -1,6 +1,6 @@
 # Design E: the Cedar model (`cedar_*`) in PL/pgSQL
 
-> Status: phase 0 of [`plan-cedar.md`](../plan-cedar.md), approved with its deviations (static limits, the `ast` column, errors as SQL null, the verbatim principal type, `resource_attrs` replacing attributes). Phases 2, 3, 4a, 4b and 4c are implemented in `pg_permissions--0.1.0.sql`: the core evaluator, the text parser, the extension types and templates. Section 12 has the phase 2 measurements and decisions, section 13 the decisions of phases 3 and 4c, and section 14 those of the extension types. The whole corpus passes. The oracle is vendored in [`test/cedar/`](../../test/cedar/README.md).
+> Status: phase 0 of [`plan-cedar.md`](../plan-cedar.md), approved with its deviations (static limits, the `ast` column, errors as SQL null, the verbatim principal type, `resource_attrs` replacing attributes). Phases 2, 3, 4a, 4b, 4c and 5 are implemented in `pg_permissions--0.1.0.sql`: the core evaluator, the text parser, the extension types, templates, and the policy index and RLS helpers. Section 12 has the phase 2 measurements and decisions, section 13 the decisions of phases 3 and 4c, section 14 those of the extension types, and section 15 those of phase 5. The whole corpus passes. The oracle is vendored in [`test/cedar/`](../../test/cedar/README.md).
 
 The sources for this page are:
 
@@ -391,6 +391,8 @@ Each statement does the principal work once:
 
 Phase 5 compares this InitPlan design with a cache in a transaction-local setting keyed by the statement, and keeps the faster one.
 
+**Phase 5 outcome:** the InitPlan design cannot work. Postgres never inlines a SQL function whose body has a subquery, so the prefilter would run once per row. The helper keeps its statement-level work in a transaction-local setting instead (section 15.2).
+
 `resource_attrs` overlay. When an RLS policy passes `resource_attrs`, those attributes replace the `attrs` of the request resource. The parents and tags of the resource still come from the stored entity, if it exists. A row can therefore be authorized without being synced. A relation to a folder goes through an entity-valued attribute, for example `resource.folder in Folder::"x"` with `resource_attrs => jsonb_build_object('folder', <entity json>)`. Rows do not need to be stored entities.
 
 ### 7.3 `cedar_list_resources_current(action, resource_type)`
@@ -404,7 +406,7 @@ This function works over stored entities only. It reuses the same prefilter, and
 2. Evaluate the remaining permit conditions for each candidate.
 3. Remove the candidates where a `forbid` is satisfied or gives an error (fail closed).
 
-Partial evaluation is not in v1, so the cost is the number of candidates times the number of policies. Phase 5 measures it.
+Partial evaluation is not in v1, so the cost is the number of candidates times the number of policies. Phase 5 measures it (section 15.3).
 
 ## 8. Measurement: one condition, interpreted
 
@@ -474,7 +476,8 @@ The size of the suite matters. A run with `--phase all` writes 59 files and 76 M
 | A record with the key `__entity` or `__extn` is rejected: in a policy `cedar:unsupported`, in entity data or the context `cedar:invalid_entity` or `cedar:invalid_context` | The escape ambiguity of the value model | `51_cedar_errors.sql`; none in the corpus |
 | A cycle that only the request overlay makes is not rejected: `in` still ends, and treats the entities of the cycle as each other's ancestors | Checking every overlay for cycles would cost every request a walk | None in the corpus |
 | Two concurrent `cedar_put_entities` calls can make a cycle that neither sees (there is no lock); `in` still ends | No global lock (section 12.1) | None |
-| The `_current` helpers fail closed when a `forbid` errors | Plan, decision 1 | In-house specs (phase 5) |
+| The `_current` helpers fail closed when a `forbid` errors | Plan, decision 1 | `58_cedar_rls.sql` |
+| `cedar_list_resources_current` lists stored entities only: a resource that a policy names but nobody stored is not listed, though `cedar_is_authorized_current` allows it | Plan, decision 3 (section 15.3) | `58_cedar_rls.sql` |
 | `cedar_link_template` with the id of an existing link replaces that link; Cedar's `link` rejects a duplicate id | Every put in this API is an upsert by id | `56_cedar_templates.sql` |
 | Two concurrent puts can give a static policy and a template the same id (the check is not locked) | Ids live in two tables; a lock on every policy put is not worth it | None |
 | No function takes a whole policy set (section 13.3) | Ids by position are unstable under upserts | None: the oracle splits the corpus sets |
@@ -691,3 +694,130 @@ A method call costs about 2 µs over an operator, and a constructor that is not 
 ### 14.5 The size of the suite
 
 The six runs write 190 files and 197 MB in about 9 seconds. The whole suite went from about 85 to about 163 seconds on Apple silicon (`test/run.sh` uses 17% of the CPU: it runs one file at a time). That is under the 3 minutes at which a faster default was to be built. The cheapest next step is to run the spec files in parallel in `test/run.sh`, each already in its own database; a sampled default with `--full` for CI is the alternative.
+
+## 15. Phase 5: the policy index and the RLS helpers
+
+Phase 5 added the scope index, `cedar_is_authorized_current` and `cedar_list_resources_current`. The measurements are throwaway, with the tag `cedar-phase5`: [`e-cedar/phase5.sh`](./e-cedar/phase5.sh) runs [`phase5.sql`](./e-cedar/phase5.sql) against the working tree and, for the "before" column, against a git revision (here `0845531`, the end of phase 4). They ran on PostgreSQL 16.4 (Postgres.app) on Apple silicon on 2026-11-02. Each figure is the best of 5 runs, in µs. The benchmarks are in section 15.4 and [`research/benchmarks/cedar.md`](../benchmarks/cedar.md). The specs are `58_cedar_rls.sql` and the updated `02`, `04`, `35` and `50`.
+
+### 15.1 The scope index
+
+`cedar_policy_scopes` has one row for each policy and each action of its action scope, with three keys:
+
+| Column | `All` | `==`, `in` | `is T` | `is T in U` |
+| --- | --- | --- | --- | --- |
+| `action_key` | `*` | each action uid of the scope | | |
+| `principal_key`, `resource_key` | `*` | the uid | `T` | `U` |
+
+A uid key always holds `::"` and a type name never does, so the three kinds of key cannot collide. `_cedar_store_policy` writes the rows of a static policy or a link; a policy's rows go with it (`on delete cascade`). `action in []` has no row, because it matches no request.
+
+A request probes the principal's own key, its ancestors' keys, its type and `*`, and the same for the action and the resource. That finds every policy whose scope can match, plus a few that cannot: a `==` on an ancestor, or an `is ... in` of another type. The exact scope predicate of phase 2 then runs on the candidates only (`_cedar_candidates`), so the semantics do not change. The oracle passes unchanged: 256 files and 169,738 assertions.
+
+There are two indexes, `(action_key, principal_key, resource_key)` and `(action_key, resource_key, principal_key)`. The probe takes one index scan for each action key and each key of the side that has fewer keys, with the other side's keys in the index condition. For a per-row check that is usually the resource side: a document and its folder, against a user, two roles and a chain of teams. Two planner details:
+
+- The probes are lateral subqueries with `offset 0`. With all three arrays in one `= any(...)` scan, the planner scanned the whole table on 1,000 policies and tested each row against the arrays. That cost 323 µs; even with `enable_seqscan` off it chose a plan that cost 280 µs.
+- `cedar_is_authorized` now has `plan_cache_mode = force_generic_plan`. Without it, PL/pgSQL kept choosing custom plans for the array arguments and planned the candidate query on every call, which cost about 100 µs.
+
+| `cedar_is_authorized` (2,000 requests, a different user and document each) | before | after |
+| --- | --- | --- |
+| 2 links | 48.4 | 61.2 |
+| 1,002 links: one for each of 50 teams and 20 folders | 242.7 | 78.9 |
+| 1,000 static policies of the same shape | 254.3 | 78.3 |
+| 1,001 policies with `principal` All: 50 actions × 20 resource types | 181.3 | 70.4 |
+
+With 1,000 policies, a request is three times faster. With 2 policies it costs about 13 µs more: the generic plan, the extra walk function and up to a dozen index probes instead of a scan of two rows. A request now costs about the same at any number of policies; only the candidates it finds cost more.
+
+### 15.2 `cedar_is_authorized_current`: the statement-level work in a setting
+
+`cedar_is_authorized_current(action text, resource text, resource_attrs jsonb default null, plan_time_guard boolean default permissions._unfolded_null()) returns boolean` is `STABLE`, `SECURITY DEFINER` and granted to PUBLIC.
+
+**No InitPlan.** Section 7.2 planned an inlinable SQL wrapper that passes `(select _cedar_prefilter_current(...))` to the per-row function, so that Postgres would run the prefilter once as an InitPlan. Postgres does not inline a SQL function whose body has a subquery (`inline_function` gives up on `hasSubLinks`). The wrapper is then an ordinary function call, and the subquery runs on every call. A probe showed it: a SQL wrapper with `(select pf(a))` called on 5 rows ran `pf` 5 times, and `EXPLAIN` showed the wrapper as a plain filter. No other way to get an InitPlan exists without asking the policy author to write the subquery.
+
+**The setting.** The doc's alternative, a transaction-local setting keyed by the statement, is what the helper does. On the first row of a statement, `_cedar_current_filter` walks the principal's and the action's ancestors, collects the candidate policies of the scope index (principal and action match, any resource), and stores the result with `set_config(..., true)` in `permissions.cedar_filter_<md5(action)>`. Each action has its own setting, so a statement that checks two actions (a select and an update policy) does not evict its own entry. The value starts with a key:
+
+- `pg_current_snapshot()`. A commit by another transaction changes the snapshot text, so a new statement in read committed recomputes. Statements that share a snapshot see the same committed data.
+- the raw values of `request.jwt.claims`, `permissions.subject_id` and `permissions.subject_type`: the settings the subject comes from.
+- `permissions.cedar_generation`: statement-level triggers on `cedar_policies`, `cedar_entities` and `cedar_entity_parents` set it to a new uuid, so the transaction's own writes end its cache at once. A rolled-back subtransaction rolls the setting back with the data.
+- the action text.
+
+**Trust.** A client that can write a setting could forge this cache. It is not a new hole: such a client can also write `request.jwt.claims` or `permissions.subject_id`, the settings `current_subject_id()` trusts, and be any subject. The cache is exactly as trusted as the subject itself (docs, "Identity"). PostgREST clients cannot set these settings at all. Phase 9 should review this argument.
+
+**Layout and the per-row decision.** The value has two parts:
+
+1. Flags, then one entry for each permit that matches the principal and the action: its resource scope in upper case when the permit has no conditions (`E:<uid>`, `I:<uid>`, `T:<type>`, `A:*`), in lower case otherwise (and for `is ... in`). The flag `F` says that a forbid matches the principal and the action.
+2. Only when a forbid or a lower-case permit exists: those policies grouped by resource scope, with the environment of the request without its resource (principal and action data and ancestors), as jsonb text.
+
+For each row the helper parses the resource uid inline (the common case without escapes) and finds the entries that match the resource with `strpos`. It walks the resource's ancestors once, and only if an `in` entry needs them. Then:
+
+- No entry matches: false. No query runs.
+- An upper-case entry matches and there is no `F`: true. No query runs; this is the common case of a share or a folder link.
+- Otherwise `_cedar_decide` parses part 2, evaluates the matching forbids first (one that holds or errs denies: fail closed), then the matching permits (one that errs is skipped).
+
+Part 2 is capped at 8 KiB. jsonb parses at about 5 ns a byte, so 8 KiB costs about 40 µs, close to a check from scratch. Above the cap part 2 is dropped (flag `X`) and the rows that need it are checked from scratch by `_cedar_current_check`, which runs the walks, `_cedar_candidates` with the resource's keys, and the evaluation. `58_cedar_rls.sql` covers both paths and compares every answer with `cedar_is_authorized` under the fail-closed rule.
+
+`resource_attrs` replaces the resource's stored attrs. Its tags and parents still come from storage. A record whose values are all Strings, Bools, Longs or entity references is already in the internal form, and `_cedar_attrs_plain` checks that in about 6 µs instead of converting it (`_cedar_value_in`, 14 µs for one entity reference). A value Cedar cannot hold denies the row. Bad action or resource text raises `cedar:invalid_uid`, like `fga_check_current` raises on an unknown type or relation.
+
+**Evidence that the work runs once.** No plan node shows it, because the helper is a plain filter. The call counts show it. This is one statement over 1,000 rows, with 5 shares:
+
+```
+Aggregate (actual rows=1 loops=1)
+  ->  Seq Scan on docs (actual rows=5 loops=1)
+        Filter: permissions.cedar_is_authorized_current('Action::"view"'::text, (('Doc::"'::text || id) || '"'::text), NULL::jsonb, permissions._unfolded_null())
+        Rows Removed by Filter: 995
+cedar_is_authorized_current 1000 calls, _cedar_current_filter 1, _cedar_keys 1, _cedar_decide 0, _cedar_current_check 0
+```
+
+`58_cedar_rls.sql` asserts the same thing: one `_cedar_current_filter` call for 200 rows, a reuse in the next statement of the same snapshot, and new answers after the subject changes or the transaction writes.
+
+| Per row, 1,000 rows | µs |
+| --- | --- |
+| 5 of 1,000 documents shared: the other rows are denied from the setting | 4.0 |
+| `resource_attrs` from the row, a condition on every row (`resource.level <= principal.level`) | 36.6 |
+| 20 folder links, each with a condition: every row walks to its folder and evaluates the link | 78.5 |
+| for comparison: `cedar_is_authorized` on the same requests | 77.1 |
+
+The last case parses about 3 KB of part 2 on every row and evaluates a condition, so it is no faster than a request from scratch. A list view over many rows should use `cedar_list_resources_current` when its policies are on stored entities.
+
+### 15.3 `cedar_list_resources_current`: the strategy
+
+`cedar_list_resources_current(action text, resource_type text) returns setof text` is `STABLE`, `SECURITY DEFINER`, `rows 100`, uncapped and granted to PUBLIC. It returns ids without the type, for `id = any(array(select ...::uuid))`, which runs it once as an InitPlan. A `type::"id"` form would only repeat the type the caller passed, so there is no second variant.
+
+1. The walks and `_cedar_principal_candidates` run once per call. Only the policies whose resource scope can hold the type are kept: `All`, every `in`, `is T`, and `==` on a uid of the type.
+2. The candidates come from the permits' scopes and are stored entities only (plan, decision 3): `==` gives the uid if it is stored; `in X` gives X and its descendants of the type, walked over `cedar_entity_parents (parent_type, parent_id)` (a child in that table is always stored, so only X needs a check); `All` and `is T` give every stored entity of the type.
+3. If no forbid matches and every permit has no conditions, the candidates are the answer, in one query.
+4. Otherwise each candidate is evaluated with `_cedar_eval_resource`, forbids first and failing closed. A candidate named by a permit without conditions is not evaluated when no forbid matches.
+
+| `cedar_list_resources_current('Action::"view"', 'Doc')`, 1,000 documents | µs per call |
+| --- | --- |
+| 5 shares, no conditions: the uids, one query | 73.9 |
+| 20 folder links with a condition: 1,000 documents walked and evaluated | 23,302 |
+| `resource is Doc` with a condition: every document evaluated | 15,336 |
+
+A condition costs about 15 to 23 µs for each candidate. The first benchmark runs found two planner traps in `_cedar_list_candidates`, both of the kind B met (section 12.1, `research/designs/b-policy-first.md`):
+
+- The check that the root X of `in X` is stored, written as `exists (...)`, became a hashed subplan that scanned every stored entity. It is a lateral primary-key probe now. The org list at medium scale went from 0.85 to 0.23 ms.
+- The branch for `All` and `is T`, written as a join, could become a hash join over every stored entity of the type, 1 million documents at large scale, even when no such permit existed. It is a lateral subquery now, run only for those permits.
+- JIT. The generic plan of the candidate query is costed for every branch, and with a million documents its cost passed `jit_above_cost` (100,000). Postgres 18 in Docker, which has JIT, compiled it on every call: 10 ms for a query that runs in 0.2 ms. Postgres.app 16.4 has no JIT, so the local measurements never showed it. The function now has `set jit = off`; the document list at large scale went from about 10 ms to 0.15 ms on Postgres 18. Phase 6 should check the other helpers on a server with JIT. The walk of `in X` follows every descendant of X, of any type, because Cedar has no schema here to prune it. For example, `resource in Org::"x"` walks every member of a role that is in the org. The benchmark seeds keep roles out of their orgs for that reason (`bench/designs/e/seed_rbac.sql`).
+
+### 15.4 Benchmarks
+
+`bench/designs/e/` is design E in the harness: `bench/run.sh --design e` with the extension file, or `docker/run-matrix.sh bench --designs e`. Its seeds write the shared data shape as Cedar entities and template links, and a design-E-only phase 8 (`rowcheck`) puts one per-row select policy on the table. The checksums equal those of designs A to D at every scale. The runs (Postgres 18.6, Docker, tag `p5`) and the comparison with D are in [`research/benchmarks/cedar.md`](../benchmarks/cedar.md). In short:
+
+| p50 / p95, ms | small | medium | large |
+| --- | --- | --- | --- |
+| `share_select_page` (list, InitPlan), D | 0.39 / 0.54 | 0.57 / 1.18 | 1.05 / 2.38 |
+| `share_select_page`, E | 0.56 / 0.91 | 0.78 / 1.05 | 1.19 / 1.84 |
+| `nest_check` (one per-row check), D | 0.37 / 0.99 | 0.38 / 0.51 | 0.38 / 0.66 |
+| `nest_check`, E | 0.34 / 0.58 | 0.36 / 0.51 | 0.40 / 0.63 |
+| `row_select_page` (per row, every row evaluated), E | 39.9 / 59.6 | 107.8 / 162.4 | 225.5 / 312.5 |
+
+Every workload is within its budget except `write_nest_team` (p95 1.5 to 1.8 ms against 1 ms at every scale): it re-parents the same entity in every transaction, and the 4 clients serialize on its row lock; with one client p95 is 0.41 ms. The budget stays. `row_select_page` has no equivalent in another engine; its budget is 3x its own p95.
+
+### 15.5 For phases 6 to 9
+
+- **Security review (phase 9).** The setting cache of section 15.2 rests on the argument that a client who can write settings can already choose the subject. Review it, and the triggers that end the cache on the transaction's own writes.
+- **Not in the plan's API:** `cedar_is_authorized_current` has a fourth argument, `plan_time_guard`, as `rbac_scopes_with_permission` has. The JS client (phase 7) should not pass it.
+- **Resource text.** A resource is Cedar text, so an id with `"` or `\` must be escaped, or the call raises `cedar:invalid_uid`. RLS policies on uuid or integer ids are safe; the docs (phase 8) should say so, and could offer an escaping helper.
+- **`delete_subject` (phase 6)** must also delete the `cedar_entities` row of the subject; its links (`cedar_policies` with a principal slot of that uid) are a decision for phase 6.
+- **The docs site** accepts bench designs `a` to `d` only and skips E's JSON with a warning (`site/src/lib/bench.ts`).
+- **JIT.** Only `cedar_list_resources_current` has `set jit = off`. Check the other helpers on a server with JIT, and the FGA list helpers too.
+- **Per-row cost.** A policy on row attributes costs about 37 µs a row on the laptop, and the benchmark's worst case about 80 µs on Docker. A further step would be a cheaper walk of the resource's ancestors and no jsonb parse for small statement parts; compiling Cedar to SQL is still out of v1.

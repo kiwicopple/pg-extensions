@@ -5930,6 +5930,28 @@ create table permissions.cedar_policies (
 );
 create index on permissions.cedar_policies (template_id) where template_id is not null;
 
+-- The scope index (e-cedar.md section 15.1): one row per policy and action
+-- of its action scope, keyed so that a request finds its candidate policies
+-- with equality probes, = any(keys), and no scan of cedar_policies:
+--   action_key     each uid of the action scope; '*' for All
+--   principal_key  ==, in and is ... in: the uid; is: the type; All: '*'
+--   resource_key   the same for the resource
+-- A request probes the principal's and the resource's own key, their
+-- ancestors' keys, their type and '*', through the index that leads with the
+-- side with fewer keys. That finds every policy whose scope can match, and
+-- a few that don't (a == on an ancestor, an is ... in of another type); the
+-- scope predicate in _cedar_candidates is exact.
+-- _cedar_store_policy keeps it; a policy's rows go with it.
+create table permissions.cedar_policy_scopes (
+    policy_id     text collate "C" not null references permissions.cedar_policies (policy_id) on delete cascade,
+    action_key    text collate "C" not null,
+    principal_key text collate "C" not null,
+    resource_key  text collate "C" not null,
+    primary key (policy_id, action_key)
+);
+create index on permissions.cedar_policy_scopes (action_key, principal_key, resource_key) include (policy_id);
+create index on permissions.cedar_policy_scopes (action_key, resource_key, principal_key) include (policy_id);
+
 create table permissions.cedar_entities (
     type  text collate "C" not null,
     id    text collate "C" not null,
@@ -8780,6 +8802,74 @@ begin
 end;
 $$;
 
+-- The keys of the request entities for the scope match, from storage: each
+-- entity's key, then its ancestors' keys (pk, ak, rk). The three walks run
+-- in one query (as in _cedar_ancestors). A null type gives a null array.
+create function permissions._cedar_keys(p_pt text, p_pi text, p_at text, p_ai text, p_rt text, p_ri text,
+                                        out pk text[], out ak text[], out rk text[])
+language plpgsql stable
+as $$
+begin
+    with recursive w(o, t, i) as (
+        select v.o, q.parent_type, q.parent_id
+        from (values (1, p_pt, p_pi), (2, p_at, p_ai), (3, p_rt, p_ri)) v(o, t, i)
+        cross join lateral (select p.parent_type, p.parent_id from permissions.cedar_entity_parents p
+                            where p.type = v.t and p.id = v.i offset 0) q
+        union
+        select w.o, q.parent_type, q.parent_id from w cross join lateral (
+            select p.parent_type, p.parent_id from permissions.cedar_entity_parents p
+            where p.type = w.t and p.id = w.i offset 0) q
+    )
+    select coalesce(array_agg(permissions._cedar_key(w.t, w.i)) filter (where w.o = 1), '{}'),
+           coalesce(array_agg(permissions._cedar_key(w.t, w.i)) filter (where w.o = 2), '{}'),
+           coalesce(array_agg(permissions._cedar_key(w.t, w.i)) filter (where w.o = 3), '{}')
+    into pk, ak, rk
+    from w;
+    pk := permissions._cedar_key(p_pt, p_pi) || pk;
+    ak := permissions._cedar_key(p_at, p_ai) || ak;
+    rk := case when p_rt is not null then permissions._cedar_key(p_rt, p_ri) || rk end;
+end;
+$$;
+
+-- The policies whose scope matches a request (e-cedar.md section 4.4, step
+-- 2): pk, ak and rk are _cedar_keys' arrays, p_pt and p_rt the principal's
+-- and the resource's type. cedar_policy_scopes gives the candidates: one
+-- index scan for each action key and each key of the side with fewer keys
+-- (usually the resource), with the other side's keys in its index
+-- condition. The predicate after it is the exact scope match. The lateral
+-- subqueries with offset 0 keep each probe an index probe: with the three
+-- arrays in one scan, the planner scanned the table on a thousand policies
+-- and tested each row against the arrays (e-cedar.md section 15.1).
+create function permissions._cedar_candidates(pk text[], ak text[], rk text[], p_pt text, p_rt text)
+returns table (policy_id text, effect text, ast jsonb)
+language sql stable
+as $$
+    select c.policy_id, c.effect, c.ast
+    from (select distinct x.policy_id
+          from unnest((ak || '*'::text) collate "C") a(k)
+          cross join unnest((pk || p_pt || '*'::text) collate "C") p(k)
+          cross join lateral (select s.policy_id from permissions.cedar_policy_scopes s
+                              where s.action_key = a.k and s.principal_key = p.k
+                                and s.resource_key = any((rk || p_rt || '*'::text) collate "C") offset 0) x
+          where cardinality(pk) <= cardinality(rk)
+          union
+          select x.policy_id
+          from unnest((ak || '*'::text) collate "C") a(k)
+          cross join unnest((rk || p_rt || '*'::text) collate "C") r(k)
+          cross join lateral (select s.policy_id from permissions.cedar_policy_scopes s
+                              where s.action_key = a.k and s.resource_key = r.k
+                                and s.principal_key = any((pk || p_pt || '*'::text) collate "C") offset 0) x
+          where cardinality(pk) > cardinality(rk)) s
+    cross join lateral (select * from permissions.cedar_policies x where x.policy_id = s.policy_id offset 0) c
+    where (c.principal_op = 'All' or (c.principal_op = '==' and c.principal_uid = pk[1])
+           or (c.principal_op = 'in' and c.principal_uid = any(pk))
+           or (c.principal_op = 'is' and c.principal_type = p_pt and (c.principal_uid is null or c.principal_uid = any(pk))))
+      and (c.action_op = 'All' or (c.action_op = '==' and c.action_uids[1] = ak[1]) or (c.action_op = 'in' and c.action_uids && ak))
+      and (c.resource_op = 'All' or (c.resource_op = '==' and c.resource_uid = rk[1])
+           or (c.resource_op = 'in' and c.resource_uid = any(rk))
+           or (c.resource_op = 'is' and c.resource_type = p_rt and (c.resource_uid is null or c.resource_uid = any(rk))))
+$$;
+
 -- The environment of one request (see the Evaluator section): the request
 -- entities, the context, their ancestors and their stored data, and the
 -- overlay (p_ov: _cedar_entities_in's output, or null). Also each request
@@ -8794,22 +8884,8 @@ declare
     ent jsonb;
 begin
     if p_ov is null then
-        -- the three walks in one query (as in _cedar_ancestors)
-        with recursive w(o, t, i) as (
-            select v.o, q.parent_type, q.parent_id
-            from (values (1, p_pt, p_pi), (2, p_at, p_ai), (3, p_rt, p_ri)) v(o, t, i)
-            cross join lateral (select p.parent_type, p.parent_id from permissions.cedar_entity_parents p
-                                where p.type = v.t and p.id = v.i offset 0) q
-            union
-            select w.o, q.parent_type, q.parent_id from w cross join lateral (
-                select p.parent_type, p.parent_id from permissions.cedar_entity_parents p
-                where p.type = w.t and p.id = w.i offset 0) q
-        )
-        select coalesce(array_agg(permissions._cedar_key(w.t, w.i)) filter (where w.o = 1), '{}'),
-               coalesce(array_agg(permissions._cedar_key(w.t, w.i)) filter (where w.o = 2), '{}'),
-               coalesce(array_agg(permissions._cedar_key(w.t, w.i)) filter (where w.o = 3), '{}')
-        into pk, ak, rk
-        from w;
+        select k.pk[2:], k.ak[2:], k.rk[2:] into pk, ak, rk
+        from permissions._cedar_keys(p_pt, p_pi, p_at, p_ai, p_rt, p_ri) k;
         select jsonb_object_agg(permissions._cedar_key(v.t, v.i),
                                 case when e.type is not null then jsonb_build_object('attrs', e.attrs, 'tags', e.tags) else 'null' end)
         into ent
@@ -8861,6 +8937,7 @@ create function permissions.cedar_is_authorized(principal text, action text, res
 returns jsonb
 language plpgsql stable security definer
 set search_path = ''
+set plan_cache_mode = force_generic_plan
 as $$
 declare
     p record;
@@ -8896,17 +8973,7 @@ begin
     pk := e.pk;
     ak := e.ak;
     rk := e.rk;
-    for pol in
-        select c.policy_id, c.effect, c.ast
-        from permissions.cedar_policies c
-        where (c.principal_op = 'All' or (c.principal_op = '==' and c.principal_uid = pk[1])
-               or (c.principal_op = 'in' and c.principal_uid = any(pk))
-               or (c.principal_op = 'is' and c.principal_type = p.type and (c.principal_uid is null or c.principal_uid = any(pk))))
-          and (c.action_op = 'All' or (c.action_op = '==' and c.action_uids[1] = ak[1]) or (c.action_op = 'in' and c.action_uids && ak))
-          and (c.resource_op = 'All' or (c.resource_op = '==' and c.resource_uid = rk[1])
-               or (c.resource_op = 'in' and c.resource_uid = any(rk))
-               or (c.resource_op = 'is' and c.resource_type = r.type and (c.resource_uid is null or c.resource_uid = any(rk))))
-    loop
+    for pol in select * from permissions._cedar_candidates(pk, ak, rk, p.type, r.type) loop
         v := case when pol.ast is null then 'true' else permissions._cedar_eval(pol.ast, env, false) end;
         if v = 'true' then
             if pol.effect = 'permit' then
@@ -8931,6 +8998,553 @@ begin
         'reasons', to_jsonb(array(select x from unnest(case when cardinality(forbids) > 0 then forbids else permits end) x
                                   order by x collate "C")),
         'errors', coalesce((select jsonb_agg(x order by x ->> 'policy_id' collate "C") from jsonb_array_elements(errs) x), '[]'));
+end;
+$$;
+
+-- ----------------------------------------------------------------------------
+-- RLS: the current subject (phase 5)
+-- ----------------------------------------------------------------------------
+-- cedar_is_authorized_current and cedar_list_resources_current decide for
+-- the current subject (e-cedar.md sections 7 and 15). The principal is
+-- current_subject_type()::"current_subject_id()": the type and the id are
+-- used as they are, never through Cedar text, so an id needs no escapes. A
+-- subject type that is not a Cedar type name can't be a principal. No
+-- context: a client could otherwise vouch for itself.
+--
+-- They differ from cedar_is_authorized in one rule (plan-cedar.md, decision
+-- 1): they fail closed. A forbid whose scope matches and whose conditions
+-- hold or err denies; a permit that errs is skipped, as in Cedar. No
+-- subject: false or nothing, so RLS denies instead of failing. An action or
+-- resource that is not Cedar text (Type::"id") still raises
+-- cedar:invalid_uid, like fga_check_current's unknown type or relation: it
+-- is a mistake in the RLS policy, not a decision.
+
+-- The policies whose principal and action scopes match, for any resource:
+-- _cedar_candidates without the resource, plus the resource scope, for the
+-- statement-level filter and the list.
+create function permissions._cedar_principal_candidates(pk text[], ak text[], p_pt text)
+returns table (policy_id text, effect text, ast jsonb, resource_op text, resource_type text, resource_uid text)
+language sql stable
+as $$
+    select c.policy_id, c.effect, c.ast, c.resource_op, c.resource_type, c.resource_uid
+    from (select distinct x.policy_id
+          from unnest((ak || '*'::text) collate "C") a(k)
+          cross join unnest((pk || p_pt || '*'::text) collate "C") p(k)
+          cross join lateral (select s.policy_id from permissions.cedar_policy_scopes s
+                              where s.action_key = a.k and s.principal_key = p.k offset 0) x) s
+    cross join lateral (select * from permissions.cedar_policies x where x.policy_id = s.policy_id offset 0) c
+    where (c.principal_op = 'All' or (c.principal_op = '==' and c.principal_uid = pk[1])
+           or (c.principal_op = 'in' and c.principal_uid = any(pk))
+           or (c.principal_op = 'is' and c.principal_type = p_pt and (c.principal_uid is null or c.principal_uid = any(pk))))
+      and (c.action_op = 'All' or (c.action_op = '==' and c.action_uids[1] = ak[1]) or (c.action_op = 'in' and c.action_uids && ak))
+$$;
+
+-- The environment of a current-subject request without its resource: the
+-- principal and the action, their ancestors (pk and ak: _cedar_keys'
+-- arrays), their stored data, and an empty context.
+create function permissions._cedar_current_env(p_pt text, p_pi text, p_at text, p_ai text, pk text[], ak text[])
+returns jsonb
+language sql stable
+as $$
+    select jsonb_build_object(
+        'principal', jsonb_build_object('__entity', jsonb_build_object('type', p_pt, 'id', p_pi)),
+        'action', jsonb_build_object('__entity', jsonb_build_object('type', p_at, 'id', p_ai)),
+        'context', '{}'::jsonb,
+        'anc', jsonb_build_object(pk[1], to_jsonb(pk[2:]), ak[1], to_jsonb(ak[2:])),
+        'ent', (select jsonb_object_agg(permissions._cedar_key(v.t, v.i),
+                                        case when e.type is not null then jsonb_build_object('attrs', e.attrs, 'tags', e.tags) else 'null' end)
+                from (values (p_pt, p_pi), (p_at, p_ai)) v(t, i)
+                left join permissions.cedar_entities e on e.type = v.t and e.id = v.i))
+$$;
+
+-- One request of cedar_is_authorized_current from scratch: the walks, the
+-- candidates of the scope index, then their conditions, forbids first.
+-- p_attrs: the resource's attrs in internal form, which replace the stored
+-- ones (null: the stored entity's).
+create function permissions._cedar_current_check(p_pt text, p_pi text, p_at text, p_ai text, p_rt text, p_ri text,
+                                                  p_attrs jsonb)
+returns boolean
+language plpgsql stable
+set plan_cache_mode = force_generic_plan
+as $$
+declare
+    k record;
+    pol record;
+    env jsonb;
+    v jsonb;
+begin
+    select * into k from permissions._cedar_keys(p_pt, p_pi, p_at, p_ai, p_rt, p_ri);
+    -- 'forbid' sorts before 'permit'
+    for pol in select c.effect, c.ast from permissions._cedar_candidates(k.pk, k.ak, k.rk, p_pt, p_rt) c order by c.effect loop
+        if pol.ast is null then
+            -- no conditions: a forbid denies; a permit allows, as every
+            -- forbid before it was false
+            return pol.effect = 'permit';
+        end if;
+        if env is null then
+            env := permissions._cedar_current_env(p_pt, p_pi, p_at, p_ai, k.pk, k.ak)
+                   || jsonb_build_object('resource', jsonb_build_object('__entity', jsonb_build_object('type', p_rt, 'id', p_ri)));
+            env := jsonb_set(env, '{anc}', (env -> 'anc') || jsonb_build_object(k.rk[1], to_jsonb(k.rk[2:])));
+            if p_attrs is not null then
+                env := jsonb_set(env, '{ent}', (env -> 'ent') || jsonb_build_object(k.rk[1], jsonb_build_object('attrs', p_attrs,
+                    'tags', coalesce((select e.tags from permissions.cedar_entities e where e.type = p_rt and e.id = p_ri), '{}'))));
+            end if;
+        end if;
+        v := permissions._cedar_eval(pol.ast, env, false);
+        if pol.effect = 'forbid' then
+            if v is distinct from 'false' then
+                return false;               -- it holds, or it errs: fail closed
+            end if;
+        elsif v = 'true' then
+            return true;                    -- a permit that errs is skipped
+        end if;
+    end loop;
+    return false;
+end;
+$$;
+
+-- The statement-level part of cedar_is_authorized_current (e-cedar.md
+-- section 15.2): computed once per statement, kept as text in a
+-- transaction-local setting. Two parts, split by chr(28):
+--   1. Flags, chr(30), then one entry per permit whose principal and action
+--      scopes match, each followed by chr(30): its resource scope, E:<key>
+--      (resource == key), I:<key> (resource in key), T:<type> (resource is
+--      type) or A:* (any resource) for a permit without conditions; e:,
+--      i:, t: and a:* for a permit with conditions, or with is ... in (as
+--      i:<key>). Flags: F, a forbid's principal and action scopes match; X,
+--      part 2 would be too large to parse per row.
+--   2. Unless X, and if there is a forbid or an entry in lower case, the
+--      forbids and the lower-case permits grouped by resource scope, with
+--      the environment without the resource, as jsonb text:
+--        {"pf": {"e": {key: [p]}, "i": {key: [p]}, "t": {type: [p]}, "a": [p]},
+--         "env": _cedar_current_env, "tags": a condition uses tags}
+--      with p {"f": forbid?, "a": ast or null, "t": the type of is ... in}.
+-- Part 2 is parsed for the rows that need it, so it is capped: 8 KiB parse
+-- in about 40 us, about what the check from scratch costs.
+create function permissions._cedar_current_filter(p_pt text, p_pi text, p_at text, p_ai text)
+returns text
+language plpgsql stable
+set plan_cache_mode = force_generic_plan
+as $$
+declare
+    k record;
+    cs jsonb;
+    f text;
+    payload text;
+begin
+    select * into k from permissions._cedar_keys(p_pt, p_pi, p_at, p_ai, null, null);
+    select coalesce(jsonb_agg(jsonb_build_object(
+               'f', x.effect = 'forbid', 'a', x.ast,
+               'k', case x.resource_op when '==' then 'e' when 'in' then 'i' when 'All' then 'a'
+                                       else case when x.resource_uid is null then 't' else 'i' end end,
+               'v', case x.resource_op when 'All' then '*' when 'is' then coalesce(x.resource_uid, x.resource_type) else x.resource_uid end,
+               't', case when x.resource_op = 'is' and x.resource_uid is not null then x.resource_type end,
+               'free', x.effect = 'permit' and x.ast is null and not (x.resource_op = 'is' and x.resource_uid is not null))), '[]')
+    into cs
+    from permissions._cedar_principal_candidates(k.pk, k.ak, p_pt) x;
+    f := case when exists (select 1 from jsonb_array_elements(cs) c where (c ->> 'f')::boolean) then 'F' else '' end || chr(30)
+         || coalesce((select string_agg(case when (c ->> 'free')::boolean then upper(c ->> 'k') else c ->> 'k' end
+                                        || ':' || (c ->> 'v') || chr(30), '')
+                      from jsonb_array_elements(cs) c where not (c ->> 'f')::boolean), '');
+    if exists (select 1 from jsonb_array_elements(cs) c where not (c ->> 'free')::boolean) then
+        with p as (select c ->> 'k' as k, c ->> 'v' as v, jsonb_build_object('f', c -> 'f', 'a', c -> 'a', 't', c -> 't') as p
+                   from jsonb_array_elements(cs) c where not (c ->> 'free')::boolean)
+        select jsonb_build_object(
+                   'pf', jsonb_build_object(
+                       'e', coalesce((select jsonb_object_agg(g.v, g.ps) from (select p.v, jsonb_agg(p.p) as ps from p where p.k = 'e' group by p.v) g), '{}'),
+                       'i', coalesce((select jsonb_object_agg(g.v, g.ps) from (select p.v, jsonb_agg(p.p) as ps from p where p.k = 'i' group by p.v) g), '{}'),
+                       't', coalesce((select jsonb_object_agg(g.v, g.ps) from (select p.v, jsonb_agg(p.p) as ps from p where p.k = 't' group by p.v) g), '{}'),
+                       'a', coalesce((select jsonb_agg(p.p) from p where p.k = 'a'), '[]')),
+                   'env', permissions._cedar_current_env(p_pt, p_pi, p_at, p_ai, k.pk, k.ak),
+                   'tags', exists (select 1 from p where (p.p -> 'a')::text ~ '"k": "(has|get)Tag"'))::text
+        into payload;
+        if octet_length(payload) > 8192 then
+            f := 'X' || f;
+            payload := '';
+        end if;
+    end if;
+    return f || chr(28) || coalesce(payload, '');
+end;
+$$;
+
+-- The decision for one resource from part 2 of the statement's filter (x,
+-- parsed): the forbids and the permits with conditions whose resource scope
+-- matches, forbids first, failing closed; p_free: a permit without
+-- conditions matches (part 1 says). p_attrs: the row's attributes, internal
+-- form, or null for the stored ones; p_anc: the resource's ancestors if the
+-- caller walked them already.
+create function permissions._cedar_decide(x jsonb, p_rt text, p_ri text, p_attrs jsonb, p_anc jsonb, p_free boolean)
+returns boolean
+language plpgsql stable
+as $$
+declare
+    rk text := permissions._cedar_key(p_rt, p_ri);
+    pf jsonb := x -> 'pf';
+    anc jsonb := p_anc;
+    m jsonb;
+    e jsonb;
+    p jsonb;
+    v jsonb;
+begin
+    m := coalesce(pf -> 'e' -> rk, '[]') || coalesce(pf -> 't' -> p_rt, '[]') || coalesce(pf -> 'a', '[]');
+    if pf -> 'i' <> '{}' then
+        anc := coalesce(anc, permissions._cedar_ancestors(p_rt, p_ri, null));
+        m := m || coalesce((select jsonb_agg(q) from jsonb_array_elements_text(anc || to_jsonb(rk)) a(k)
+                            cross join lateral jsonb_array_elements(pf -> 'i' -> a.k) q
+                            where q ->> 't' is null or q ->> 't' = p_rt), '[]');
+    end if;
+    if m = '[]' then
+        return p_free;
+    end if;
+    e := (x -> 'env') || jsonb_build_object('resource', jsonb_build_object('__entity', jsonb_build_object('type', p_rt, 'id', p_ri)));
+    if anc is not null then
+        e := jsonb_set(e, '{anc}', (e -> 'anc') || jsonb_build_object(rk, anc));
+    end if;
+    if p_attrs is not null then
+        e := jsonb_set(e, '{ent}', (e -> 'ent') || jsonb_build_object(rk, jsonb_build_object('attrs', p_attrs,
+            'tags', case when (x ->> 'tags')::boolean
+                         then coalesce((select t.tags from permissions.cedar_entities t where t.type = p_rt and t.id = p_ri), '{}')
+                         else '{}' end)));
+    end if;
+    for p in select q from jsonb_array_elements(m) q where (q ->> 'f')::boolean loop
+        v := case when p -> 'a' = 'null' then 'true' else permissions._cedar_eval(p -> 'a', e, false) end;
+        if v is distinct from 'false' then
+            return false;                   -- a forbid holds, or errs: fail closed
+        end if;
+    end loop;
+    if p_free then
+        return true;
+    end if;
+    for p in select q from jsonb_array_elements(m) q where not (q ->> 'f')::boolean loop
+        if p -> 'a' = 'null' or permissions._cedar_eval(p -> 'a', e, false) = 'true' then
+            return true;                    -- a permit that errs is skipped
+        end if;
+    end loop;
+    return false;
+end;
+$$;
+
+-- Own writes end the filters that cedar_is_authorized_current cached in
+-- this transaction: the cache key holds this setting. Writes of other
+-- transactions change the snapshot, which the key holds too.
+create function permissions._cedar_changed()
+returns trigger
+language plpgsql
+as $$
+begin
+    perform set_config('permissions.cedar_generation', gen_random_uuid()::text, true);
+    return null;
+end;
+$$;
+
+create trigger cedar_changed after insert or update or delete or truncate on permissions.cedar_policies
+    for each statement execute function permissions._cedar_changed();
+create trigger cedar_changed after insert or update or delete or truncate on permissions.cedar_entities
+    for each statement execute function permissions._cedar_changed();
+create trigger cedar_changed after insert or update or delete or truncate on permissions.cedar_entity_parents
+    for each statement execute function permissions._cedar_changed();
+
+-- Whether a record of attributes is already in internal form (e-cedar.md
+-- section 3), so the row overlay of cedar_is_authorized_current needs no
+-- conversion: every value a String, a Bool, a Long in range, or an entity
+-- reference {"__entity": {"type", "id"}}. Anything else (sets, records,
+-- extension values) goes through _cedar_value_in.
+create function permissions._cedar_attrs_plain(v jsonb)
+returns boolean
+language sql immutable
+as $$
+    select not exists (
+        select 1 from jsonb_each(v) e
+        where not case jsonb_typeof(e.value)
+            when 'string' then true
+            when 'boolean' then true
+            when 'number' then scale(e.value::text::numeric) = 0
+                               and e.value::text::numeric between -9223372036854775808 and 9223372036854775807
+            when 'object' then e.value - '__entity' = '{}' and jsonb_typeof(e.value -> '__entity') = 'object'
+                               and (e.value -> '__entity') - 'type' - 'id' = '{}'
+                               and jsonb_typeof(e.value -> '__entity' -> 'id') = 'string'
+                               and jsonb_typeof(e.value -> '__entity' -> 'type') = 'string'
+                               and permissions._cedar_is_name(e.value -> '__entity' ->> 'type')
+            else false end)
+$$;
+
+-- Per-row checks in RLS:
+--   using (permissions.cedar_is_authorized_current('Action::"view"', 'Document::"' || id || '"'))
+-- with a row's columns as the resource's attributes (Cedar entity JSON):
+--   using (permissions.cedar_is_authorized_current('Action::"view"', 'Document::"' || id || '"',
+--          resource_attrs => jsonb_build_object('owner', jsonb_build_object('__entity',
+--                                jsonb_build_object('type', 'User', 'id', owner_id)), 'level', level)))
+-- resource_attrs replaces the stored entity's attrs; its parents and tags
+-- still come from storage, and a resource that is not stored has no parents
+-- and no tags. Attributes Cedar can't hold (a fraction, a null) deny, as
+-- does a null action or resource. plan_time_guard is ignored: its volatile
+-- default keeps a constant call out of plan-time evaluation (see
+-- _unfolded_null); don't pass it.
+--
+-- Once per statement (e-cedar.md section 15.2): the principal's and the
+-- action's walks, the candidate policies and the environment
+-- (_cedar_current_filter), kept in a transaction-local setting under a key
+-- of the snapshot, the settings the subject comes from, the action and
+-- cedar_generation (own writes). Per row: the resource's scope against the
+-- candidates; only a resource that a forbid or a permit with conditions can
+-- match evaluates anything. The setting is no weaker than the subject: a
+-- client that can write it can write request.jwt.claims or
+-- permissions.subject_id too, and be anyone (docs: Identity).
+create function permissions.cedar_is_authorized_current(action text, resource text, resource_attrs jsonb default null,
+                                                        plan_time_guard boolean default permissions._unfolded_null())
+returns boolean
+language plpgsql stable security definer
+set search_path = ''
+as $$
+declare
+    g text;
+    key text;
+    f text;
+    payload text;
+    a record;
+    rt text;
+    ri text;
+    rk text;
+    i int;
+    x record;
+    anc jsonb;
+    free boolean;
+    cond boolean;
+    attrs jsonb;
+begin
+    if action is null or resource is null then
+        return false;
+    end if;
+    -- the statement's filter
+    g := 'permissions.cedar_filter_' || md5(action);
+    key := format('%s %L %L %L %L %L', pg_current_snapshot(), current_setting('request.jwt.claims', true),
+                  current_setting('permissions.subject_id', true), current_setting('permissions.subject_type', true),
+                  current_setting('permissions.cedar_generation', true), action) || chr(29);
+    f := current_setting(g, true);
+    if f is null or not starts_with(f, key) then
+        select * into a from permissions._cedar_uid(action, 'action');
+        f := key || case when permissions.current_subject_id() is null or not permissions._cedar_is_name(permissions.current_subject_type())
+                         then chr(30) || chr(28)
+                         else permissions._cedar_current_filter(permissions.current_subject_type(), permissions.current_subject_id(), a.type, a.id) end;
+        perform set_config(g, f, true);
+    end if;
+    f := substr(f, char_length(key) + 1);
+    i := strpos(f, chr(28));
+    payload := substr(f, i + 1);
+    f := left(f, i - 1);
+    -- the resource uid (_cedar_uid's common case inline: no escapes)
+    i := strpos(resource, '::"');
+    if i > 0 and right(resource, 1) = '"' and strpos(resource, '\') = 0 and char_length(resource) > i + 2
+       and strpos(substr(resource, i + 3, char_length(resource) - i - 3), '"') = 0
+       and permissions._cedar_is_name(left(resource, i - 1)) then
+        rt := left(resource, i - 1);
+        ri := substr(resource, i + 3, char_length(resource) - i - 3);
+    else
+        select * into x from permissions._cedar_uid(resource, 'resource');
+        rt := x.type;
+        ri := x.id;
+    end if;
+    if strpos(f, ':') = 0 then
+        return false;                       -- no subject, or no permit for it
+    end if;
+    -- which permits' resource scopes match: free (no conditions), cond (others)
+    rk := permissions._cedar_key(rt, ri);
+    free := strpos(f, chr(30) || 'A:*' || chr(30)) > 0 or strpos(f, chr(30) || 'E:' || rk || chr(30)) > 0
+            or strpos(f, chr(30) || 'T:' || rt || chr(30)) > 0;
+    cond := strpos(f, chr(30) || 'a:*' || chr(30)) > 0 or strpos(f, chr(30) || 'e:' || rk || chr(30)) > 0
+            or strpos(f, chr(30) || 't:' || rt || chr(30)) > 0;
+    if (not free and strpos(f, chr(30) || 'I:') > 0) or (not cond and strpos(f, chr(30) || 'i:') > 0) then
+        anc := permissions._cedar_ancestors(rt, ri, null);
+        select free or coalesce(bool_or(strpos(f, chr(30) || 'I:' || k.k || chr(30)) > 0), false),
+               cond or coalesce(bool_or(strpos(f, chr(30) || 'i:' || k.k || chr(30)) > 0), false)
+        into free, cond
+        from jsonb_array_elements_text(anc || to_jsonb(rk)) k(k);
+    end if;
+    if not free and not cond then
+        return false;
+    elsif free and strpos(split_part(f, chr(30), 1), 'F') = 0 then
+        return true;                        -- a permit without conditions, and no forbid can match
+    end if;
+    if resource_attrs is not null and resource_attrs <> 'null' then
+        if jsonb_typeof(resource_attrs) <> 'object' or resource_attrs ? '__entity' or resource_attrs ? '__extn' then
+            return false;
+        elsif permissions._cedar_attrs_plain(resource_attrs) then
+            attrs := resource_attrs;
+        else
+            select * into x from permissions._cedar_value_in(resource_attrs, 'resource_attrs', 1);
+            if x.code is not null then
+                return false;
+            end if;
+            attrs := x.val;
+        end if;
+    end if;
+    if strpos(split_part(f, chr(30), 1), 'X') > 0 then
+        select * into a from permissions._cedar_uid(action, 'action');
+        return permissions._cedar_current_check(permissions.current_subject_type(), permissions.current_subject_id(),
+                                                a.type, a.id, rt, ri, attrs);
+    end if;
+    return permissions._cedar_decide(payload::jsonb, rt, ri, attrs, anc, free);
+end;
+$$;
+
+-- The candidate resources of cedar_list_resources_current: the ids of the
+-- stored entities of type p_type that a permit of pf names in its resource
+-- scope (pf as _cedar_eval_resource takes it), and whether a permit without
+-- conditions names it (free). ==: that entity; in X: X and its descendants;
+-- All and is: every entity of the type.
+create function permissions._cedar_list_candidates(pf jsonb, p_type text)
+returns table (id text, free boolean)
+language sql stable
+as $$
+    with recursive p as materialized (
+        select x ->> 'op' as op, x ->> 'u' as u, split_part(x ->> 'u', '::"', 1) as ut,
+               x -> 'a' = 'null' as free
+        from jsonb_array_elements(pf) x
+        where not (x ->> 'f')::boolean
+    ), d(t, i, root, free) as (
+        select p.ut collate "C", substr(p.u, char_length(p.ut) + 4, char_length(p.u) - char_length(p.ut) - 4) collate "C", true, p.free
+        from p
+        where p.op = 'in' or (p.op = 'is' and p.u is not null)
+        union
+        -- a child in cedar_entity_parents is a stored entity
+        select q.type, q.id, false, d.free from d cross join lateral (
+            select x.type, x.id from permissions.cedar_entity_parents x
+            where x.parent_type = d.t and x.parent_id = d.i offset 0) q
+    )
+    select c.id, bool_or(c.free)
+    -- lateral subqueries with offset 0: run only for the scopes that need
+    -- them (a join here became a hash of every entity of the type)
+    from (select q.id, p.free from p cross join lateral (
+              select e.id from permissions.cedar_entities e where e.type = p_type offset 0) q
+          where p.op = 'All' or (p.op = 'is' and p.u is null)
+          union all
+          select q.id, p.free from p cross join lateral (
+              select e.id from permissions.cedar_entities e
+              where e.type = p_type and e.id = substr(p.u, char_length(p.ut) + 4, char_length(p.u) - char_length(p.ut) - 4) offset 0) q
+          where p.op = '==' and p.ut = p_type
+          union all
+          select d.i, d.free from d
+          where d.t = p_type and not d.root
+          union all
+          -- a root (X itself) must be stored: a primary-key probe (an
+          -- exists here became a hashed scan of every entity)
+          select d.i, d.free from d cross join lateral (
+              select 1 from permissions.cedar_entities e where e.type = d.t and e.id = d.i offset 0) q
+          where d.t = p_type and d.root) c
+    group by c.id
+$$;
+
+-- Whether the policies pf allow a resource, failing closed. pf: a jsonb
+-- array, forbids first, of {"f": forbid?, "a": ast or null, "op", "t", "u"}
+-- (the resource scope: op, type and uid key) of policies whose principal
+-- and action scopes match; env: _cedar_current_env's. The resource's
+-- ancestors are walked only if an in scope needs them.
+create function permissions._cedar_eval_resource(pf jsonb, env jsonb, p_rt text, p_ri text)
+returns boolean
+language plpgsql stable
+as $$
+declare
+    rk text := permissions._cedar_key(p_rt, p_ri);
+    anc jsonb;
+    e jsonb;
+    p jsonb;
+    v jsonb;
+begin
+    e := env || jsonb_build_object('resource', jsonb_build_object('__entity', jsonb_build_object('type', p_rt, 'id', p_ri)));
+    for p in select x from jsonb_array_elements(pf) x loop
+        if p ->> 'op' = '==' then
+            continue when p ->> 'u' <> rk;
+        elsif p ->> 'op' <> 'All' then
+            continue when p ->> 'op' = 'is' and p ->> 't' <> p_rt;
+            if p ->> 'u' is not null and p ->> 'u' <> rk then
+                if anc is null then
+                    anc := permissions._cedar_ancestors(p_rt, p_ri, null);
+                    e := jsonb_set(e, '{anc}', (e -> 'anc') || jsonb_build_object(rk, anc));
+                end if;
+                continue when not anc ? (p ->> 'u');
+            end if;
+        end if;
+        v := case when p -> 'a' = 'null' then 'true' else permissions._cedar_eval(p -> 'a', e, false) end;
+        if (p ->> 'f')::boolean then
+            if v is distinct from 'false' then
+                return false;
+            end if;
+        elsif v = 'true' then
+            return true;
+        end if;
+    end loop;
+    return false;
+end;
+$$;
+
+-- Ids (without the type) of the stored entities of resource_type that the
+-- current subject may perform action on, for RLS:
+--   id = any (array(select permissions.cedar_list_resources_current('Action::"view"', 'Document')::uuid))
+-- Stored entities only (plan-cedar.md, decision 3): a resource that is not
+-- stored is never listed, even when a policy names it, and no row
+-- attributes apply. Uncapped, unordered, and fails closed like
+-- cedar_is_authorized_current. The candidates come from the resource scopes
+-- of the permits (section 15.3); a candidate is evaluated only when a
+-- forbid could match or only a permit with conditions names it. A
+-- set-returning function is never evaluated at plan time (its estimate is
+-- `rows`), so it needs no plan_time_guard. No JIT: the generic plan of
+-- _cedar_list_candidates is costed for every branch (with a million
+-- documents, over jit_above_cost), and compiling it took 10 ms a call on
+-- Postgres 18 for a query that runs in 0.2 ms (e-cedar.md section 15.3).
+create function permissions.cedar_list_resources_current(action text, resource_type text)
+returns setof text
+language plpgsql stable security definer
+set search_path = ''
+set plan_cache_mode = force_generic_plan
+set jit = off
+rows 100
+as $$
+declare
+    pt text := permissions.current_subject_type();
+    pi text := permissions.current_subject_id();
+    a record;
+    k record;
+    pf jsonb;
+    env jsonb;
+    cand record;
+    forbids boolean;
+begin
+    if action is null or resource_type is null then
+        return;
+    end if;
+    select * into a from permissions._cedar_uid(action, 'action');
+    if not permissions._cedar_is_name(resource_type) then
+        perform permissions._cedar_error('invalid_argument', format('invalid entity type for resource_type: %s', resource_type),
+            hint => 'Pass an entity type name without an id: resource_type => ''Document'' (a namespaced type: ''App::Document'').',
+            p_detail => format('value=%L', resource_type));
+    end if;
+    if pi is null or not permissions._cedar_is_name(pt) then
+        return;
+    end if;
+    select * into k from permissions._cedar_keys(pt, pi, a.type, a.id, null, null);
+    select coalesce(jsonb_agg(jsonb_build_object('f', c.effect = 'forbid', 'a', c.ast, 'op', c.resource_op,
+                                                 't', c.resource_type, 'u', c.resource_uid)
+                              order by c.effect, c.policy_id), '[]')
+    into pf
+    from permissions._cedar_principal_candidates(k.pk, k.ak, pt) c
+    where c.resource_op in ('All', 'in')
+       or (c.resource_op = 'is' and c.resource_type = cedar_list_resources_current.resource_type)
+       or (c.resource_op = '==' and split_part(c.resource_uid, '::"', 1) = cedar_list_resources_current.resource_type);
+    if not exists (select 1 from jsonb_array_elements(pf) p where not (p ->> 'f')::boolean) then
+        return;
+    end if;
+    forbids := exists (select 1 from jsonb_array_elements(pf) p where (p ->> 'f')::boolean);
+    if not forbids and not exists (select 1 from jsonb_array_elements(pf) p where p -> 'a' <> 'null') then
+        -- permits without conditions: their scopes are the answer
+        return query select l.id from permissions._cedar_list_candidates(pf, resource_type) l;
+        return;
+    end if;
+    env := permissions._cedar_current_env(pt, pi, a.type, a.id, k.pk, k.ak);
+    for cand in select * from permissions._cedar_list_candidates(pf, resource_type) loop
+        if (cand.free and not forbids) or permissions._cedar_eval_resource(pf, env, resource_type, cand.id) then
+            return next cand.id;
+        end if;
+    end loop;
 end;
 $$;
 
@@ -8997,7 +9611,8 @@ end;
 $$;
 
 -- Insert or replace one row of cedar_policies: a static policy (p_template_id
--- null) or a link. c is _cedar_compile_policy's result.
+-- null) or a link, and its rows of cedar_policy_scopes. c is
+-- _cedar_compile_policy's result.
 create function permissions._cedar_store_policy(p_id text, p_source text, p_est jsonb, c jsonb,
                                                 p_template_id text, p_slots jsonb)
 returns void
@@ -9019,7 +9634,17 @@ as $$
             principal_op = excluded.principal_op, principal_type = excluded.principal_type, principal_uid = excluded.principal_uid,
             action_op = excluded.action_op, action_uids = excluded.action_uids,
             resource_op = excluded.resource_op, resource_type = excluded.resource_type, resource_uid = excluded.resource_uid,
-            template_id = excluded.template_id, slots = excluded.slots
+            template_id = excluded.template_id, slots = excluded.slots;
+    -- the scope index: one row per action (none for action in [], which
+    -- matches no request)
+    delete from permissions.cedar_policy_scopes s where s.policy_id = p_id;
+    insert into permissions.cedar_policy_scopes (policy_id, action_key, principal_key, resource_key)
+    select p_id, a.k,
+           case c -> 'principal' ->> 'op' when 'All' then '*' else coalesce(c -> 'principal' ->> 'uid', c -> 'principal' ->> 'type') end,
+           case c -> 'resource' ->> 'op' when 'All' then '*' else coalesce(c -> 'resource' ->> 'uid', c -> 'resource' ->> 'type') end
+    from (select '*' as k where c -> 'action' ->> 'op' = 'All'
+          union
+          select jsonb_array_elements_text(c -> 'action' -> 'uids')) a;
 $$;
 
 -- Put (insert or replace) one static policy. Give exactly one of policy
@@ -9506,9 +10131,12 @@ end;
 $$;
 
 -- Privileges. Every cedar_* function and table is for the owner and the
--- trusted roles the app grants (e.g. service_role), never PUBLIC. A fresh
--- install revokes everything from PUBLIC at the end of the file; this does the
--- same for the objects above when the upgrade script adds them.
+-- trusted roles the app grants (e.g. service_role), never PUBLIC, except the
+-- two current-subject helpers, cedar_is_authorized_current and
+-- cedar_list_resources_current, which the Privileges section at the end of
+-- each file grants to PUBLIC after this. A fresh install revokes everything
+-- from PUBLIC at the end of the file; this does the same for the objects
+-- above when the upgrade script adds them.
 do $$
 declare
     f regprocedure;
@@ -9570,7 +10198,9 @@ grant execute on function
     permissions.rbac_scopes_with_permission(text, boolean),
     permissions.fga_check_current(text, text),
     permissions.fga_list_objects_current(text, text),
-    permissions.fga_list_object_ids_current(text, text)
+    permissions.fga_list_object_ids_current(text, text),
+    permissions.cedar_is_authorized_current(text, text, jsonb, boolean),
+    permissions.cedar_list_resources_current(text, text)
 to public;
 
 -- Everything else (role and model management, tuple writes, explicit-subject

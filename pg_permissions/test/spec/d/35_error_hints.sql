@@ -299,7 +299,9 @@ insert into sites (site, stmt, st, detail, msg, hint) values
 ('cedar_delete_entities: uid', $$ select permissions.cedar_delete_entities(uids => '[{"type": "User"}]') $$,
  '22023', 'cedar:invalid_uid value=''{"type": "User"}''', '^invalid entity uid in uids: \{"type": "User"\}$', '"type": "User", "id": "alice"'),
 ('cedar_read_entities: ids without type', $$ select permissions.cedar_read_entities(ids => '{a}') $$,
- '22004', 'cedar:null_argument argument=''type''', '^type is required with ids$', 'type => ''User''');
+ '22004', 'cedar:null_argument argument=''type''', '^type is required with ids$', 'type => ''User'''),
+('cedar_list_resources_current: type', $$ select * from permissions.cedar_list_resources_current(action => 'Action::"view"', resource_type => 'Doc::"d1"') $$,
+ '22023', 'cedar:invalid_argument value=''Doc::"d1"''', '^invalid entity type for resource_type: Doc::"d1"$', 'resource_type => ''Document''');
 
 -- static scan of the function bodies: every raise and every call of an error helper
 create temp table raise_sites as

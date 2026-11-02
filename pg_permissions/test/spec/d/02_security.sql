@@ -6,7 +6,7 @@
 \ir ../../fixtures/d/rbac_roles.sql
 select permissions.rbac_assign_role(:'alice', 'admin');
 
-select tap.plan(14);
+select tap.plan(18);
 
 -- tables
 select tap.is(
@@ -46,6 +46,12 @@ select tap.lives_ok($$ select permissions.rbac_has_permission('documents.read') 
 select tap.lives_ok($$ select permissions.rbac_has_role('admin') $$, 'authenticated can call rbac_has_role');
 select tap.lives_ok($$ select permissions.rbac_scopes_with_permission('documents.read') $$, 'authenticated can call rbac_scopes_with_permission');
 select tap.is(permissions.rbac_has_permission('users.manage'), true, 'and they answer for the current subject');
+
+-- Cedar: the current-subject helpers only; explicit principals and writes are admin only
+select tap.lives_ok($$ select permissions.cedar_is_authorized_current('Action::"view"', 'Doc::"d1"') $$, 'authenticated can call cedar_is_authorized_current');
+select tap.lives_ok($$ select * from permissions.cedar_list_resources_current('Action::"view"', 'Doc') $$, 'authenticated can call cedar_list_resources_current');
+select tap.throws_ok($$ select permissions.cedar_is_authorized('User::"alice"', 'Action::"view"', 'Doc::"d1"') $$, '42501', 'authenticated cannot authorize another principal');
+select tap.throws_ok($$ select permissions.cedar_put_policy('p', 'permit (principal, action, resource);') $$, '42501', 'authenticated cannot put Cedar policies');
 
 reset role;
 set role anon;

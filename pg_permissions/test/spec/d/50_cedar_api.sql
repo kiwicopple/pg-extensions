@@ -163,8 +163,9 @@ select tap.throws_ok($$ select permissions.cedar_put_policy(policy_id => 'x', po
 select tap.throws_ok($$ select permissions.cedar_put_entities(entities => '[]') $$, '42501', 'clients cannot put entities');
 select tap.throws_ok($$ select permissions.cedar_read_entities() $$, '42501', 'clients cannot read entities');
 reset role;
-select tap.is((select count(*)::int from pg_proc p where p.pronamespace = 'permissions'::regnamespace
+select tap.is((select array_agg(p.proname::text order by p.proname) from pg_proc p where p.pronamespace = 'permissions'::regnamespace
                  and p.proname ~ '^_?cedar_' and has_function_privilege('authenticated', p.oid, 'execute')),
-              0, 'no cedar_* function is executable by clients (none is granted to PUBLIC)');
+              '{cedar_is_authorized_current,cedar_list_resources_current}',
+              'clients can execute only the two current-subject cedar_* helpers (granted to PUBLIC)');
 
 select * from tap.finish();
