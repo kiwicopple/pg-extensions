@@ -3,9 +3,10 @@
 -- sections 5 and 6): the JSON policy format is checked for its shape (unknown
 -- keys, operators and expression kinds, slots in a static policy, an action
 -- scope that is not an action, a record that would read as an escape), with
--- the nearest name for a misspelt extension function; the extension types are
--- refused until their phases; entity JSON and uids are checked
--- (Longs in the i64 range, no duplicate uids, no cycle, explicit escapes);
+-- the nearest name for a misspelt extension function; an extension value
+-- literal names a known function; entity JSON and uids are checked
+-- (Longs in the i64 range, no duplicate uids, no cycle, explicit escapes,
+-- valid extension values);
 -- and the fixed limits hold. Messages and hints are spot-checked here; every
 -- raise site has its own row in 35_error_hints.sql.
 \ir ../../fixtures/d/cedar.sql
@@ -38,9 +39,9 @@ insert into cases (what, stmt, want) values
 ('an unknown expression kind', $$ select permissions.cedar_put_policy(policy_id => 'p', policy_json => cedar_t.policy('permit', '{"Valu": true}')) $$, '22023 cedar:invalid_policy path=''$.conditions[0].body.Valu'''),
 ('an unknown extension function', $$ select permissions.cedar_put_policy(policy_id => 'p', policy_json => cedar_t.policy('permit', '{"isInRang": [{"Value": 1}]}')) $$, '22023 cedar:invalid_policy path=''$.conditions[0].body.isInRang'''),
 ('Unknown (partial evaluation)', $$ select permissions.cedar_put_policy(policy_id => 'p', policy_json => cedar_t.policy('permit', '{"Unknown": {"name": "x"}}')) $$, '0A000 cedar:unsupported feature=''Unknown is for partial evaluation, which is not supported'''),
-('an extension function (phase 4)', $$ select permissions.cedar_put_policy(policy_id => 'p', policy_json => cedar_t.policy('permit', '{"decimal": [{"Value": "1.5"}]}')) $$, '0A000 cedar:unsupported feature=''decimal'''),
-('an extension method (phase 4)', $$ select permissions.cedar_put_policy(policy_id => 'p', policy_json => cedar_t.policy('permit', '{"isInRange": [{"Var": "context"}, {"Var": "context"}]}')) $$, '0A000 cedar:unsupported feature=''ipaddr'''),
-('an extension value literal (phase 4)', $$ select permissions.cedar_put_policy(policy_id => 'p', policy_json => cedar_t.policy('permit', '{"Value": {"__extn": {"fn": "datetime", "arg": "2024-01-01"}}}')) $$, '0A000 cedar:unsupported%'),
+('an extension call without an argument list', $$ select permissions.cedar_put_policy(policy_id => 'p', policy_json => cedar_t.policy('permit', '{"decimal": {"arg": {"Value": "1.5"}}}')) $$, '22023 cedar:invalid_policy path=''$.conditions[0].body.decimal'''),
+('an extension value literal without fn', $$ select permissions.cedar_put_policy(policy_id => 'p', policy_json => cedar_t.policy('permit', '{"Value": {"__extn": {"arg": "2024-01-01"}}}')) $$, '22023 cedar:invalid_policy path=''$.conditions[0].body.Value'''),
+('an extension value literal of an unknown function', $$ select permissions.cedar_put_policy(policy_id => 'p', policy_json => cedar_t.policy('permit', '{"Value": {"__extn": {"fn": "ipaddr", "arg": "10.0.0.1"}}}')) $$, '22023 cedar:invalid_policy path=''$.conditions[0].body.Value'''),
 ('a record literal with the key __entity', $$ select permissions.cedar_put_policy(policy_id => 'p', policy_json => cedar_t.policy('permit', '{"Record": {"__entity": {"Value": 1}}}')) $$, '0A000 cedar:unsupported%'),
 ('a record value with the key __entity and others', $$ select permissions.cedar_put_policy(policy_id => 'p', policy_json => cedar_t.policy('permit', '{"Value": {"__entity": {"type": "A", "id": "a"}, "x": 1}}')) $$, '22023 cedar:invalid_policy path=''$.conditions[0].body.Value'''),
 -- entities
@@ -56,7 +57,9 @@ insert into cases (what, stmt, want) values
 ('1.0 is not a Long', $$ select permissions.cedar_put_entities(entities => '[{"uid": {"type": "U", "id": "a"}, "tags": {"n": 1.0}}]') $$, '22023 cedar:invalid_entity index=0'),
 ('a null attribute', $$ select permissions.cedar_put_entities(entities => '[{"uid": {"type": "U", "id": "a"}, "attrs": {"n": null}}]') $$, '22023 cedar:invalid_entity index=0'),
 ('a bad entity reference in attrs', $$ select permissions.cedar_put_entities(entities => '[{"uid": {"type": "U", "id": "a"}, "attrs": {"boss": {"__entity": {"type": "U"}}}}]') $$, '22023 cedar:invalid_entity index=0'),
-('an extension value (phase 4)', $$ select permissions.cedar_put_entities(entities => '[{"uid": {"type": "U", "id": "a"}, "attrs": {"ip": {"__extn": {"fn": "ip", "arg": "10.0.0.1"}}}}]') $$, '0A000 cedar:unsupported index=0'),
+('an invalid extension value', $$ select permissions.cedar_put_entities(entities => '[{"uid": {"type": "U", "id": "a"}, "attrs": {"ip": {"__extn": {"fn": "ip", "arg": "10.0.0.300"}}}}]') $$, '22023 cedar:invalid_entity index=0'),
+('an extension value with arg and args', $$ select permissions.cedar_put_entities(entities => '[{"uid": {"type": "U", "id": "a"}, "attrs": {"d": {"__extn": {"fn": "decimal", "arg": "1.0", "args": ["1.0"]}}}}]') $$, '22023 cedar:invalid_entity index=0'),
+('an extension value that is not a string', $$ select permissions.cedar_put_entities(entities => '[{"uid": {"type": "U", "id": "a"}, "tags": {"d": {"__extn": {"fn": "decimal", "arg": 1}}}}]') $$, '22023 cedar:invalid_entity index=0'),
 ('an unknown extension function in data', $$ select permissions.cedar_put_entities(entities => '[{"uid": {"type": "U", "id": "a"}, "attrs": {"x": {"__extn": {"fn": "money", "arg": "1"}}}}]') $$, '22023 cedar:invalid_entity index=0'),
 ('an entity that is its own parent', $$ select permissions.cedar_put_entities(entities => '[{"uid": {"type": "G", "id": "a"}, "parents": [{"type": "G", "id": "a"}]}]') $$, '22023 cedar:invalid_entity uid=''G::"a"'''),
 ('a cycle within one put', $$ select permissions.cedar_put_entities(entities => '[{"uid": {"type": "G", "id": "a"}, "parents": [{"type": "G", "id": "b"}]}, {"uid": {"type": "G", "id": "b"}, "parents": [{"type": "G", "id": "c"}]}, {"uid": {"type": "G", "id": "c"}, "parents": [{"type": "G", "id": "a"}]}]') $$, '22023 cedar:invalid_entity uid=%'),
@@ -72,7 +75,7 @@ insert into cases (what, stmt, want) values
 -- context and overlay
 ('a context that is a string', $$ select permissions.cedar_is_authorized(principal => 'User::"a"', action => 'Action::"view"', resource => 'Doc::"d"', context => '"x"') $$, '22023 cedar:invalid_context'),
 ('a context with a float', $$ select permissions.cedar_is_authorized(principal => 'User::"a"', action => 'Action::"view"', resource => 'Doc::"d"', context => '{"x": 0.5}') $$, '22023 cedar:invalid_context'),
-('a context with an extension value (phase 4)', $$ select permissions.cedar_is_authorized(principal => 'User::"a"', action => 'Action::"view"', resource => 'Doc::"d"', context => '{"x": {"__extn": {"fn": "decimal", "arg": "1.0"}}}') $$, '0A000 cedar:unsupported feature=''extension value'''),
+('a context with an invalid extension value', $$ select permissions.cedar_is_authorized(principal => 'User::"a"', action => 'Action::"view"', resource => 'Doc::"d"', context => '{"x": {"__extn": {"fn": "decimal", "arg": "1.23456"}}}') $$, '22023 cedar:invalid_context'),
 ('an overlay with a duplicate', $$ select permissions.cedar_is_authorized(principal => 'User::"a"', action => 'Action::"view"', resource => 'Doc::"d"', entities => '[{"uid": {"type": "U", "id": "a"}}, {"uid": {"type": "U", "id": "a"}}]') $$, '22023 cedar:invalid_entity index=1'),
 -- the other functions
 ('cedar_put_policy without a policy', $$ select permissions.cedar_put_policy(policy_id => 'p') $$, '22004 cedar:null_argument argument=''policy'''),

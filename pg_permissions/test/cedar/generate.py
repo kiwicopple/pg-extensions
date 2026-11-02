@@ -85,18 +85,19 @@ PHASES = {
     'all': dict(format='json', mode='stored', features=GATED),
 }
 
-# What `suite` (and so test/run.sh) generates into test/spec/d/: the core
-# features, with entities stored, in the request overlay, and stored with only
-# direct parents (so `in` must follow the hierarchy); the same as Cedar text
-# (phase 3), with the stored EST checked; the parser on every text policy of
-# the corpus; and template links (phase 4c).
+# What `suite` (and so test/run.sh) generates into test/spec/d/: every case,
+# with the extension types (phases 4a and 4b), with entities stored, in the
+# request overlay, and stored with only direct parents (so `in` must follow the
+# hierarchy); the same as Cedar text, with the stored EST checked; the parser
+# on every text policy of the corpus; and template links (phase 4c).
+EXTENSIONS = 'decimal,ipaddr,datetime,duration'
 SUITE = (
-    ['--phase', '2'],
-    ['--phase', '2', '--mode', 'overlay'],
-    ['--phase', '2', '--reduce-parents'],
-    ['--phase', '3'],
+    ['--phase', '2', '--features', EXTENSIONS],
+    ['--phase', '2', '--features', EXTENSIONS, '--mode', 'overlay'],
+    ['--phase', '2', '--features', EXTENSIONS, '--reduce-parents'],
+    ['--phase', '3', '--features', EXTENSIONS],
     ['--format', 'text', '--parse-est'],
-    ['--phase', '4c'],
+    ['--phase', '4c', '--features', 'all'],
 )
 
 EXT_FEATURE = {

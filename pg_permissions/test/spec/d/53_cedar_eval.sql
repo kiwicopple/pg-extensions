@@ -144,7 +144,7 @@ select tap.is(cedar_t.eval('{"+": {"left": {"Value": 9223372036854775807}, "righ
 select tap.is(cedar_t.eval('{".": {"left": {"Var": "principal"}, "attr": "nope"}}'),
               'error: attribute_not_found: User::"alice" has no attribute "nope"', 'a missing attribute names the entity and the attribute');
 select tap.is(cedar_t.eval('{"<": {"left": {"Value": 1}, "right": {"Value": "2"}}}'),
-              'error: type_error: <: expected two Longs, got Long and String', 'a type error names the types');
+              'error: type_error: <: expected two Longs, two datetimes or two durations, got Long and String', 'a type error names the types');
 select tap.is(cedar_t.eval('{".": {"left": {"Value": {"__entity": {"type": "User", "id": "a\"b"}}}, "attr": "x"}}'),
               'error: entity_does_not_exist: User::"a\"b" (reading .x)', 'a uid in a message uses Cedar''s escapes');
 

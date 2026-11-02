@@ -1,6 +1,6 @@
 # Design E: the Cedar model (`cedar_*`) in PL/pgSQL
 
-> Status: phase 0 of [`plan-cedar.md`](../plan-cedar.md), approved with its deviations (static limits, the `ast` column, errors as SQL null, the verbatim principal type, `resource_attrs` replacing attributes). Phases 2, 3 and 4c are implemented in `pg_permissions--0.1.0.sql`: the core evaluator, the text parser and templates. Section 12 has the phase 2 measurements and decisions, and section 13 the decisions of phases 3 and 4c. The oracle is vendored in [`test/cedar/`](../../test/cedar/README.md).
+> Status: phase 0 of [`plan-cedar.md`](../plan-cedar.md), approved with its deviations (static limits, the `ast` column, errors as SQL null, the verbatim principal type, `resource_attrs` replacing attributes). Phases 2, 3, 4a, 4b and 4c are implemented in `pg_permissions--0.1.0.sql`: the core evaluator, the text parser, the extension types and templates. Section 12 has the phase 2 measurements and decisions, section 13 the decisions of phases 3 and 4c, and section 14 those of the extension types. The whole corpus passes. The oracle is vendored in [`test/cedar/`](../../test/cedar/README.md).
 
 The sources for this page are:
 
@@ -234,15 +234,15 @@ The evaluator passes all values as `jsonb`. Each Cedar value has one canonical i
 | Set | `[…]` | A sorted array with no duplicates, ordered by `jsonb` order. Inner values are also canonical. |
 | Record | `{…}` | An object whose values are canonical |
 | decimal | `{"__extn":{"fn":"decimal","arg":"1.23"}}` | `{"__extn":{"fn":"decimal","v":12300}}`: the i64 value × 10^4 |
-| ipaddr | `{"__extn":{"fn":"ip","arg":"10.0.0.1/24"}}` | `{"__extn":{"fn":"ip","v":"10.0.0.1/24"}}`: the `inet` text, so equality keeps the host bits and the prefix length |
+| ipaddr | `{"__extn":{"fn":"ip","arg":"10.0.0.1/24"}}` | `{"__extn":{"fn":"ip","v":"10.0.0.1/24"}}`: the `inet` text with the prefix length always written (`10.0.0.1/32` for `ip("10.0.0.1")`), so equality keeps the host bits and the prefix length |
 | datetime | `{"__extn":{"fn":"datetime","arg":"2024-01-01T00:00:00Z"}}` | `{"__extn":{"fn":"datetime","v":1704067200000}}`: i64 milliseconds since the epoch |
 | duration | `{"__extn":{"fn":"duration","arg":"1h30m"}}` | `{"__extn":{"fn":"duration","v":5400000}}`: i64 milliseconds |
 
 The rules are:
 
 - **Long and overflow.** `jsonb` numbers have arbitrary precision, so a Long stays a JSON number and is never a string. Input is checked when an entity or context is put: the value must be an integral number in the i64 range. The check uses `scale(v::numeric) = 0`, so `1.0` is rejected. Cedar also rejects `1.0`. `jsonb` turns `1e3` into `1000` before the check sees it, so `1e3` is accepted. This is a divergence. `+`, `-`, `*` and `neg` compute in `numeric` and then compare the result with the i64 bounds. Out of range, the result is an `overflow` error value. A `bigint` operation would raise an exception, and an exception means a subtransaction in the hot path.
-- **datetime and duration** are i64 milliseconds, as in Cedar (RFC 80). They are not `timestamptz`. `offset` can leave the range of `timestamptz`, which Cedar allows until the i64 limit. A datetime is converted to `timestamptz` only for parsing and for `toDate` and `toTime`. The CEL helpers of phase 1 parse the text forms.
-- **ipaddr.** The text is the canonical `inet` text. `isInRange`, `isLoopback` and the other methods use `inet` operators. The constructor accepts what Cedar's `ip()` grammar accepts, and the corpus judges the details. The CEL helper of phase 1 rejects IPv6 zones, so phase 4a must check that Cedar does the same.
+- **datetime and duration** are i64 milliseconds, as in Cedar (RFC 80). They are not `timestamptz`. `offset` can leave the range of `timestamptz`, which Cedar allows until the i64 limit. Parsing, `toDate` and `toTime` are integer arithmetic on the milliseconds, with no `timestamptz` at all, because Cedar's years run from 0000. Cedar's own parsers read the text forms; the toolkit helpers follow Go and differ (section 14.2).
+- **ipaddr.** The text is the canonical `inet` text. `isInRange`, `isLoopback` and the other methods use `inet` operators. The constructor accepts exactly what Cedar's `ip()` accepts (section 14.2): no zones, and no IPv4 embedded in IPv6.
 - **Sets.** A set is canonicalized when it is built: in a literal at compile time, in data at put time, and in the context once for each request. Equality is then `jsonb` equality. Do not use `jsonb @>` for `contains`, because it matches records partially. `contains`, `containsAll` and `containsAny` compare whole elements in SQL.
 - **The escape ambiguity.** In this model, a record whose only key is `__entity` or `__extn` would read as an entity or an extension value. Cedar's own JSON format has the same ambiguity. Such a record can still come from a record literal in a policy, for example `{"__entity": …}`. The compiler rejects it with `cedar:unsupported`.
 - **The form of extension values.** Internal extension values have the key `v`, and the input form has the key `arg`. A value can therefore never be in the wrong form without an error. Input is converted once, when it is put or when the request starts. Output (`cedar_read_entities`) converts it back to the text form.
@@ -268,7 +268,7 @@ These rules are Cedar's. The corpus judges them.
 - **if-then-else.** The condition must be a Bool. Only the chosen branch is evaluated.
 - **Other operators** evaluate every operand from left to right. The first error is the result.
 - **`==` and `!=`** never give an error. Values of different types are not equal.
-- **Comparisons.** `<`, `<=`, `>` and `>=` need two Longs, two datetimes or two durations. Other types give a type error. The decimal comparisons are methods (`lessThan` and the others). Phase 4a checks against the corpus whether Cedar 4.14 also lets these operators compare decimals.
+- **Comparisons.** `<`, `<=`, `>` and `>=` need two Longs, two datetimes or two durations. Other types give a type error. The decimal comparisons are methods (`lessThan` and the others): Cedar 4.14 overloads the operators for datetime and duration only, so `decimal("1.0") < decimal("2.0")` is a type error.
 - **`in`.**
   - The left side must be an entity. The right side must be an entity or a set of entities.
   - `A in B` is true if `A == B` or if `B` is an ancestor of `A`.
@@ -479,6 +479,8 @@ The size of the suite matters. A run with `--phase all` writes 59 files and 76 M
 | Two concurrent puts can give a static policy and a template the same id (the check is not locked) | Ids live in two tables; a lock on every policy put is not worth it | None |
 | No function takes a whole policy set (section 13.3) | Ids by position are unstable under upserts | None: the oracle splits the corpus sets |
 | Error messages differ | Only the policy ids are compared | `cedar_test.authz` compares ids only |
+| `__extn` in entity data or the context with a bad value raises `invalid_entity` or `invalid_context` | Cedar also rejects the entities or the context, with its own error | `51_cedar_errors.sql`, `57_cedar_extensions.sql` |
+| `cedar_read_entities` writes extension values in their canonical text (`decimal` `"1.5000"`, `ip` `"10.0.0.1/32"`, `duration` `"5400000ms"`), not the text that was put | One canonical value (section 3) | `57_cedar_extensions.sql`: Cedar reads it back to the same values |
 | The limits of section 6 | The size of the work in PL/pgSQL | None in the corpus |
 
 ## 12. Phase 2 measurements
@@ -612,3 +614,80 @@ When a template is replaced, its links are filled again from the new template, i
 All three are in `SUITE`, so `test/run.sh` runs them (`71_`, `77_` and `76_cedar_oracle`). The six `SUITE` runs now write 102 files and 77 MB in about 4 seconds, and add about 60 seconds to a run of the suite (`test/spec/d/.gitignore` ignores `7[0-7]_cedar_oracle*.sql`). `--parse-est` replaces `wip/check_parser.sh`, the standalone parity check. The text oracle covers only the core features: the parser already handles the extension functions (the parse oracle covers them), but the compiler still refuses them until phases 4a and 4b.
 
 Parse cost. The largest corpus policy is 37,773 bytes of text after the U+0000 substitution (section 1.3). It parses in 12.2 ms, and `cedar_put_policy` with its text takes 17.6 ms; with its EST as `policy_json`, 5.2 ms.
+
+## 14. Phases 4a and 4b: the extension types
+
+Phases 4a and 4b added `decimal`, `ipaddr`, `datetime` and `duration`. Cedar 4.14's source (`cedar-policy-core`, `src/extensions/`) gave the rules, and the corpus and the Cedar 4.14 CLI (`cedar evaluate`, `cedar authorize`) judged them. Each expectation in `57_cedar_extensions.sql` was checked with the CLI first.
+
+### 14.1 Representations
+
+| Type | Internal `v` (section 3) | `cedar_read_entities` writes |
+| --- | --- | --- |
+| decimal | the i64 value × 10^4 | `"12.5000"`: four digits after the point |
+| ipaddr | the `inet` text with the prefix length always written; IPv6 always in hex groups | the same text, `"10.0.0.1/32"` |
+| datetime | i64 milliseconds since the epoch | `"2024-10-15T09:35:00.000Z"`; outside the years 0000 to 9999, Cedar's own form, `{"fn": "offset", "args": [datetime("1970-01-01"), duration("<ms>ms")]}` |
+| duration | i64 milliseconds | `"5400000ms"`, as Cedar prints it |
+
+- **The JSON form.** `{"__extn": {"fn", "arg"}}` and `{"__extn": {"fn", "args": [...]}}` are read in entity data, tags, the context and the request overlay. As in Cedar, `fn` can be any extension function, applied to its arguments: `{"fn": "toDate", "arg": {"__extn": ...}}` holds a datetime. The function must be named as in a policy: `ip`, not `ipaddr`. The corpus uses only `{"fn", "arg"}` with the four constructors. A value Cedar would fail to build raises `invalid_entity` or `invalid_context`, with Cedar's message and a hint that shows the form.
+- **The output.** Every value has one canonical text, so the output can differ from the text that was put (`"1.5"` comes back as `"1.5000"`). The Cedar 4.14 CLI reads `cedar_read_entities` output back to the same values (`cedar authorize` with a policy that compares each one), and a put of the output changes nothing.
+- **Compile time.** Cedar checks a constructor's string only when it evaluates the call: `true || decimal("x") == decimal("1.0")` is allowed. So the compiler folds `decimal("1.50")` into a literal and keeps `decimal("x")` as a call, which errs when it is evaluated. A `Value` in the EST that holds an `__extn` Cedar cannot build is compiled the same way, as a call. The arity is checked at evaluation too, after the arguments, as Cedar does.
+- **Evaluation.** One `call` node, evaluated by `_cedar_call`: the arguments left to right, then the arity, then the types, then the function. `<`, `<=`, `>` and `>=` compare two datetimes or two durations by their milliseconds.
+
+### 14.2 Cedar's semantics, and where they differ from the toolkit helpers
+
+The toolkit helpers `_ip_canon`, `_ts_canon` and `_duration_ns` follow Go for FGA's CEL conditions, so Cedar has its own parsers (`_cedar_ip`, `_cedar_datetime`, `_cedar_duration`, `_cedar_decimal`). The helpers are unchanged.
+
+| | Cedar 4.14 | The toolkit helper (Go) |
+| --- | --- | --- |
+| ipaddr: IPv4-mapped IPv6 | `::ffff:a00:1` is an IPv6 address: `isIpv6()`, not equal to `ip("10.0.0.1")`, and `::ffff:7f00:1` is not loopback | `_ip_canon` unmaps it to the IPv4 address |
+| ipaddr: IPv4 in dotted form inside IPv6 | rejected: any text with two colons and two dots (`::ffff:1.2.3.4`, `::1.2.3.4`) | accepted |
+| ipaddr: CIDR | `/prefix` in decimal, no leading zeros, at most 2 (IPv4) or 3 (IPv6) characters, at most 32 or 128; the host bits are kept and count for `==` | `_ip_canon` takes addresses only |
+| ipaddr: other | no leading zeros in an octet, no zone (`%eth0`), no brackets, at most 43 bytes; `::` may stand for one group | the same, except the length |
+| datetime: format | `YYYY-MM-DD`, or with `Thh:mm:ss`, an optional `.SSS` (exactly 3 digits), and `Z` or `+hhmm` / `-hhmm` (no colon; hh < 24, mm < 60) | RFC 3339 as Go reads it: seconds required, any fraction, `Z` or `+hh:mm` |
+| datetime: range | years 0000 to 9999 (proleptic Gregorian, year 0 a leap year); no leap second; `offset` reaches the full i64 range of milliseconds | years from 0001, through `timestamptz` |
+| duration: format | integers with units `d`, `h`, `m`, `s`, `ms`, in that order, each at most once, an optional leading `-`; `0` alone, `+`, fractions and other units are invalid | Go's: `ns`, `us`, `µs`, fractions, any order, `0` |
+| duration: unit | milliseconds | nanoseconds |
+
+Other behaviour that the corpus or the CLI confirmed:
+
+- **`isInRange` takes exactly one range.** Cedar's source declares it variadic, but only behind the experimental feature `variadic-is-in-range`, which a release build does not enable. Eight corpus cases pass more than one range and expect the arity error.
+- **The operators.** `<` and the others work on datetimes and durations (Cedar's `supports_operator_overloading`), not on decimals or ipaddrs. Mixed types are a type error, and `==` across types is false.
+- **`isLoopback` and `isMulticast`** look at the address and need a prefix at least as long as the range: `ip("127.0.0.1/7").isLoopback()` is false, and so is `ip("::1/127").isLoopback()`.
+- **The conversions truncate toward zero**, as Rust's `/`: `duration("-1999ms").toSeconds() == -1` and `duration("-23h59m").toDays() == 0`. `toTime` is the Euclidean remainder of a day, so a datetime before 1970 has a positive time of day, and `toDate` subtracts it. `toDate` of the smallest datetime overflows, as do `offset` and `durationSince` beyond i64; each overflow is an `extension_error`.
+- **decimal** reads `-?digits.digits`, with 1 to 4 digits after the point, leading zeros allowed, no `+`, within -922337203685477.5808 and 922337203685477.5807. `decimal("-0.0") == decimal("0.0")`.
+
+Beyond the corpus, about 130 constructor strings at these edges were run through the CLI and through the new parsers, with no difference.
+
+### 14.3 Oracle
+
+| Run | Assertions | Result |
+| --- | --- | --- |
+| `--phase 2 --features decimal,ipaddr,datetime,duration` (json, stored) | 45,494 requests: the whole corpus | all pass |
+| the same, `--mode overlay` | 31,872 | all pass |
+| the same, `--reduce-parents` | 11,976 | all pass |
+| `--phase 3 --features decimal,ipaddr,datetime,duration` (text, `--check-est`) | 45,492 requests and 5,708 stored ESTs | all pass |
+| `--format text --parse-est` | 5,713 | all pass |
+| `--phase 4c --features all` (`--templatize`) | 19,156 | all pass |
+
+`skip.tsv` has no entries. These six runs are the `SUITE` of `generate.py`, so `test/run.sh` runs them.
+
+### 14.4 Cost
+
+`_cedar_eval` on one compiled condition, with the values in the context, best of 5 runs of 20,000 (PostgreSQL 16.4, Apple silicon):
+
+| Condition | µs |
+| --- | --- |
+| `context.n > 3` (Long, for comparison) | 2.7 |
+| `context.t < datetime("2025-01-01")` (folded constructor, operator) | 2.9 |
+| `context.d.greaterThan(decimal("1.5"))` | 4.8 |
+| `context.ip.isInRange(ip("10.0.0.0/8"))` | 4.6 |
+| `context.u.toMinutes() == 90` | 5.4 |
+| `context.t.toTime() == duration("12h")` | 6.1 |
+| `context.t.offset(context.u) > datetime("2024-06-01")` | 8.6 |
+| `ip(context.s).isInRange(ip("10.0.0.0/8"))` (the constructor at run time) | 10.9 |
+
+A method call costs about 2 µs over an operator, and a constructor that is not folded about 6 µs. Converting one value of the context or the overlay costs about 8 µs for a Long, and 10 to 20 µs more for an extension value: decimal 17.7, ipaddr 16.4, duration 20.2 and datetime 28.6 µs. Stored entity data is converted once, when it is put.
+
+### 14.5 The size of the suite
+
+The six runs write 190 files and 197 MB in about 9 seconds. The whole suite went from about 85 to about 163 seconds on Apple silicon (`test/run.sh` uses 17% of the CPU: it runs one file at a time). That is under the 3 minutes at which a faster default was to be built. The cheapest next step is to run the spec files in parallel in `test/run.sh`, each already in its own database; a sampled default with `--full` for CI is the alternative.

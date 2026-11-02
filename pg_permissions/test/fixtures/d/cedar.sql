@@ -43,6 +43,25 @@ begin
 end;
 $$;
 
+-- The same for a condition in Cedar text: permit (principal, action,
+-- resource) when { <p_when> };
+create function cedar_t.eval_text(p_when text, p_context jsonb default null, p_entities jsonb default null)
+returns text
+language plpgsql
+as $$
+declare
+    r jsonb;
+begin
+    perform permissions.cedar_put_policy(policy_id => 'e', policy => 'permit (principal, action, resource) when { ' || p_when || ' };');
+    r := permissions.cedar_is_authorized(principal => 'User::"alice"', action => 'Action::"view"', resource => 'Doc::"d1"',
+                                         context => p_context, entities => p_entities);
+    perform permissions.cedar_delete_policy(policy_id => 'e');
+    return case when jsonb_array_length(r -> 'errors') > 0 then 'error: ' || (r #>> '{errors,0,message}')
+                when r ->> 'decision' = 'allow' then 'true'
+                else 'false' end;
+end;
+$$;
+
 -- The decision, the reasons and the policy ids of the errors, as one line:
 -- 'allow [p1, p2] errors []'.
 create function cedar_t.authz(p_principal text, p_action text, p_resource text,

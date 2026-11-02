@@ -964,16 +964,15 @@ as $$
     select case jsonb_typeof(v)
         when 'boolean' then 'Bool' when 'number' then 'Long' when 'string' then 'String' when 'array' then 'Set'
         when 'object' then case when v ? '__entity' then 'Entity'
-                                when v ? '__extn' then coalesce(v -> '__extn' ->> 'fn', 'extension')
+                                when v ? '__extn' then case v -> '__extn' ->> 'fn' when 'ip' then 'ipaddr'
+                                                       else coalesce(v -> '__extn' ->> 'fn', 'extension') end
                                 else 'Record' end
         else 'no value' end
 $$;
 
 -- The extension functions and methods of Cedar 4.x, and the extension type
--- each belongs to. None is implemented yet: the phases of research/plan-cedar.md
--- add decimal and ipaddr (4a), datetime and duration (4b). The compiler
--- rejects them until then (cedar:unsupported), and an unknown name gets the
--- nearest of these (cedar:invalid_policy).
+-- each belongs to: for a method, the type of its receiver. An unknown name
+-- gets the nearest of these (cedar:invalid_policy).
 create function permissions._cedar_extensions()
 returns jsonb
 language sql immutable
@@ -996,6 +995,252 @@ as $$
     select coalesce(jsonb_agg(x order by x), '[]') from (select distinct x from jsonb_array_elements(p_items) x) d
 $$;
 
+-- ----------------------------------------------------------------------------
+-- Extension types: decimal, ipaddr, datetime, duration (e-cedar.md section 14)
+-- ----------------------------------------------------------------------------
+-- An extension value is {"__extn": {"fn": F, "v": V}} internally, one
+-- canonical V per value, so Cedar == stays jsonb equality:
+--
+--   decimal   F "decimal", V the i64 value times 10^4 (decimal("1.0") ==
+--             decimal("1.0000"))
+--   ipaddr    F "ip", V the inet text with the prefix length always
+--             written, as Cedar prints it: "10.0.0.1/32" for ip("10.0.0.1"),
+--             host bits kept ("10.0.0.1/24" <> "10.0.0.0/24"), IPv6 always
+--             in hex groups
+--   datetime  F "datetime", V i64 milliseconds since the Unix epoch
+--   duration  F "duration", V i64 milliseconds
+--
+-- Entity and context JSON write them as {"__extn": {"fn", "arg": "<text>"}}
+-- (Cedar's form); _cedar_value_in converts on input and _cedar_value_out on
+-- output. The parsers below follow Cedar 4.14's own (cedar-policy-core,
+-- src/extensions/), not the toolkit's _ip_canon, _ts_canon and _duration_ns,
+-- which follow Go for FGA: each returns null for text Cedar rejects.
+
+-- Cedar's decimal("…"): -?digits.digits, 1 to 4 digits after the point,
+-- within i64 / 10^4. The value times 10^4, or null.
+create function permissions._cedar_decimal(s text)
+returns bigint
+language plpgsql immutable
+as $$
+declare
+    m text[] := regexp_match(s, '^(-?)([0-9]+)\.([0-9]{1,4})$');
+    v numeric;
+begin
+    if m is null then
+        return null;
+    end if;
+    v := (m[2]::numeric * 10000 + rpad(m[3], 4, '0')::numeric) * case when m[1] = '-' then -1 else 1 end;
+    if v not between -9223372036854775808 and 9223372036854775807 then
+        return null;
+    end if;
+    return v;
+end;
+$$;
+
+-- Cedar's ip("…"): an IPv4 address (four decimal octets, no leading zeros)
+-- or an IPv6 address in hex groups (Rust's std parser), with an optional
+-- /prefix (decimal, no leading zeros, at most 32 or 128). At most 43 bytes.
+-- No zone (%eth0), and no IPv4 embedded in IPv6: Cedar rejects any text with
+-- two colons and two dots (::ffff:1.2.3.4); ::ffff:102:304 is an IPv6
+-- address. The canonical text (see above), or null.
+create function permissions._cedar_ip(s text)
+returns text
+language plpgsql immutable
+as $$
+declare
+    i int := strpos(s, '/');
+    a text := case when i > 0 then left(s, i - 1) else s end;
+    p text := case when i > 0 then substr(s, i + 1) end;
+    v6 boolean;
+    t text;
+    m text[];
+begin
+    if octet_length(s) > 43 or (s ~ ':.*:' and s ~ '\..*\.') then
+        return null;
+    end if;
+    if a ~ '^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$' then
+        v6 := false;
+    elsif a ~ '^[0-9a-fA-F]{1,4}(:[0-9a-fA-F]{1,4}){7}$'
+          or (a ~ '^(([0-9a-fA-F]{1,4}:)*[0-9a-fA-F]{1,4})?::(([0-9a-fA-F]{1,4}:)*[0-9a-fA-F]{1,4})?$'
+              and (select count(*) from regexp_matches(a, '[0-9a-fA-F]+', 'g') g) <= 7) then
+        v6 := true;
+    else
+        return null;
+    end if;
+    if p is not null and (p !~ '^(0|[1-9][0-9]{0,2})$' or p::int > (case when v6 then 128 else 32 end)) then
+        return null;
+    end if;
+    t := (a || coalesce('/' || p, ''))::inet::text;
+    -- Postgres prints ::ffff:a.b.c.d and ::a.b.c.d with an IPv4 tail, which
+    -- Cedar would not read back: write the tail as two hex groups
+    if v6 and strpos(t, '.') > 0 then
+        m := regexp_match(t, '^(.*:)([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+)(/[0-9]+)?$');
+        t := m[1] || to_hex(m[2]::int * 256 + m[3]::int) || ':' || to_hex(m[4]::int * 256 + m[5]::int) || coalesce(m[6], '');
+    end if;
+    return t;
+end;
+$$;
+
+-- Cedar's datetime("…") (RFC 80): YYYY-MM-DD, optionally followed by
+-- Thh:mm:ss, an optional .SSS, and Z or an offset +hhmm / -hhmm (hh < 24,
+-- mm < 60). Years 0000 to 9999 of the proleptic Gregorian calendar; no leap
+-- second. Milliseconds since the Unix epoch, or null.
+create function permissions._cedar_datetime(s text)
+returns bigint
+language plpgsql immutable
+as $$
+declare
+    m text[] := regexp_match(s, '^([0-9]{4})-([0-9]{2})-([0-9]{2})(?:T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]{3}))?(?:Z|([+-])([0-9]{2})([0-9]{2})))?$');
+    y int;
+    mo int;
+    d int;
+    era int;
+    yoe int;
+    doe int;
+begin
+    if m is null then
+        return null;
+    end if;
+    y := m[1]::int;
+    mo := m[2]::int;
+    d := m[3]::int;
+    if mo not between 1 and 12 or d < 1
+       or d > (case when mo = 2 then (case when y % 4 = 0 and (y % 100 <> 0 or y % 400 = 0) then 29 else 28 end)
+                    when mo in (4, 6, 9, 11) then 30 else 31 end)
+       or coalesce(m[4]::int > 23 or m[5]::int > 59 or m[6]::int > 59, false)
+       or coalesce(m[9]::int > 23 or m[10]::int > 59, false) then
+        return null;
+    end if;
+    -- days from 1970-01-01 (H. Hinnant's days_from_civil)
+    y := y - (mo <= 2)::int;
+    era := (case when y >= 0 then y else y - 399 end) / 400;
+    yoe := y - era * 400;
+    doe := yoe * 365 + yoe / 4 - yoe / 100 + (153 * (mo + case when mo > 2 then -3 else 9 end) + 2) / 5 + d - 1;
+    return (era * 146097 + doe - 719468)::bigint * 86400000
+           + coalesce(m[4]::bigint * 3600000 + m[5]::bigint * 60000 + m[6]::bigint * 1000, 0) + coalesce(m[7]::bigint, 0)
+           - coalesce(case m[8] when '+' then 1 else -1 end * (m[9]::bigint * 3600000 + m[10]::bigint * 60000), 0);
+end;
+$$;
+
+-- Cedar's duration("…") (RFC 80): an optional -, then quantity-unit pairs in
+-- the order d, h, m, s, ms, each at most once, at least one ("1d2h3m4s5ms",
+-- "-90m"). Milliseconds, or null (also beyond i64).
+create function permissions._cedar_duration(s text)
+returns bigint
+language plpgsql immutable
+as $$
+declare
+    m text[] := regexp_match(s, '^(-?)(?:([0-9]+)d)?(?:([0-9]+)h)?(?:([0-9]+)m)?(?:([0-9]+)s)?(?:([0-9]+)ms)?$');
+    v numeric;
+begin
+    if m is null or s = '' or s = '-' then
+        return null;
+    end if;
+    v := coalesce(m[2]::numeric * 86400000, 0) + coalesce(m[3]::numeric * 3600000, 0) + coalesce(m[4]::numeric * 60000, 0)
+         + coalesce(m[5]::numeric * 1000, 0) + coalesce(m[6]::numeric, 0);
+    if m[1] = '-' then
+        v := -v;
+    end if;
+    if v not between -9223372036854775808 and 9223372036854775807 then
+        return null;
+    end if;
+    return v;
+end;
+$$;
+
+-- An extension value from its constructor and text: fn is decimal, ip,
+-- datetime or duration. The internal value, or null when Cedar's
+-- constructor would fail.
+create function permissions._cedar_extn(fn text, arg text)
+returns jsonb
+language plpgsql immutable
+as $$
+declare
+    v jsonb := case fn when 'decimal' then to_jsonb(permissions._cedar_decimal(arg))
+                       when 'ip' then to_jsonb(permissions._cedar_ip(arg))
+                       when 'datetime' then to_jsonb(permissions._cedar_datetime(arg))
+                       when 'duration' then to_jsonb(permissions._cedar_duration(arg)) end;
+begin
+    if v is null then
+        return null;
+    end if;
+    return jsonb_build_object('__extn', jsonb_build_object('fn', fn, 'v', v));
+end;
+$$;
+
+-- What a constructor accepts, for messages and hints.
+create function permissions._cedar_extn_help(fn text)
+returns text
+language sql immutable
+as $$
+    select case fn
+        when 'decimal' then 'a decimal has digits on both sides of the point, at most 4 after it, and lies within -922337203685477.5808 and 922337203685477.5807, like "12.34"'
+        when 'ip' then 'an ipaddr is an IPv4 or IPv6 address with an optional CIDR prefix, like "10.0.0.1", "10.0.0.0/8" or "ffee::/64", with no leading zeros, no zone and no IPv4 embedded in IPv6'
+        when 'datetime' then 'a datetime is "YYYY-MM-DD", optionally followed by "Thh:mm:ss", an optional ".SSS", and "Z" or an offset "+hhmm" or "-hhmm", like "2024-10-15T11:35:00Z"'
+        when 'duration' then 'a duration is quantity-unit pairs in the order d, h, m, s, ms with an optional leading "-", like "1d2h3m4s5ms", within the 64-bit range of milliseconds'
+        else 'the constructors are decimal, ip, datetime and duration' end
+$$;
+
+-- A datetime as text, YYYY-MM-DDThh:mm:ss.SSSZ, or null outside the years
+-- 0000 to 9999 (which only offset reaches; H. Hinnant's civil_from_days).
+create function permissions._cedar_datetime_text(ms bigint)
+returns text
+language plpgsql immutable
+as $$
+declare
+    tod bigint := mod(mod(ms, 86400000) + 86400000, 86400000);
+    days bigint := div(ms::numeric - tod, 86400000);
+    z bigint := days + 719468;
+    era bigint := (case when z >= 0 then z else z - 146096 end) / 146097;
+    doe bigint := z - era * 146097;
+    yoe bigint := (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    doy bigint := doe - (365 * yoe + yoe / 4 - yoe / 100);
+    mp bigint := (5 * doy + 2) / 153;
+    mo bigint := case when mp < 10 then mp + 3 else mp - 9 end;
+    y bigint := yoe + era * 400 + (mo <= 2)::int;
+begin
+    if y not between 0 and 9999 then
+        return null;
+    end if;
+    return format('%s-%s-%sT%s:%s:%s.%sZ', lpad(y::text, 4, '0'), lpad(mo::text, 2, '0'), lpad((doy - (153 * mp + 2) / 5 + 1)::text, 2, '0'),
+                  lpad((tod / 3600000)::text, 2, '0'), lpad((tod / 60000 % 60)::text, 2, '0'), lpad((tod / 1000 % 60)::text, 2, '0'),
+                  lpad((tod % 1000)::text, 3, '0'));
+end;
+$$;
+
+-- An internal extension value in Cedar's JSON form: {"__extn": {"fn", "arg"}}
+-- with the canonical text (decimal "1.2300", ip "10.0.0.1/32", datetime
+-- "2024-01-01T00:00:00.000Z", duration "5400000ms"). A datetime outside the
+-- years 0000 to 9999 is Cedar's own form for it, offset(datetime("1970-01-01"),
+-- duration("<ms>ms")), which _cedar_value_in reads back.
+create function permissions._cedar_extn_out(v jsonb)
+returns jsonb
+language plpgsql immutable
+as $$
+declare
+    fn text := v -> '__extn' ->> 'fn';
+    x jsonb := v -> '__extn' -> 'v';
+    t text;
+begin
+    if fn = 'decimal' then
+        t := case when x::text::numeric < 0 then '-' else '' end || div(abs(x::text::numeric), 10000)::text
+             || '.' || lpad(mod(abs(x::text::numeric), 10000)::text, 4, '0');
+    elsif fn = 'ip' then
+        t := x #>> '{}';
+    elsif fn = 'duration' then
+        t := x::text || 'ms';
+    else
+        t := permissions._cedar_datetime_text(x::text::bigint);
+        if t is null then
+            return jsonb_build_object('__extn', jsonb_build_object('fn', 'offset', 'args', jsonb_build_array(
+                jsonb_build_object('__extn', jsonb_build_object('fn', 'datetime', 'arg', '1970-01-01')),
+                jsonb_build_object('__extn', jsonb_build_object('fn', 'duration', 'arg', x::text || 'ms')))));
+        end if;
+    end if;
+    return jsonb_build_object('__extn', jsonb_build_object('fn', fn, 'arg', t));
+end;
+$$;
+
 -- A Cedar JSON value (entity attrs and tags, context, an EST Value) in the
 -- internal form, or an error: code is invalid, unsupported or limit, and err
 -- says what and where (p_path, a JSON path).
@@ -1011,6 +1256,8 @@ declare
     acc jsonb;
     i int;
     fn text;
+    w jsonb;
+    vals jsonb[];
 begin
     if t in ('boolean', 'string') then
         val := v;
@@ -1062,22 +1309,55 @@ begin
         val := jsonb_build_object('__entity', jsonb_build_object('type', u.type, 'id', u.id));
         return;
     elsif v ? '__extn' then
-        if (select count(*) from jsonb_object_keys(v)) <> 1 or jsonb_typeof(v -> '__extn') <> 'object'
-           or jsonb_typeof(v -> '__extn' -> 'fn') <> 'string' then
+        -- Cedar's {"fn", "arg"}, or {"fn", "args": [...]} (its own output
+        -- for a datetime is offset(datetime(...), duration(...)) in that form);
+        -- the arguments are values too
+        w := v -> '__extn';
+        if (select count(*) from jsonb_object_keys(v)) <> 1 or jsonb_typeof(w) <> 'object'
+           or jsonb_typeof(w -> 'fn') is distinct from 'string' or w - '{fn,arg,args}'::text[] <> '{}'
+           or (w ? 'arg') = (w ? 'args') or (w ? 'args' and jsonb_typeof(w -> 'args') <> 'array') then
             code := 'invalid';
             err := format('%s: an extension value is {"__extn": {"fn": "<function>", "arg": "<text>"}}, got %s', p_path, v);
             return;
         end if;
-        fn := v -> '__extn' ->> 'fn';
+        fn := w ->> 'fn';
         if not permissions._cedar_extensions() ? fn then
             code := 'invalid';
             err := format('%s: unknown extension function ''%s''', p_path, fn);
             return;
         end if;
-        -- Phases 4a and 4b convert {"fn", "arg"} to the internal {"fn", "v"}.
-        code := 'unsupported';
-        err := format('%s: the %s extension type is not supported yet (extension value %s)',
-                      p_path, permissions._cedar_extensions() ->> fn, v);
+        -- Cedar applies the function to the arguments (each a value, a
+        -- constructor's a string) as it would in a policy: decimal, ip,
+        -- datetime and duration, but also offset or toDate. An error there
+        -- is an invalid value.
+        if fn in ('decimal', 'ip', 'datetime', 'duration') and jsonb_typeof(w -> 'arg') = 'string' then
+            -- the common case, without the general call
+            val := permissions._cedar_extn(fn, w ->> 'arg');
+            if val is not null then
+                return;
+            end if;
+        end if;
+        acc := case when w ? 'arg' then jsonb_build_array(w -> 'arg') else w -> 'args' end;
+        for i in 0 .. jsonb_array_length(acc) - 1 loop
+            select * into x from permissions._cedar_value_in(acc -> i, p_path || '.__extn.' || case when w ? 'arg' then 'arg' else 'args[' || i || ']' end,
+                                                             p_depth + 1) r;
+            if x.code is not null then
+                code := x.code;
+                err := x.err;
+                return;
+            end if;
+            vals := vals || x.val;
+        end loop;
+        val := permissions._cedar_call(fn, vals, false);
+        if val is null then
+            code := 'extension';
+            begin
+                perform permissions._cedar_call(fn, vals, true);
+            exception when sqlstate 'CE001' then
+                err := format('%s: %s', p_path, sqlerrm);
+            end;
+            return;
+        end if;
         return;
     end if;
     -- a record: Bools and Strings stay as they are; everything else is
@@ -1098,14 +1378,22 @@ begin
 end;
 $$;
 
--- An internal value in Cedar's JSON form (cedar_read_entities). Every value
--- of phase 2 is already in that form; extension values (phase 4) go back to
--- {"__extn": {"fn", "arg"}} here.
+-- An internal value in Cedar's JSON form (cedar_read_entities): the same
+-- value, with each extension value back in {"__extn": {"fn", "arg"}}.
 create function permissions._cedar_value_out(v jsonb)
 returns jsonb
-language sql immutable
+language plpgsql immutable
 as $$
-    select v
+begin
+    if strpos(v::text, '"__extn"') = 0 then
+        return v;
+    elsif jsonb_typeof(v) = 'array' then
+        return (select jsonb_agg(permissions._cedar_value_out(e) order by o) from jsonb_array_elements(v) with ordinality t(e, o));
+    elsif v ? '__extn' then
+        return permissions._cedar_extn_out(v);
+    end if;
+    return (select jsonb_object_agg(e.key, permissions._cedar_value_out(e.value)) from jsonb_each(v) e);
+end;
 $$;
 
 -- One entity of Cedar entity JSON ({"uid", "attrs", "parents", "tags"}),
@@ -1187,8 +1475,7 @@ $$;
 -- Cedar entity JSON (an array of entities), checked and in internal form:
 -- [{"t", "i", "attrs", "tags", "parents": [[type, id], ...]}]. p_arg names
 -- the argument for the messages and p_max is the limit on the number of
--- entities. Raises cedar:invalid_entity, cedar:unsupported or
--- cedar:limit_exceeded at the first bad entity.
+-- entities. Raises cedar:invalid_entity or cedar:limit_exceeded at the first bad entity.
 create function permissions._cedar_entities_in(p_entities jsonb, p_arg text, p_max int)
 returns jsonb
 language plpgsql stable
@@ -1220,14 +1507,38 @@ begin
             return coalesce(res, '[]');
         end if;
     end if;
-    perform permissions._cedar_error(case r ->> 'code' when 'limit' then 'limit_exceeded' when 'unsupported' then 'unsupported' else 'invalid_entity' end,
+    perform permissions._cedar_error(case r ->> 'code' when 'limit' then 'limit_exceeded' else 'invalid_entity' end,
         format('invalid entity at index %s of %s: %s', r ->> 'n', p_arg, r ->> 'err'),
         hint => case r ->> 'code'
             when 'limit' then format('An argument holds at most %s entities, and sets and records in attributes and tags nest at most %s levels.',
                                      p_max, (permissions._cedar_limits()).value_depth)
-            when 'unsupported' then 'Extension values (decimal, ipaddr, datetime, duration) arrive in a later phase of research/plan-cedar.md; store the value as a String for now.'
+            when 'extension' then 'Write an extension value as {"__extn": {"fn": "decimal", "arg": "12.34"}}, with fn one of decimal, ip, datetime and duration and an arg its constructor accepts: decimal("12.34"), ip("10.0.0.0/8"), datetime("2024-10-15T11:35:00Z"), duration("1h30m").'
             else 'Each entity is {"uid": {"type": "User", "id": "alice"}, "attrs": {...}, "parents": [{"type": "Group", "id": "staff"}], "tags": {...}}; write an entity reference in an attribute as {"__entity": {"type": "User", "id": "alice"}}.' end,
         p_detail => format('index=%s', r ->> 'n'));
+end;
+$$;
+
+-- A Cedar JSON value as an EST expression: each {"__extn": {"fn", "arg"}} a
+-- call of fn, each set a Set and each record a Record. The compiler uses it
+-- for a Value with an extension value that Cedar would fail to build, so the
+-- error happens when the call is evaluated, as in Cedar.
+create function permissions._cedar_value_expr(v jsonb)
+returns jsonb
+language plpgsql immutable
+as $$
+begin
+    return case
+        when jsonb_typeof(v) = 'array' then
+            jsonb_build_object('Set', coalesce((select jsonb_agg(permissions._cedar_value_expr(e) order by o)
+                                                from jsonb_array_elements(v) with ordinality t(e, o)), '[]'))
+        when jsonb_typeof(v) <> 'object' or v ? '__entity' then jsonb_build_object('Value', v)
+        when v ? '__extn' and jsonb_typeof(v -> '__extn') = 'object' and jsonb_typeof(v -> '__extn' -> 'fn') = 'string' then
+            jsonb_build_object(v -> '__extn' ->> 'fn',
+                               coalesce((select jsonb_agg(permissions._cedar_value_expr(e) order by o)
+                                         from jsonb_array_elements(case when v -> '__extn' ? 'arg' then jsonb_build_array(v -> '__extn' -> 'arg')
+                                                                        else v -> '__extn' -> 'args' end) with ordinality t(e, o)), '[]'))
+        else jsonb_build_object('Record', coalesce((select jsonb_object_agg(e.key, permissions._cedar_value_expr(e.value)) from jsonb_each(v) e), '{}'))
+    end;
 end;
 $$;
 
@@ -1247,7 +1558,8 @@ $$;
 --   {"k":"is","a":x,"t":"Type"}        with "in":y for `is ... in`
 --   {"k":"like","a":x,"p":"<SQL LIKE pattern, \ escapes>"}
 --   {"k":"set","a":[x,...]}, {"k":"rec","a":{"key":x,...}}
---   {"k":"call","f":"name","a":[x,...]}  an extension function or method (phase 4)
+--   {"k":"call","f":"name","a":[x,...]}  an extension function or method (receiver first);
+--                                      a constructor of a valid string literal is a lit
 --
 -- The conditions of a policy are one chain of "and" in source order, with
 -- `unless c` as not(c). The scope is not in the ast: it goes to the scope
@@ -1334,8 +1646,12 @@ begin
 
     if op = 'Value' then
         select * into v from permissions._cedar_value_in(a, 'value', 1) r;
-        if v.code is not null then
-            return jsonb_build_object('code', case v.code when 'limit' then 'limit_exceeded' when 'unsupported' then 'unsupported' else 'invalid_policy' end,
+        if v.code = 'extension' then
+            -- an extension value Cedar would fail to build: as in Cedar, a
+            -- call that errs when it is evaluated
+            return permissions._cedar_compile(permissions._cedar_value_expr(a), p_path, p_depth);
+        elsif v.code is not null then
+            return jsonb_build_object('code', case v.code when 'limit' then 'limit_exceeded' else 'invalid_policy' end,
                                       'path', p_path, 'err', v.err);
         end if;
         return jsonb_build_object('ast', jsonb_build_object('k', 'lit', 'v', v.val), 'n', 1);
@@ -1455,15 +1771,30 @@ begin
         return jsonb_build_object('ast', jsonb_build_object('k', 'rec', 'a', acc), 'n', n);
     elsif jsonb_typeof(a) = 'array' then
         -- an extension function or method: {"name": [receiver, args...]}
-        if permissions._cedar_extensions() ? op then
-            return jsonb_build_object('code', 'unsupported', 'path', p_path,
-                                      'err', format('the %s extension (function %s) is not supported yet', permissions._cedar_extensions() ->> op, op),
-                                      'feature', permissions._cedar_extensions() ->> op);
+        if not permissions._cedar_extensions() ? op then
+            return jsonb_build_object('code', 'invalid_policy', 'path', p_path,
+                                      'err', format('unknown extension function ''%s''', op),
+                                      'hint', permissions._did_you_mean(op, array(select jsonb_object_keys(permissions._cedar_extensions())),
+                                                                        'Extension functions'));
         end if;
-        return jsonb_build_object('code', 'invalid_policy', 'path', p_path,
-                                  'err', format('unknown extension function ''%s''', op),
-                                  'hint', permissions._did_you_mean(op, array(select jsonb_object_keys(permissions._cedar_extensions())),
-                                                                    'Extension functions'));
+        acc := '[]';
+        for i in 0 .. jsonb_array_length(a) - 1 loop
+            x := permissions._cedar_compile(a -> i, p_path || '[' || i || ']', p_depth + 1);
+            if x ? 'code' then return x; end if;
+            acc := acc || jsonb_build_array(x -> 'ast');
+            n := n + (x ->> 'n')::int;
+        end loop;
+        -- A constructor of a valid string literal is folded into its value.
+        -- Cedar checks the string only when it evaluates the call, so an
+        -- invalid one stays a call and errs then (the arity, too).
+        if op in ('decimal', 'ip', 'datetime', 'duration') and jsonb_array_length(acc) = 1
+           and acc #>> '{0,k}' = 'lit' and jsonb_typeof(acc #> '{0,v}') = 'string' then
+            y := permissions._cedar_extn(op, acc #>> '{0,v}');
+            if y is not null then
+                return jsonb_build_object('ast', jsonb_build_object('k', 'lit', 'v', y), 'n', n);
+            end if;
+        end if;
+        return jsonb_build_object('ast', jsonb_build_object('k', 'call', 'f', op, 'a', acc), 'n', n);
     end if;
     return jsonb_build_object('code', 'invalid_policy', 'path', p_path,
                               'err', format('unknown expression kind ''%s''', op),
@@ -1653,7 +1984,7 @@ begin
             hint => coalesce(r ->> 'hint', case r ->> 'code'
                 when 'limit_exceeded' then format('Split the policy into smaller policies: a policy holds at most %s bytes, %s expression nodes and %s levels of nesting.',
                                                   lim.policy_bytes, lim.policy_nodes, lim.policy_depth)
-                when 'unsupported' then 'The extension types (decimal, ipaddr, datetime, duration) arrive in a later phase of research/plan-cedar.md.'
+                when 'unsupported' then 'Partial evaluation (Unknown) is not supported, and a record literal cannot have the key __entity or __extn, which Cedar''s JSON reserves for entity and extension values.'
                 else 'Pass the policy in Cedar''s JSON policy format, as `cedar translate-policy --direction cedar-to-json` prints it (https://docs.cedarpolicy.com/policies/json-format.html).' end),
             p_detail => case r ->> 'code'
                 when 'limit_exceeded' then format('limit=%L', coalesce(r ->> 'limit', 'policy_depth'))
@@ -2904,6 +3235,85 @@ begin
 end;
 $$;
 
+-- An extension function or method applied to its evaluated arguments (the
+-- receiver first): the value, or null for an error (Cedar's
+-- extension_error, wrong number of arguments, or type_error). The
+-- arguments are already evaluated, left to right, as Cedar does before it
+-- checks the arity and the types.
+create function permissions._cedar_call(f text, a jsonb[], why boolean)
+returns jsonb
+language plpgsql immutable
+as $$
+declare
+    n int := coalesce(cardinality(a), 0);
+    want int := case when f in ('decimal', 'ip', 'datetime', 'duration', 'isIpv4', 'isIpv6', 'isLoopback', 'isMulticast',
+                                'toDate', 'toTime', 'toMilliseconds', 'toSeconds', 'toMinutes', 'toHours', 'toDays') then 1 else 2 end;
+    t text := permissions._cedar_extensions() ->> f;
+    x numeric;
+    y numeric;
+    r numeric;
+    ip inet;
+    i int;
+begin
+    if n <> want then
+        return permissions._cedar_eval_fail(why, format('extension_error: wrong number of arguments to %s (a method counts its receiver): expected %s, got %s',
+                                                         f, want, n));
+    end if;
+    if f = t or f = 'ip' then
+        -- a constructor
+        if jsonb_typeof(a[1]) <> 'string' then
+            return permissions._cedar_eval_fail(why, format('type_error: %s: expected String, got %s', f, permissions._cedar_type_of(a[1])));
+        end if;
+        return coalesce(permissions._cedar_extn(f, a[1] #>> '{}'),
+                        permissions._cedar_eval_fail(why, format('extension_error: %s(%s) is not valid: %s', f, a[1], permissions._cedar_extn_help(f))));
+    end if;
+    -- a method: every argument has the receiver's type, except offset's
+    -- duration
+    for i in 1 .. n loop
+        if (a[i] -> '__extn' ->> 'fn') is distinct from (case when i > 1 and f = 'offset' then 'duration' when t = 'ipaddr' then 'ip' else t end) then
+            return permissions._cedar_eval_fail(why, format('type_error: %s: expected %s, got %s', f,
+                case when i > 1 and f = 'offset' then 'duration' else t end, permissions._cedar_type_of(a[i])));
+        end if;
+    end loop;
+    if t = 'ipaddr' then
+        ip := (a[1] #>> '{__extn,v}')::inet;
+        return to_jsonb(case f
+            when 'isIpv4' then family(ip) = 4
+            when 'isIpv6' then family(ip) = 6
+            -- the address in 127.0.0.0/8 or ::1, and a prefix at least as long
+            when 'isLoopback' then ip <<= '127.0.0.0/8'::inet or ip <<= '::1/128'::inet
+            when 'isMulticast' then ip <<= '224.0.0.0/4'::inet or ip <<= 'ff00::/8'::inet
+            -- isInRange: the range holds the receiver's whole range (false
+            -- across families)
+            else ip <<= (a[2] #>> '{__extn,v}')::inet end);
+    end if;
+    x := (a[1] #>> '{__extn,v}')::numeric;
+    y := (a[2] #>> '{__extn,v}')::numeric;
+    if f in ('lessThan', 'lessThanOrEqual', 'greaterThan', 'greaterThanOrEqual') then
+        return to_jsonb(case f when 'lessThan' then x < y when 'lessThanOrEqual' then x <= y
+                               when 'greaterThan' then x > y else x >= y end);
+    elsif f in ('toMilliseconds', 'toSeconds', 'toMinutes', 'toHours', 'toDays') then
+        -- truncated toward zero, as Rust's integer division
+        return to_jsonb(div(x, case f when 'toMilliseconds' then 1 when 'toSeconds' then 1000 when 'toMinutes' then 60000
+                                      when 'toHours' then 3600000 else 86400000 end));
+    end if;
+    -- toTime: the time of day, x mod a day (the Euclidean remainder: a
+    -- datetime before 1970 has a time of day >= 0); toDate: x minus it
+    r := mod(x, 86400000);
+    if r < 0 then
+        r := r + 86400000;
+    end if;
+    if f = 'toTime' then
+        return jsonb_build_object('__extn', jsonb_build_object('fn', 'duration', 'v', r));
+    end if;
+    r := case f when 'offset' then x + y when 'durationSince' then x - y else x - r end;
+    if r not between -9223372036854775808 and 9223372036854775807 then
+        return permissions._cedar_eval_fail(why, format('extension_error: %s overflows the 64-bit range of milliseconds', f));
+    end if;
+    return jsonb_build_object('__extn', jsonb_build_object('fn', case f when 'durationSince' then 'duration' else 'datetime' end, 'v', r));
+end;
+$$;
+
 -- One node of an ast over an environment: the value, or SQL null for an
 -- evaluation error (with why, the error raises instead: _cedar_eval_fail).
 -- Cedar's rules (e-cedar.md section 4.2): && and || evaluate the left side
@@ -3053,9 +3463,14 @@ begin
         end loop;
         return d;
     elsif k = 'call' then
-        -- Extension functions and methods (phases 4a and 4b). The compiler
-        -- does not emit this node yet.
-        return permissions._cedar_eval_fail(why, format('extension_error: %s is not supported', n ->> 'f'));
+        for x in select e from jsonb_array_elements(n -> 'a') e loop
+            y := permissions._cedar_eval(x, env, why);
+            if y is null then
+                return null;
+            end if;
+            vals := vals || y;
+        end loop;
+        return permissions._cedar_call(n ->> 'f', vals, why);
     end if;
 
     -- binary operators: both operands, left to right
@@ -3072,9 +3487,15 @@ begin
     elsif k = 'ne' then
         return to_jsonb(x <> y);
     elsif k in ('lt', 'le', 'gt', 'ge') then
-        -- Long only; datetime and duration (phase 4b) compare here too
-        if jsonb_typeof(x) <> 'number' or jsonb_typeof(y) <> 'number' then
-            return permissions._cedar_eval_fail(why, format('type_error: %s: expected two Longs, got %s and %s',
+        -- two Longs, two datetimes or two durations (Cedar's operator
+        -- overloading; decimals compare with their methods only)
+        if jsonb_typeof(x) = 'number' and jsonb_typeof(y) = 'number' then
+            null;
+        elsif (x -> '__extn' ->> 'fn') in ('datetime', 'duration') and x -> '__extn' ->> 'fn' = y -> '__extn' ->> 'fn' then
+            x := x -> '__extn' -> 'v';
+            y := y -> '__extn' -> 'v';
+        else
+            return permissions._cedar_eval_fail(why, format('type_error: %s: expected two Longs, two datetimes or two durations, got %s and %s',
                                                              case k when 'lt' then '<' when 'le' then '<=' when 'gt' then '>' else '>=' end,
                                                              permissions._cedar_type_of(x), permissions._cedar_type_of(y)));
         end if;
@@ -3141,7 +3562,7 @@ $$;
 -- ----------------------------------------------------------------------------
 
 -- A request context: a record (null is {}), in internal form. Raises
--- cedar:invalid_context, cedar:unsupported or cedar:limit_exceeded.
+-- cedar:invalid_context or cedar:limit_exceeded.
 create function permissions._cedar_context(p_context jsonb)
 returns jsonb
 language plpgsql immutable
@@ -3164,13 +3585,13 @@ begin
         code := x.code;
         err := x.err;
     end if;
-    perform permissions._cedar_error(case code when 'limit' then 'limit_exceeded' when 'unsupported' then 'unsupported' else 'invalid_context' end,
+    perform permissions._cedar_error(case code when 'limit' then 'limit_exceeded' else 'invalid_context' end,
         format('invalid context: %s', err),
         hint => case code
             when 'limit' then format('Flatten the context: sets and records nest at most %s levels.', (permissions._cedar_limits()).value_depth)
-            when 'unsupported' then 'Extension values (decimal, ipaddr, datetime, duration) arrive in a later phase of research/plan-cedar.md; pass the value as a String for now.'
-            else 'Pass context => ''{"mfa": true, "level": 3, "owner": {"__entity": {"type": "User", "id": "alice"}}}''::jsonb: Bools, Longs, Strings, sets, records and entity references.' end,
-        p_detail => case code when 'limit' then 'limit=''value_depth''' when 'unsupported' then 'feature=''extension value''' end);
+            when 'extension' then 'Write an extension value as {"__extn": {"fn": "decimal", "arg": "12.34"}}, with fn one of decimal, ip, datetime and duration and an arg its constructor accepts: decimal("12.34"), ip("10.0.0.0/8"), datetime("2024-10-15T11:35:00Z"), duration("1h30m").'
+            else 'Pass context => ''{"mfa": true, "level": 3, "owner": {"__entity": {"type": "User", "id": "alice"}}}''::jsonb: Bools, Longs, Strings, sets, records, entity references and extension values ({"__extn": {"fn": "ip", "arg": "10.0.0.1"}}).' end,
+        p_detail => case code when 'limit' then 'limit=''value_depth''' end);
 end;
 $$;
 

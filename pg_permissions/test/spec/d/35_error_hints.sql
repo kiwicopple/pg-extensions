@@ -20,7 +20,8 @@
 -- 55_cedar_parse.sql checks the position and hint of the parser's many calls
 -- of those two. _cedar_eval_fail raises only inside cedar_is_authorized,
 -- which catches it (an evaluation error is a value there, not an exception),
--- so like the helpers' own raises it is not a site.
+-- and inside _cedar_value_in, which catches it for the message of an
+-- invalid extension value; so like the helpers' own raises it is not a site.
 -- Each must pass a hint, and the number of
 -- sites must equal the number of rows below, so a new raise site fails this
 -- file until it has a hint and a row.
@@ -322,10 +323,13 @@ select tap.is((select array_agg(fn || ' ' || n order by fn)
                      where fn in ('_fga_error', '_fga_unsupported', '_cedar_error', '_cedar_eval_fail') group by fn) h),
               '{"_cedar_error 1","_cedar_eval_fail 1","_fga_error 1"}',
               'each error helper raises once');
--- _cedar_eval_fail raises SQLSTATE CE001, and only cedar_is_authorized handles it
+-- _cedar_eval_fail raises SQLSTATE CE001, and only cedar_is_authorized and
+-- _cedar_value_in (the message of an extension value it cannot build, an
+-- invalid_entity or invalid_context) handle it
 select tap.is((select array_agg(p.proname::text order by p.proname) from pg_proc p
                where p.pronamespace = 'permissions'::regnamespace and p.prosrc ~ 'CE001'),
-              '{_cedar_eval_fail,cedar_is_authorized}', 'only cedar_is_authorized catches the evaluation errors _cedar_eval_fail raises');
+              '{_cedar_eval_fail,_cedar_value_in,cedar_is_authorized}',
+              'only cedar_is_authorized and _cedar_value_in catch the evaluation errors _cedar_eval_fail raises');
 
 -- every error carries a DETAIL code, and the rbac_* ones carry an rbac: code
 select tap.is((select array_agg(site order by n) from sites where detail is null), null::text[],

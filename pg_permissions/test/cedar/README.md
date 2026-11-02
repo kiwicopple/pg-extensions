@@ -22,14 +22,14 @@ The pinned release is Cedar 4.14.0: [cedar-integration-tests](https://github.com
 
 | Run | Files | Assertions |
 | --- | --- | --- |
-| `--phase 2` | `70_cedar_oracle` | 26,793 requests |
-| `--phase 2 --mode overlay` | `72_cedar_oracle_overlay` | 19,688 requests |
-| `--phase 2 --reduce-parents` | `74_cedar_oracle_reduced` | 6,424 requests |
-| `--phase 3` | `71_cedar_oracle_text` | 26,791 requests and 3,367 stored ESTs |
+| `--phase 2 --features decimal,ipaddr,datetime,duration` | `70_cedar_oracle` | 45,494 requests: the whole corpus |
+| the same, `--mode overlay` | `72_cedar_oracle_overlay` | 31,872 requests |
+| the same, `--reduce-parents` | `74_cedar_oracle_reduced` | 11,976 requests |
+| `--phase 3 --features decimal,ipaddr,datetime,duration` | `71_cedar_oracle_text` | 45,492 requests and 5,708 stored ESTs |
 | `--format text --parse-est` | `77_cedar_oracle_parse` | 5,708 policies and 5 policy sets |
-| `--phase 4c` | `76_cedar_oracle_templates` | 10,111 requests, through 1,276 links |
+| `--phase 4c --features all` | `76_cedar_oracle_templates` | 19,156 requests, through the links of every case with an entity in a scope |
 
-A later phase adds its runs to `SUITE`.
+Since phases 4a and 4b, every run includes the extension types (`--features`), so `70_` alone runs every request of the corpus. The six runs write 190 files and 197 MB in about 9 seconds.
 
 ## Commands
 

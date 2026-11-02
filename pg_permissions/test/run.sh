@@ -24,7 +24,7 @@
 #
 # For the extension, test/spec/d/7[0-7]_cedar_oracle*.sql are generated from
 # Cedar's integration tests before the run (python3 -I test/cedar/generate.py
-# suite, about 4 seconds; git ignores them). Without python3 the files already
+# suite, about 9 seconds; git ignores them). Without python3 the files already
 # there run as they are. --no-cedar-oracle skips them.
 set -euo pipefail
 
