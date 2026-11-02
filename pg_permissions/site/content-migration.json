@@ -839,19 +839,19 @@
     },
     "": {
       "what-it-is": {
-        "page": "docs/src/content/docs/index.mdx",
+        "page": "pg_permissions/site/src/content/docs/index.mdx",
         "anchor": "what-it-is"
       },
       "where-to-start": {
-        "page": "docs/src/content/docs/index.mdx",
+        "page": "pg_permissions/site/src/content/docs/index.mdx",
         "anchor": "where-to-start"
       },
       "status": {
-        "page": "docs/src/content/docs/index.mdx",
+        "page": "pg_permissions/site/src/content/docs/index.mdx",
         "anchor": "status"
       },
       "the-three-prototypes-of-the-research-history": {
-        "page": "docs/src/content/docs/index.mdx",
+        "page": "pg_permissions/site/src/content/docs/index.mdx",
         "anchor": "the-three-prototypes-of-the-research-history"
       }
     }

@@ -9,9 +9,9 @@ help:
 	@echo "make dbdev.publish.XXX  		# publish XXX extension"
 	@echo "make test.pg_permissions  		# run the pg_permissions test suite (the extension by default; IMPL=prototypes/a-tuple-core.sql etc. for a prototype)"
 	@echo "make bench.pg_permissions 		# benchmark pg_permissions (the extension by default; IMPL=..., SCALE=small|medium|large)"
-	@echo "make docs  				# build the documentation site (docs/dist)"
+	@echo "make docs  				# build the documentation site (pg_permissions/site/dist)"
 	@echo "make docs.dev  				# run the documentation site locally with hot reload"
-	@echo "make docs.sync  			# re-sync pg_permissions markdown and benchmark data into docs/"
+	@echo "make docs.sync  			# re-sync pg_permissions markdown and benchmark data into pg_permissions/site/"
 
 reset:
 	supabase db reset
@@ -46,15 +46,16 @@ test.pg_permissions:
 bench.pg_permissions:
 	cd $(REPO_DIR)/pg_permissions && ./bench/run.sh --impl $(IMPL) --scale $(SCALE)
 
-# Documentation site (Astro + Starlight). See docs/README.md.
-docs/node_modules: docs/package.json
-	cd docs && npm install
+# Documentation site (Astro + Starlight). See pg_permissions/site/README.md.
+SITE := $(REPO_DIR)/pg_permissions/site
+$(SITE)/node_modules: $(SITE)/package.json
+	cd $(SITE) && npm install
 
-docs: docs/node_modules
-	cd docs && npm run build
+docs: $(SITE)/node_modules
+	cd $(SITE) && npm run build
 
-docs.dev: docs/node_modules
-	cd docs && npm run dev
+docs.dev: $(SITE)/node_modules
+	cd $(SITE) && npm run dev
 
-docs.sync: docs/node_modules
-	cd docs && npm run sync
+docs.sync: $(SITE)/node_modules
+	cd $(SITE) && npm run sync

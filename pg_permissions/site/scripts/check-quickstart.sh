@@ -2,7 +2,7 @@
 # Execute the actual quickstart SQL in an isolated, temporary Postgres cluster.
 set -euo pipefail
 DOCS_DIR=$(cd "$(dirname "$0")/.." && pwd)
-EXT_DIR="$DOCS_DIR/../pg_permissions"
+EXT_DIR=$(cd "$DOCS_DIR/.." && pwd)
 . "$EXT_DIR/test/lib/cluster.sh"
 EXTERNAL=0
 start_cluster

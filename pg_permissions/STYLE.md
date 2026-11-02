@@ -44,6 +44,6 @@ Document the signature, defaults, return type, privileges, subject behavior, err
 
 ## Source and publication
 
-Edit the canonical Markdown under `pg_permissions/`. The site generates its pages and plain Markdown exports from those files. `docs/navigation.mjs` controls the source paths, routes, and sidebar.
+Edit the canonical Markdown under `pg_permissions/`. The site generates its pages and plain Markdown exports from those files. `site/navigation.mjs` controls the source paths, routes, and sidebar.
 
-Keep existing routes and section anchors usable when moving content. Compatibility pages link to the new location and stay out of search results. See `docs/README.md` for build checks, export conventions, and the content migration map.
+Keep existing routes and section anchors usable when moving content. Compatibility pages link to the new location and stay out of search results. See `site/README.md` for build checks, export conventions, and the content migration map.

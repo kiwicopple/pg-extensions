@@ -1,11 +1,11 @@
 # pg_permissions documentation site
 
-The Astro + Starlight site publishes application guides, API reference, and research for `pg_permissions`. Canonical prose lives under `../pg_permissions`. Edit those files, not the generated site pages.
+The Astro + Starlight site publishes application guides, API reference, and research for `pg_permissions`. Canonical prose lives in the parent directory, `pg_permissions/` (`../docs`, `../research` and so on). Edit those files, not the generated site pages.
 
 ```bash
-make docs              # install if needed, build, and check links/content
+make docs              # from the repo root: install if needed, build, and check links/content
 make docs.dev          # local development server
-# or, from docs/:
+# or, from pg_permissions/site/:
 npm run sync           # regenerate pages, Markdown exports, and data
 npm run build          # sync, build, and validate
 npm run check:quickstart # execute the quickstart in a temporary Postgres
@@ -53,7 +53,7 @@ The plain Markdown exports preserve the source code fences without tab markup. `
 `npm run check:quickstart` runs the SQL fences directly from the quickstart in an isolated Postgres cluster, then checks the visible rows and transaction-local identity. It needs Postgres binaries (`PGBIN` can select them). The existing usage specs cover the longer walkthroughs:
 
 ```bash
-../pg_permissions/test/run.sh usage
+cd .. && ./test/run.sh usage
 ```
 
 When moving a section, check its prerequisite data and the order of model or policy changes. Update the matching usage-spec comments. Keep intentional error examples separate from scripts that stop on errors.

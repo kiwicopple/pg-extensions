@@ -90,6 +90,6 @@ The rule is: 3 times the p95 of the fastest design on the workload, rounded up t
 
 The docs site has three pages with charts of these results. Each page draws its charts at build time from the JSON files. Each chart has a table view.
 
-- [Benchmarks dashboard](../../../docs/src/content/docs/research/benchmarks/dashboard.mdx) (route `research/benchmarks/dashboard`): latency, scaling, shapes, read against write, parents, and seed time and storage.
-- [Optimizations](../../../docs/src/content/docs/research/benchmarks/optimizations.mdx) (route `research/benchmarks/optimizations`): the runs before and after the optimizations of session 3, for each design.
-- [Postgres versions](../../../docs/src/content/docs/research/benchmarks/postgres-versions.mdx) (route `research/benchmarks/postgres-versions`): Postgres 16, 17 and 18 side by side.
+- [Benchmarks dashboard](../../site/src/content/docs/research/benchmarks/dashboard.mdx) (route `research/benchmarks/dashboard`): latency, scaling, shapes, read against write, parents, and seed time and storage.
+- [Optimizations](../../site/src/content/docs/research/benchmarks/optimizations.mdx) (route `research/benchmarks/optimizations`): the runs before and after the optimizations of session 3, for each design.
+- [Postgres versions](../../site/src/content/docs/research/benchmarks/postgres-versions.mdx) (route `research/benchmarks/postgres-versions`): Postgres 16, 17 and 18 side by side.

@@ -73,6 +73,6 @@ See [JavaScript client: setup](docs/integrations/javascript.md) for the methods 
 
 ## Contributing
 
-To run the tests, see [`test/README.md`](test/README.md). To run Postgres 16, 17 and 18 with pg_tle, see [`docker/README.md`](docker/README.md). Write documentation as described in [`STYLE.md`](STYLE.md).
+To run the tests, see [`test/README.md`](test/README.md). To run Postgres 16, 17 and 18 with pg_tle, see [`docker/README.md`](docker/README.md). Write documentation as described in [`STYLE.md`](STYLE.md). The documentation site (Astro + Starlight) is in [`site/`](site/README.md); `make docs` from the repository root builds it.
 
 For the design history and the benchmarks, see [`research/README.md`](research/README.md).

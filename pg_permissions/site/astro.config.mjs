@@ -23,7 +23,7 @@ export default defineConfig({
 					href: `${process.env.DOCS_REPO_URL ?? 'https://github.com/kiwicopple/pg-extensions'}/tree/${process.env.DOCS_REPO_REF ?? 'pg_permissions'}/pg_permissions`,
 				},
 			],
-			editLink: { baseUrl: `${process.env.DOCS_REPO_URL ?? 'https://github.com/kiwicopple/pg-extensions'}/edit/${process.env.DOCS_REPO_REF ?? 'pg_permissions'}/docs/` },
+			editLink: { baseUrl: `${process.env.DOCS_REPO_URL ?? 'https://github.com/kiwicopple/pg-extensions'}/edit/${process.env.DOCS_REPO_REF ?? 'pg_permissions'}/pg_permissions/site/` },
 			customCss: ['./src/styles/custom.css', './src/styles/viz.css'],
 			plugins: [starlightLinksValidator({ errorOnRelativeLinks: false, errorOnInvalidHashes: true })],
 			sidebar,

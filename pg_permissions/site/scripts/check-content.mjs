@@ -20,7 +20,7 @@ for (const page of pages) {
   assert.ok(!seenRoutes.has(page.route), `Duplicate route: ${page.route}`);
   seenSources.add(page.src); seenRoutes.add(page.route);
   const file = path.join(dist, 'markdown', page.route + '.md');
-  const source = fs.readFileSync(path.resolve(docs, '../pg_permissions', page.src), 'utf8');
+  const source = fs.readFileSync(path.resolve(docs, '..', page.src), 'utf8');
   const exported = fs.readFileSync(file, 'utf8');
   const code = (text) => [...text.matchAll(/^```[^\n]*\n([\s\S]*?)^```/gm)].map((m) => m[1]);
   assert.deepEqual(code(exported), code(source), `Code changed in Markdown export: ${page.route}`);
@@ -60,7 +60,7 @@ function checkNavigation(items) {
 }
 checkNavigation(sidebar);
 const reference = ['shared', 'rbac', 'openfga'].map((name) =>
-  fs.readFileSync(path.resolve(docs, `../pg_permissions/docs/reference/${name}.md`), 'utf8')).join('\n');
+  fs.readFileSync(path.resolve(docs, `../docs/reference/${name}.md`), 'utf8')).join('\n');
 const functions = [...reference.matchAll(/^### `([^`]+)`/gm)].map((m) => m[1]);
 assert.equal(functions.length, 26, 'The SQL reference must cover all 26 public functions');
 assert.equal(new Set(functions).size, 26, 'Each SQL function must have one canonical entry');

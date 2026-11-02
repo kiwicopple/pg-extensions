@@ -10,7 +10,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const DOCS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const BASE = path.resolve(DOCS, '..', 'pg_permissions', 'bench', 'baselines');
+const BASE = path.resolve(DOCS, '..', 'bench', 'baselines');
 const OUT = path.join(DOCS, 'src', 'data', 'fixture');
 
 const rows = (md, heading) => {

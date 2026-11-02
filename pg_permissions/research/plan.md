@@ -75,13 +75,13 @@ Steps:
 4. In `docker/run-matrix.sh`, make `ext` the default of `--designs` (it already maps `ext` to the extension file). The designs `a,b,c,d` stay selectable. Update `docker/README.md`.
 5. Make these files present D as the design and A, B and C as history:
    - `README.md`, `test/README.md`, `prototypes/README.md`, `docker/README.md` and the user docs in [`../docs/`](../docs/).
-   - Then update the docs site in the repo-level `docs` directory. Run `make docs.sync` from the repo root (see `docs/AGENTS.md`).
+   - Then update the docs site (then in the repo-level `docs` directory, now `pg_permissions/site`). Run `make docs.sync` from the repo root (see `site/AGENTS.md`).
    - Update the status blockquote and the "stays empty" statements in this page (the sections after this one) and in [`./decision.md`](./decision.md). They say that `pg_permissions--0.0.1.sql` is empty or that the choice is open.
 
 Files:
 - `pg_permissions--0.0.1.sql`, `pg_permissions.control`, `test/run.sh`, `bench/run.sh`
 - the root `Makefile`, `docker/run-matrix.sh`, `docker/README.md`, `README.md`, `test/README.md`
-- [`prototypes/README.md`](./prototypes/README.md), the user docs in [`../docs/`](../docs/), the docs site in the repo-level `docs` directory
+- [`prototypes/README.md`](./prototypes/README.md), the user docs in [`../docs/`](../docs/), the docs site (then the repo-level `docs` directory, now `pg_permissions/site`)
 
 Done when:
 - `test/run.sh` with no `--impl` passes the full suite on the extension file locally.
