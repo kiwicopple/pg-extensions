@@ -10158,27 +10158,57 @@ $$;
 -- Cleanup across models
 -- ============================================================================
 
--- Forget a subject everywhere: its role assignments (user subjects) and every
--- FGA tuple naming it as user (any userset of it too) or as object.
-create function permissions.delete_subject(subject_type text, subject_id text)
+-- >>> cleanup section: begin
+-- tools/sync-upgrade.sh copies this section into the upgrade script, where
+-- it replaces 0.0.1's delete_subject; `or replace` keeps its privileges.
+--
+-- Forget a subject everywhere, and return the number of rows deleted:
+--   rbac  its role assignments (user subjects only)
+--   fga   every tuple naming it as user (any userset of it too) or as object
+--   cedar the entity <subject_type>::"<subject_id>" (the principal type is
+--         the subject type verbatim, e-cedar.md section 7.1); its parent
+--         edges (its memberships) and the edges that name it as a parent
+--         (the memberships in it), so nothing stays `in` a deleted entity;
+--         and the template links whose ?principal or ?resource slot names
+--         it, so a reused id gets none of their access. Static policies and
+--         templates are the app's code and stay, as do references to the
+--         entity in other entities' attrs and tags.
+create or replace function permissions.delete_subject(subject_type text, subject_id text)
 returns bigint
 language plpgsql security definer
 set search_path = ''
 as $$
 declare
+    u jsonb := jsonb_build_object('type', subject_type, 'id', subject_id);
+    total bigint := 0;
     n bigint;
-    k bigint;
 begin
     delete from permissions.rbac_assignments a
     where delete_subject.subject_type = 'user' and a.user_id = delete_subject.subject_id;
     get diagnostics n = row_count;
+    total := total + n;
     delete from permissions.fga_tuples t
     where (t.user_type = delete_subject.subject_type and t.user_id = delete_subject.subject_id)
        or (t.object_type = delete_subject.subject_type and t.object_id = delete_subject.subject_id);
-    get diagnostics k = row_count;
-    return n + k;
+    get diagnostics n = row_count;
+    total := total + n;
+    -- a link's scope rows in cedar_policy_scopes go with it (on delete cascade)
+    delete from permissions.cedar_policies p
+    where p.template_id is not null and (p.slots -> '?principal' = u or p.slots -> '?resource' = u);
+    get diagnostics n = row_count;
+    total := total + n;
+    delete from permissions.cedar_entity_parents e
+    where (e.type = delete_subject.subject_type and e.id = delete_subject.subject_id)
+       or (e.parent_type = delete_subject.subject_type and e.parent_id = delete_subject.subject_id);
+    get diagnostics n = row_count;
+    total := total + n;
+    delete from permissions.cedar_entities e
+    where e.type = delete_subject.subject_type and e.id = delete_subject.subject_id;
+    get diagnostics n = row_count;
+    return total + n;
 end;
 $$;
+-- <<< cleanup section: end
 
 -- ============================================================================
 -- Privileges

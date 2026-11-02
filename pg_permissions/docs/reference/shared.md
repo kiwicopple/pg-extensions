@@ -57,7 +57,7 @@ permissions.delete_subject(
 ) returns bigint
 ```
 
-Removes a subject from every model. For the type `user`, it deletes the RBAC assignments of the subject. For every type, it deletes each tuple that names the subject as the subject, as a userset of the subject, or as the object. It returns the number of rows that it deleted. Admin only.
+Removes a subject from every model. For the type `user`, it deletes the RBAC assignments of the subject. For every type, it deletes each tuple that names the subject as the subject, as a userset of the subject, or as the object. It also deletes the Cedar entity `<subject_type>::"<subject_id>"`, the parent edges from and to it, and each template link whose slot names it; static Cedar policies stay. It returns the number of rows that it deleted. Admin only.
 
 Errors: none.
 

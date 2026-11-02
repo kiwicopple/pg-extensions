@@ -53,7 +53,7 @@ The files `spec/d/7[0-7]_cedar_oracle*_NN.sql` come from Cedar's integration tes
 
 ### The upgrade script
 
-The code that is new in 0.1.0 (the Cedar model) sits in `pg_permissions--0.1.0.sql` between the marker lines `-- >>> cedar section: begin` and `-- <<< cedar section: end`. The upgrade script `pg_permissions--0.0.1--0.1.0.sql` has the same markers. Edit the install file only, then copy the section into the upgrade script:
+The code that is new in 0.1.0 sits in `pg_permissions--0.1.0.sql` between marker lines: the Cedar model between `-- >>> cedar section: begin` and `-- <<< cedar section: end`, and the new `delete_subject` in the `cleanup` section. The upgrade script `pg_permissions--0.0.1--0.1.0.sql` has the same markers. Edit the install file only, then copy the section into the upgrade script:
 
 ```bash
 ./tools/sync-upgrade.sh           # rewrite the marked regions of the upgrade script
