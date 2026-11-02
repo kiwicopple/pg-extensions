@@ -1,6 +1,9 @@
 -- Helpers for the generated Cedar oracle specs (test/cedar/generate.py).
 -- Included by every generated file with \ir ../../cedar/fixture.sql.
--- Public API only (test/README.md): no reads of permissions.* tables.
+-- Public API only (test/README.md): no reads of permissions.* tables. The
+-- parser oracle (--parse-est) is the exception: it calls the parser itself,
+-- because the extension types cannot be put through the API before phases
+-- 4a and 4b, and their policies must still parse to the CLI's EST.
 create schema if not exists cedar_test;
 
 -- Delete every stored policy (static and template-linked) and entity.
@@ -58,6 +61,31 @@ begin
                                       from jsonb_array_elements(r -> 'errors') e) d),
                            '[]'::jsonb)
     );
+exception when others then
+    return jsonb_build_object('raised', sqlstate, 'message', sqlerrm);
+end;
+$$;
+
+-- The parser oracle: the EST of one policy's Cedar text, and the policy-set
+-- object of a text with several policies. An exception becomes {"raised":
+-- sqlstate, "message": ...}, as in authz.
+create or replace function cedar_test.parse(p_src text)
+returns jsonb
+language plpgsql
+as $$
+begin
+    return permissions._cedar_parse_policy(p_src);
+exception when others then
+    return jsonb_build_object('raised', sqlstate, 'message', sqlerrm);
+end;
+$$;
+
+create or replace function cedar_test.parse_set(p_src text)
+returns jsonb
+language plpgsql
+as $$
+begin
+    return permissions._cedar_parse_policies(p_src);
 exception when others then
     return jsonb_build_object('raised', sqlstate, 'message', sqlerrm);
 end;

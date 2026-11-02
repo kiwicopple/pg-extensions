@@ -15,7 +15,10 @@
 -- Guard: a static scan of the extension's function bodies (pg_proc.prosrc)
 -- finds every raise site: each `raise`, and each call of the error helpers
 -- _fga_error and _cedar_error (and _fga_unsupported, gone since conditions
--- are supported). _cedar_eval_fail raises only inside cedar_is_authorized,
+-- are supported). Cedar parse errors go through _cedar_error too: its calls
+-- in _cedar_syntax_error and _cedar_parse_fail are one site each here, and
+-- 55_cedar_parse.sql checks the position and hint of the parser's many calls
+-- of those two. _cedar_eval_fail raises only inside cedar_is_authorized,
 -- which catches it (an evaluation error is a value there, not an exception),
 -- so like the helpers' own raises it is not a site.
 -- Each must pass a hint, and the number of
@@ -247,8 +250,22 @@ insert into sites (site, stmt, st, detail, msg, hint) values
  '22004', 'cedar:null_argument argument=''policy_id''', '^policy_id is required to put a policy$', '^select permissions\.cedar_put_policy\(policy_id => '),
 ('cedar_put_policy: both', $$ select permissions.cedar_put_policy(policy_id => 'p1', policy => 'permit(principal, action, resource);', policy_json => '{}') $$,
  '22023', 'cedar:invalid_argument argument=''policy''', '^policy ''p1'' has both policy and policy_json$', '^Pass exactly one'),
-('cedar_put_policy: text', $$ select permissions.cedar_put_policy(policy_id => 'p1', policy => 'permit(principal, action, resource);') $$,
- '0A000', 'cedar:unsupported feature=''policy text''', '^policy ''p1'' is Cedar text, which is not supported yet$', 'policy_json => '),
+('cedar parse: syntax', $$ select permissions.cedar_put_policy(policy_id => 'p1', policy => 'permit (principal, action, resource)') $$,
+ '42601', 'cedar:parse_error line=1 column=37', '^unexpected end of input at line 1, column 37: expected ''when'', ''unless'' or '';''$', '^End each policy with '';''\.$'),
+('cedar parse: other', $$ select permissions.cedar_put_policy(policy_id => 'p1', policy => 'permit (principal, action, resource); forbid (principal, action, resource);') $$,
+ '42601', 'cedar:parse_error line=1 column=39', '^expected exactly one policy, found a second policy at line 1, column 39$', 'put each one with its own call'),
+('cedar parse: U+0000', $$ select permissions.cedar_put_policy(policy_id => 'p1', policy => 'permit (principal, action, resource) when { "\0" == "" };') $$,
+ '0A000', 'cedar:unsupported feature=''U+0000''', '^a string literal at line 1, column \d+ contains U\+0000, which Postgres text cannot hold$', '^Remove the U\+0000 character'),
+('cedar parse: brackets too deep', $$ select permissions.cedar_put_policy(policy_id => 'p1', policy => 'permit (principal, action, resource) when { ' || repeat('(', 65) || '1' || repeat(')', 65) || ' };') $$,
+ '54000', 'cedar:limit_exceeded limit=''policy_depth''', '^the expression at line 1, column \d+ is nested more than 64 levels deep$', '^Split the condition'),
+('cedar parse: text too long', $$ select permissions.cedar_put_policy(policy_id => 'p1', policy => 'permit (principal, action, resource) when { "' || repeat('a', 70000) || '" };') $$,
+ '54000', 'cedar:limit_exceeded limit=''policy_bytes''', '^the policy text is \d+ bytes, more than the limit of 65536$', '^Split the policy'),
+('cedar parse: condition too deep', $$ select permissions.cedar_put_policy(policy_id => 'p1', policy => 'permit (principal, action, resource) when { 1' || repeat(' + 1', 64) || ' == 1 };') $$,
+ '54000', 'cedar:limit_exceeded limit=''policy_depth''', '^the when condition at line 1, column 38 is \d+ levels deep, more than the limit of 64$', '^Split the condition'),
+('cedar parse: too many nodes', $$ select permissions.cedar_put_policy(policy_id => 'p1', policy => 'permit (principal, action, resource) when { [' || repeat('1, ', 4096) || '1].isEmpty() };') $$,
+ '54000', 'cedar:limit_exceeded limit=''policy_nodes''', '^the policy at line 1, column 1 has \d+ expression nodes, more than the limit of 4096$', '^Split the policy'),
+('cedar parse: a policy of a set too long', $$ select permissions._cedar_parse_policies('permit (principal, action, resource);' || E'\n' || 'permit (principal, action, resource) when { "' || repeat('a', 70000) || '" };') $$,
+ '54000', 'cedar:limit_exceeded limit=''policy_bytes''', '^the policy at line 2, column 1 is more than 65536 bytes long$', '^Split the policy'),
 ('cedar_delete_policy: unknown', $$ select permissions.cedar_delete_policy(policy_id => 'view-on') $$,
  '22023', 'cedar:unknown_policy policy_id=''view-on''', '^unknown policy ''view-on''$', '^Did you mean ''view-own''\? Policy ids: view-own\.$'),
 ('cedar_put_entities: null', $$ select permissions.cedar_put_entities(entities => null) $$,

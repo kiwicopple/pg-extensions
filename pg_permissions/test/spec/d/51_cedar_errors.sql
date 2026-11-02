@@ -3,8 +3,8 @@
 -- sections 5 and 6): the JSON policy format is checked for its shape (unknown
 -- keys, operators and expression kinds, slots in a static policy, an action
 -- scope that is not an action, a record that would read as an escape), with
--- the nearest name for a misspelt extension function; the extension types and
--- Cedar text are refused until their phases; entity JSON and uids are checked
+-- the nearest name for a misspelt extension function; the extension types are
+-- refused until their phases; entity JSON and uids are checked
 -- (Longs in the i64 range, no duplicate uids, no cycle, explicit escapes);
 -- and the fixed limits hold. Messages and hints are spot-checked here; every
 -- raise site has its own row in 35_error_hints.sql.
@@ -75,7 +75,7 @@ insert into cases (what, stmt, want) values
 ('a context with an extension value (phase 4)', $$ select permissions.cedar_is_authorized(principal => 'User::"a"', action => 'Action::"view"', resource => 'Doc::"d"', context => '{"x": {"__extn": {"fn": "decimal", "arg": "1.0"}}}') $$, '0A000 cedar:unsupported feature=''extension value'''),
 ('an overlay with a duplicate', $$ select permissions.cedar_is_authorized(principal => 'User::"a"', action => 'Action::"view"', resource => 'Doc::"d"', entities => '[{"uid": {"type": "U", "id": "a"}}, {"uid": {"type": "U", "id": "a"}}]') $$, '22023 cedar:invalid_entity index=1'),
 -- the other functions
-('cedar_put_policy without a policy', $$ select permissions.cedar_put_policy(policy_id => 'p') $$, '22004 cedar:null_argument argument=''policy_json'''),
+('cedar_put_policy without a policy', $$ select permissions.cedar_put_policy(policy_id => 'p') $$, '22004 cedar:null_argument argument=''policy'''),
 ('cedar_delete_policy(null)', $$ select permissions.cedar_delete_policy(policy_id => null) $$, '22004 cedar:null_argument argument=''policy_id'''),
 ('cedar_delete_entities(null)', $$ select permissions.cedar_delete_entities(uids => null) $$, '22004 cedar:null_argument argument=''uids'''),
 -- limits (e-cedar.md section 6)

@@ -41,7 +41,7 @@ begin
     end loop;
 end $$;
 
-select tap.plan(41);
+select tap.plan(42);
 
 select tap.is(
     (select array_agg(name order by name) from api_fn
@@ -156,7 +156,9 @@ select tap.lives_ok($$ select permissions.cedar_put_policy(policy_id => 'view', 
     "effect": "permit", "principal": {"op": "All"}, "action": {"op": "==", "entity": {"type": "Action", "id": "view"}},
     "resource": {"op": "All"}, "conditions": []}') $$,
     'cedar_put_policy(policy_id, policy, policy_json)');
-select tap.is((select array_agg(p.policy_id) from permissions.cedar_policies() p), '{view}', 'cedar_policies()');
+select tap.lives_ok($$ select permissions.cedar_put_policy(policy_id => 'edit', policy => 'permit (principal, action == Action::"edit", resource);', policy_json => null) $$,
+    'cedar_put_policy(policy_id, policy, policy_json) with Cedar text');
+select tap.is((select array_agg(p.policy_id) from permissions.cedar_policies() p), '{edit,view}', 'cedar_policies()');
 select tap.lives_ok($$ select permissions.cedar_put_entities(entities => '[{"uid": {"type": "User", "id": "bob"}, "attrs": {}, "parents": []}]') $$,
     'cedar_put_entities(entities)');
 select tap.is(permissions.cedar_read_entities(type => 'User', ids => '{bob}') -> 0 -> 'uid', '{"type": "User", "id": "bob"}',
@@ -166,6 +168,7 @@ select tap.is(permissions.cedar_is_authorized(principal => 'User::"bob"', action
     'allow', 'cedar_is_authorized(principal, action, resource, context, entities)');
 select tap.is(permissions.cedar_delete_entities(uids => '[{"type": "User", "id": "bob"}]'), 1::bigint, 'cedar_delete_entities(uids)');
 select tap.lives_ok($$ select permissions.cedar_delete_policy(policy_id => 'view') $$, 'cedar_delete_policy(policy_id)');
+select permissions.cedar_delete_policy(policy_id => 'edit');
 
 -- shared cleanup: Bob's assignment in acme and his remaining tuple
 select tap.is(permissions.delete_subject(subject_type => 'user', subject_id => :'bob'), 2::bigint,

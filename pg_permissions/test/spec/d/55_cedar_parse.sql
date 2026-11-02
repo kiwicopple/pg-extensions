@@ -1,8 +1,12 @@
--- Goal: the Cedar text parser (wip/cedar_parser.sql, phase 3 of
--- research/plan-cedar.md) rejects invalid text with a precise, helpful error,
--- keeps its static limits, and reproduces the cedar-policy-cli 4.14.0 EST
--- quirks that the corpus does not exercise. The corpus oracle itself is
--- wip/check_parser.sh, which also runs this file.
+-- Goal: Cedar policy text (phase 3 of research/plan-cedar.md) puts through
+-- cedar_put_policy like the JSON format: the text is kept as source, the
+-- annotations come from the EST, and the policy_id argument names the policy
+-- even when the text has @id (research/designs/e-cedar.md section 13). The
+-- parser rejects invalid text with a precise, helpful error, keeps its static
+-- limits, and reproduces the cedar-policy-cli 4.14.0 EST quirks that the
+-- corpus does not exercise. The corpus oracle itself is generated:
+-- 77_cedar_oracle_parse (every text policy parses to the CLI's EST) and
+-- 71_cedar_oracle_text (the phase 2 requests with text puts).
 --
 -- Every parse error is SQLSTATE 42601 with DETAIL
 -- 'cedar:parse_error line=<n> column=<n>' (research/designs/e-cedar.md
@@ -10,14 +14,11 @@
 -- pg_temp.parse_error returns '<sqlstate> <detail>', with ' (no hint)'
 -- appended when the HINT is empty, so each assertion checks all three. The
 -- positions and messages were checked by hand; every input is also rejected
--- by the CLI. Limits are SQLSTATE 54000 'cedar:limit_exceeded', and U+0000 is
--- 0A000 'cedar:unsupported'.
---
--- Run (until the parser moves into the install file): a database with
--- test/lib/tap.sql, pg_permissions--0.1.0.sql and wip/cedar_parser.sql, then
---   psql -X -q -tA -f wip/cedar_parser_spec.sql
+-- by the CLI. Limits are SQLSTATE 54000 'cedar:limit_exceeded' with the
+-- limit names of _cedar_limits, and U+0000 is 0A000 'cedar:unsupported'.
+\ir ../../fixtures/d/cedar.sql
 
-select tap.plan(80);
+select tap.plan(90);
 
 create function pg_temp.parse_error(src text, single boolean default false)
 returns text
@@ -54,6 +55,40 @@ exception when others then
     return hnt;
 end;
 $$;
+
+
+-- ---------------------------------------------------------------------------
+-- Text through cedar_put_policy
+-- ---------------------------------------------------------------------------
+select permissions.cedar_put_policy(policy_id => 'owner', policy => $c$@id("other") @advice("owners only")
+permit (principal, action == Action::"edit", resource)
+when { resource.owner == principal };$c$);
+select tap.is((select p.source from permissions.cedar_policies() p where p.policy_id = 'owner'),
+              $c$@id("other") @advice("owners only")
+permit (principal, action == Action::"edit", resource)
+when { resource.owner == principal };$c$, 'a text put keeps the text as source');
+select tap.is((select p.annotations from permissions.cedar_policies() p where p.policy_id = 'owner'),
+              '{"id": "other", "advice": "owners only"}'::jsonb, 'the annotations come from the text');
+select tap.is((select p.est from permissions.cedar_policies() p where p.policy_id = 'owner'),
+              permissions._cedar_parse_policy((select p.source from permissions.cedar_policies() p where p.policy_id = 'owner')),
+              'the EST is the parse of the text');
+select tap.is((select array_agg(p.policy_id) from permissions.cedar_policies() p), '{owner}',
+              '@id in the text does not name the policy: policy_id does');
+select permissions.cedar_put_entities(entities => '[{"uid": {"type": "Doc", "id": "d1"}, "attrs": {"owner": {"__entity": {"type": "User", "id": "alice"}}}}]');
+select tap.is(cedar_t.authz('User::"alice"', 'Action::"edit"', 'Doc::"d1"'), 'allow [owner] errors []',
+              'a text policy authorizes, and the reason is its policy_id');
+select tap.is(cedar_t.authz('User::"bob"', 'Action::"edit"', 'Doc::"d1"'), 'deny [] errors []',
+              'and its condition holds only for the owner');
+select permissions.cedar_put_policy(policy_id => 'owner', policy_json => cedar_t.policy('forbid'));
+select tap.is((select coalesce(p.source, 'null') || ' ' || p.effect from permissions.cedar_policies() p), 'null forbid',
+              'a JSON put replaces a text policy and clears the source');
+select tap.is(cedar_t.err($$ select permissions.cedar_put_policy(policy_id => 'two', policy => 'permit (principal, action, resource); forbid (principal, action, resource);') $$),
+              '42601 cedar:parse_error line=1 column=39', 'two policies in one put: a parse error at the second');
+select tap.ok(strpos((cedar_t.msg($$ select permissions.cedar_put_policy(policy_id => 'two', policy => 'permit (principal, action, resource); forbid (principal, action, resource);') $$)).hint,
+                     'put each one with its own call') > 0, 'and the hint says to put each policy with its own call');
+select tap.is(cedar_t.err($$ select permissions.cedar_put_policy(policy_id => 't', policy => 'permit (principal == ?principal, action, resource);') $$),
+              '22023 cedar:invalid_policy path=''$.principal''', 'a text with a slot is a template, not a policy');
+select permissions.cedar_delete_policy(policy_id => 'owner');
 
 -- ---------------------------------------------------------------------------
 -- Invalid text: SQLSTATE, line and column, and a HINT
@@ -265,17 +300,17 @@ select tap.ok(strpos(pg_temp.parse_hint($c$permit (principal, action, resource) 
 -- Limits and U+0000
 -- ---------------------------------------------------------------------------
 select tap.is(pg_temp.parse_error('permit (principal, action, resource) when { "' || repeat('a', 70000) || '" };', true),
-              '54000 cedar:limit_exceeded limit=''policy_text''',
+              '54000 cedar:limit_exceeded limit=''policy_bytes''',
               'limit: a policy text over 64 KiB');
 select tap.is(pg_temp.parse_error('permit (principal, action, resource);' || E'\n'
                                   || 'permit (principal, action, resource) when { "' || repeat('a', 70000) || '" };'),
-              '54000 cedar:limit_exceeded limit=''policy_text''',
+              '54000 cedar:limit_exceeded limit=''policy_bytes''',
               'limit: one policy of a set over 64 KiB');
 select tap.is(pg_temp.parse_error('permit (principal, action, resource) when { ' || repeat('(', 65) || '1' || repeat(')', 65) || ' };'),
-              '54000 cedar:limit_exceeded limit=''expression_depth''',
+              '54000 cedar:limit_exceeded limit=''policy_depth''',
               'limit: brackets nested more than 64 deep');
 select tap.is(pg_temp.parse_error('permit (principal, action, resource) when { 1' || repeat(' + 1', 64) || ' == 1 };'),
-              '54000 cedar:limit_exceeded limit=''expression_depth''',
+              '54000 cedar:limit_exceeded limit=''policy_depth''',
               'limit: an EST deeper than 64');
 select tap.is(pg_temp.parse_error('permit (principal, action, resource) when { [' || repeat('1, ', 4096) || '1].isEmpty() };'),
               '54000 cedar:limit_exceeded limit=''policy_nodes''',

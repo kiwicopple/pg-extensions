@@ -4,7 +4,7 @@
     python3 -I test/cedar/generate.py --stats                       # counts by format, feature, ...; writes nothing
     python3 -I test/cedar/generate.py --dry-run [SELECT]            # the files a run would write; writes nothing
     python3 -I test/cedar/generate.py [SELECT]                      # write test/cedar/spec/*.sql (not run by test/run.sh)
-    python3 -I test/cedar/generate.py --suite [SELECT]              # write test/spec/d/7[0-5]_cedar_oracle*.sql
+    python3 -I test/cedar/generate.py --suite [SELECT]              # write test/spec/d/7[0-7]_cedar_oracle*.sql
     python3 -I test/cedar/generate.py suite                         # the SUITE runs below; test/run.sh calls this
     test/run.sh -v cedar > /tmp/cedar.out
     python3 -I test/cedar/generate.py report /tmp/cedar.out [SELECT]  # run, passed, failed, skipped by reason
@@ -20,6 +20,9 @@ SELECT chooses the cases and how they reach the database:
                     original id (the corpus has no templates; phase 4c)
     --check-est     text format only: also assert, per policy, that the EST stored from
                     the text equals the CLI's translation (the parser oracle, phase 3)
+    --parse-est     text format only: no requests; assert, per text policy of every case
+                    (any feature), that the parser gives the CLI's EST, and per case with
+                    several policies, that the policy-set parse gives the CLI's ids
     --reduce-parents  stored mode only: keep only each entity's direct parents (the
                     transitive reduction; Cedar's JSON lists every ancestor), so `in` must
                     follow the hierarchy itself; runs only the cases that lose a link
@@ -63,7 +66,8 @@ SUITE_DIR = os.path.join(ROOT, 'test', 'spec', 'd')
 CASES_DIR = os.path.join(HERE, 'cases')
 FILE_PREFIX = {('json', 'stored'): '70_cedar_oracle', ('text', 'stored'): '71_cedar_oracle_text',
                ('json', 'overlay'): '72_cedar_oracle_overlay', ('text', 'overlay'): '73_cedar_oracle_text_overlay',
-               ('json', 'reduced'): '74_cedar_oracle_reduced', ('text', 'reduced'): '75_cedar_oracle_text_reduced'}
+               ('json', 'reduced'): '74_cedar_oracle_reduced', ('text', 'reduced'): '75_cedar_oracle_text_reduced',
+               ('text', 'parse'): '77_cedar_oracle_parse'}
 MAX_ASSERTIONS = 1000        # per file
 MAX_BYTES = 1_500_000        # per file (a case is never split)
 OVERLAY_MAX = 1024           # overlay mode: compact entity JSON bytes per case
@@ -80,13 +84,17 @@ PHASES = {
     'all': dict(format='json', mode='stored', features=GATED),
 }
 
-# What `suite` (and so test/run.sh) generates into test/spec/d/: phase 2, the
-# core features, with entities stored, in the request overlay, and stored with
-# only direct parents (so `in` must follow the hierarchy).
+# What `suite` (and so test/run.sh) generates into test/spec/d/: the core
+# features, with entities stored, in the request overlay, and stored with only
+# direct parents (so `in` must follow the hierarchy); the same as Cedar text
+# (phase 3), with the stored EST checked; and the parser on every text policy
+# of the corpus.
 SUITE = (
     ['--phase', '2'],
     ['--phase', '2', '--mode', 'overlay'],
     ['--phase', '2', '--reduce-parents'],
+    ['--phase', '3'],
+    ['--format', 'text', '--parse-est'],
 )
 
 EXT_FEATURE = {
@@ -336,6 +344,8 @@ def reduce_parents(entities):
 
 
 def label_mode(sel):
+    if sel.get('parse_est'):
+        return 'parse'
     return 'reduced' if sel.get('reduce_parents') else sel['mode']
 
 
@@ -478,6 +488,8 @@ def case_sql(case, sel, skips, stats):
     if sel.get('reduce_parents'):
         c = dict(c, entities=reduce_parents(c['entities'])[0])
     lm = label_mode(sel)
+    if sel.get('parse_est'):
+        return parse_sql(case['name'], c, lm)
     out = [f"\n-- {c['name']}", 'select cedar_test.reset();']
     for p in c['policies']:
         fn = 'cedar_put_policy' if p['kind'] == 'static' else 'cedar_put_template'
@@ -523,12 +535,33 @@ def case_sql(case, sel, skips, stats):
     return '\n'.join(out) + '\n', n
 
 
+def parse_sql(name, c, lm):
+    """The parser oracle: each text policy alone, and the policies of the case
+    joined into one policy set (ids policy0, policy1, ... as the CLI gives them)."""
+    out = [f"\n-- {name}"]
+    n = 0
+    for p in c['policies']:
+        out.append("select tap.is(cedar_test.parse(%s), %s, %s);" % (
+            lit(p['text']), jlit(p['est']), lit(f"{lm}:text:{name}:est:{p['id']}")))
+        n += 1
+    if parse_set_cases(c):
+        want = {'staticPolicies': {p['id']: p['est'] for p in c['policies']}, 'templates': {}, 'templateLinks': []}
+        out.append("select tap.is(cedar_test.parse_set(%s), %s, %s);" % (
+            lit('\n'.join(p['text'] for p in c['policies'])), jlit(want), lit(f"{lm}:text:{name}:set")))
+        n += 1
+    return '\n'.join(out) + '\n', n
+
+
+def parse_set_cases(c):
+    return len(c['policies']) > 1 and [p['id'] for p in c['policies']] == [f'policy{i}' for i in range(len(c['policies']))]
+
+
 def select_from_args(args):
     sel = dict(PHASES['all'])
     i = 0
     while i < len(args):
         a = args[i]
-        if a in ('--check-est', '--templatize', '--reduce-parents'):
+        if a in ('--check-est', '--templatize', '--reduce-parents', '--parse-est'):
             sel[a[2:].replace('-', '_')] = True
             i += 1
             continue
@@ -557,6 +590,9 @@ def select_from_args(args):
             sys.exit(__doc__)
     if sel.get('reduce_parents') and sel['mode'] != 'stored':
         sys.exit('--reduce-parents needs --mode stored')
+    if sel.get('parse_est') and (sel['format'] != 'text' or sel['mode'] != 'stored' or sel.get('reduce_parents')
+                                 or sel.get('templatize')):
+        sys.exit('--parse-est needs --format text, and no --mode, --reduce-parents or --templatize')
     return sel
 
 
@@ -587,7 +623,8 @@ def plan_files(cases, sel, skips):
         head = [
             f"-- Generated by test/cedar/generate.py --format {sel['format']} --mode {sel['mode']} "
             f"--features {','.join(sel['features']) or '(none)'}"
-            f"{' --reduce-parents' if sel.get('reduce_parents') else ''}. Do not edit.",
+            f"{' --reduce-parents' if sel.get('reduce_parents') else ''}"
+            f"{' --parse-est' if sel.get('parse_est') else ''}. Do not edit.",
             '-- cedar-integration-tests, Apache-2.0: see test/cedar/upstream/SOURCE.',
             '\\set ON_ERROR_STOP off',
             '\\ir ../../cedar/fixture.sql',
@@ -615,7 +652,7 @@ def generate(dest, sel, dry_run, cases=None):
     print(f'{verb} {len(files)} files {os.path.relpath(dest, ROOT)}/{prefix}_NN.sql: '
           f'{total} assertions, {size / 1e6:.1f} MB')
     print(f"  selection: format {sel['format']}, mode {sel['mode']}, features {','.join(sel['features']) or '(none)'}"
-          f"{', parents reduced' if sel.get('reduce_parents') else ''}")
+          f"{', parents reduced' if sel.get('reduce_parents') else ''}{', parse only' if sel.get('parse_est') else ''}")
     print(f"  cases with U+0000 substituted: {stats['nul_substituted']}")
     for r, k in sorted(stats['left_out'].items()):
         print(f'  left out ({r}): {k} requests')
@@ -688,6 +725,12 @@ def report(path, sel):
     for c in cases:
         if eligible(c, sel):
             continue
+        if sel.get('parse_est'):
+            for p in c['policies']:
+                want[f"parse:text:{c['name']}:est:{p['id']}"] = c['name']
+            if parse_set_cases(c):
+                want[f"parse:text:{c['name']}:set"] = c['name']
+            continue
         for i in range(len(c['requests'])):
             if not skip_reason(skips, c, sel['format'], sel['mode'], i):
                 want[f"{label_mode(sel)}:{sel['format']}:{c['name']}:r{i}"] = c['name']
@@ -696,7 +739,7 @@ def report(path, sel):
                 if p['kind'] == 'static':
                     want[f"{label_mode(sel)}:text:{c['name']}:est:{p['id']}"] = c['name']
     got = {}
-    pat = re.compile(r'^\s*(ok|not ok) \d+ - (\S+:(?:r\d+|est:\S+))')
+    pat = re.compile(r'^\s*(ok|not ok) \d+ - (\S+:(?:r\d+|est:\S+|set))')
     with open(path, encoding='utf-8', errors='replace') as f:
         for l in f:
             m = pat.match(re.sub(r'\x1b\[[0-9;]*m', '', l))
@@ -729,7 +772,7 @@ if __name__ == '__main__':
         for run in SUITE:
             generate(SUITE_DIR, select_from_args(run), dry_run=False, cases=all_cases)
     elif argv[:1] in ([], ['--phase'], ['--format'], ['--mode'], ['--features'], ['--check-est'], ['--templatize'],
-                      ['--reduce-parents']):
+                      ['--reduce-parents'], ['--parse-est']):
         generate(OUT_DIR, select_from_args(argv), dry_run=False)
     else:
         sys.exit(__doc__)

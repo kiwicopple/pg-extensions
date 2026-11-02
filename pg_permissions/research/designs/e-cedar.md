@@ -1,6 +1,6 @@
 # Design E: the Cedar model (`cedar_*`) in PL/pgSQL
 
-> Status: phase 0 of [`plan-cedar.md`](../plan-cedar.md), approved with its deviations (static limits, the `ast` column, errors as SQL null, the verbatim principal type, `resource_attrs` replacing attributes). Phase 2 is implemented: the core evaluator in `pg_permissions--0.1.0.sql`. Section 12 has its measurements and decisions. The oracle is vendored in [`test/cedar/`](../../test/cedar/README.md).
+> Status: phase 0 of [`plan-cedar.md`](../plan-cedar.md), approved with its deviations (static limits, the `ast` column, errors as SQL null, the verbatim principal type, `resource_attrs` replacing attributes). Phases 2 and 3 are implemented in `pg_permissions--0.1.0.sql`: the core evaluator and the text parser. Section 12 has the phase 2 measurements and decisions, and section 13 the decisions of phase 3. The oracle is vendored in [`test/cedar/`](../../test/cedar/README.md).
 
 The sources for this page are:
 
@@ -180,9 +180,9 @@ The text parser must produce exactly what the CLI produces, so that `jsonb` equa
 - Extension calls are nodes named after the function.
 - The `has` form for a single attribute is `{"has":{"left","attr":"a"}}`.
 - `like` patterns are a list of `"Wildcard"` and `{"Literal":"…"}` items.
-- Annotations go to `annotations`, and `@id("x")` does not set the policy id.
+- Annotations go to `annotations`, and `@id("x")` does not set the policy id of a put (section 13.2).
 
-Phase 3 runs the oracle with `generate.py --phase 3`, which includes `--check-est`. It covers 3,359 tests and 26,791 requests, plus one EST assertion for each policy.
+Phase 3 runs the oracle with `generate.py --phase 3`, which includes `--check-est`. It covers 3,359 tests and 26,791 requests, plus one EST assertion for each policy. `--parse-est` checks the parser alone on all 5,708 text policies, including those with extension types (section 13.4).
 
 ### 2.3 The compiled form: a second column, `ast`
 
@@ -440,7 +440,7 @@ The oracle commands are in [`test/cedar/README.md`](../../test/cedar/README.md).
 | Phase | Oracle run | Tests / requests |
 | --- | --- | --- |
 | 2 | `--phase 2` (json, stored), and `--phase 2 --mode overlay` | 3,360 / 26,793. Overlay covers the tests whose entity JSON is at most 1 KB. |
-| 3 | `--phase 3` (text, with `--check-est`) | 3,359 / 26,791, plus one EST assertion for each policy |
+| 3 | `--phase 3` (text, with `--check-est`), and `--format text --parse-est` | 3,359 / 26,791, plus 3,367 stored ESTs; the parser on 5,708 policies and 5 policy sets |
 | 4a | `--phase 4a`, both formats | 4,442 / 35,422 |
 | 4b | `--phase 4b`, both formats | 4,231 / 33,761 |
 | 4c | `--phase 4c` (`--templatize`) | 3,360 / 26,793, with 1,276 links |
@@ -475,6 +475,7 @@ The size of the suite matters. A run with `--phase all` writes 59 files and 76 M
 | A cycle that only the request overlay makes is not rejected: `in` still ends, and treats the entities of the cycle as each other's ancestors | Checking every overlay for cycles would cost every request a walk | None in the corpus |
 | Two concurrent `cedar_put_entities` calls can make a cycle that neither sees (there is no lock); `in` still ends | No global lock (section 12.1) | None |
 | The `_current` helpers fail closed when a `forbid` errors | Plan, decision 1 | In-house specs (phase 5) |
+| No function takes a whole policy set (section 13.3) | Ids by position are unstable under upserts | None: the oracle splits the corpus sets |
 | Error messages differ | Only the policy ids are compared | `cedar_test.authz` compares ids only |
 | The limits of section 6 | The size of the work in PL/pgSQL | None in the corpus |
 
@@ -545,3 +546,38 @@ The fixed cost is about 50 µs: parsing three uids, one walk query, one entity q
 ### 12.4 How the suite runs the oracle
 
 The generated files are not committed. `test/spec/d/.gitignore` ignores `7[0-5]_cedar_oracle*.sql`. Before each run of the extension, `test/run.sh` calls `generate.py suite`, which writes the runs in the `SUITE` list of `generate.py`. That takes about 3 seconds, and the files add about 35 seconds to the run. `--no-cedar-oracle` skips them. `docker/run-matrix.sh test` generates the files on the host, because the client containers have no Python.
+
+## 13. Phase 3 integration
+
+Phase 3 moved the text parser into the Cedar section of `pg_permissions--0.1.0.sql`. The decisions:
+
+### 13.1 One raise path and one set of limits
+
+The parser raised through its own helper, `_cedar_parse_raise`. It now raises through `_cedar_error`, like the rest of the model, with the same codes and SQLSTATEs: `parse_error` (`42601`), `limit_exceeded` (`54000`) and `unsupported` (`0A000`). The two parser helpers `_cedar_syntax_error` and `_cedar_parse_fail` build the position and the default hint, and each is one raise site in `35_error_hints.sql`. `55_cedar_parse.sql` checks the position and the hint of the parser's many calls to them.
+
+The parser's limits now come from `_cedar_limits()` and use its names: `policy_bytes` (the text of one policy), `policy_nodes` and `policy_depth`. The standalone parser called them `policy_text` and `expression_depth`. For a text put, `policy_bytes` limits the text. The EST of a text can be larger than its text, so the compiler does not check the EST size again.
+
+### 13.2 Text puts and `@id`
+
+`cedar_put_policy(policy => text)` parses the text with `_cedar_parse_policy`, which takes exactly one policy. No policy, or a second one, is a `parse_error` at that position, and the hint says to put each policy with its own call. The text is stored as `source`, the parsed EST as `est`, and the annotations come from the EST.
+
+**The `policy_id` argument names the policy.** An `@id("x")` annotation in the text stays an annotation and does not rename the policy, and a disagreement is not an error. Reasons:
+
+1. The JSON format has no id field: an id is always the caller's. Text and JSON puts should name a policy the same way.
+2. Cedar's own API for one policy, `Policy::parse(id, text)`, takes the id as an argument. Only the parse of a whole policy set derives ids, and this API has no such function (section 13.3).
+3. The specs and the oracle reason in policy ids. One rule, "the reason is the `policy_id` you put", is simpler to explain than an override.
+
+### 13.3 No policy-set loader
+
+The plan's API has no function that takes a whole policy set, and phase 3 does not add one (`cedar_put_policies(policies text)` was the candidate). The CLI names the policies of a set by position, `policy0`, `policy1` and so on, unless they have `@id`. Cedar loads a set as a whole, so position ids are stable there. This API upserts by id. With an upsert loader, a policy inserted at the top of a file would shift every later id and silently overwrite other policies. A loader that replaced the whole set would delete the links and the policies that other code put. An application can split its file and call `cedar_put_policy` once per policy, with stable ids. `_cedar_parse_policies` stays as an internal function: the parser oracle checks the CLI's ids with it, and a later loader can build on it.
+
+### 13.4 Oracle results
+
+| Run | Assertions | Result |
+| --- | --- | --- |
+| `--phase 3` (text puts, stored entities, `--check-est`) | 26,791 requests and 3,367 stored ESTs | all pass |
+| `--format text --parse-est` (the parser on every text policy of the corpus, and the 5 sets with several policies) | 5,713 | all pass |
+
+Both are in `SUITE`, so `test/run.sh` runs them (`71_` and `77_cedar_oracle`). The five `SUITE` runs now write 91 files and 71 MB in about 4 seconds (`test/spec/d/.gitignore` ignores `7[0-7]_cedar_oracle*.sql`). `--parse-est` replaces `wip/check_parser.sh`, the standalone parity check. The text oracle covers only the core features: the parser already handles the extension functions (the parse oracle covers them), but the compiler still refuses them until phases 4a and 4b.
+
+Parse cost. The largest corpus policy is 37,773 bytes of text after the U+0000 substitution (section 1.3). It parses in 12.2 ms, and `cedar_put_policy` with its text takes 17.6 ms; with its EST as `policy_json`, 5.2 ms.

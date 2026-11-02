@@ -22,9 +22,9 @@
 # Each spec file runs in a fresh database cloned from a template that has the
 # implementation installed. Exit status is 0 only if every file passes.
 #
-# For the extension, test/spec/d/7[0-5]_cedar_oracle*.sql are generated from
+# For the extension, test/spec/d/7[0-7]_cedar_oracle*.sql are generated from
 # Cedar's integration tests before the run (python3 -I test/cedar/generate.py
-# suite, about 3 seconds; git ignores them). Without python3 the files already
+# suite, about 4 seconds; git ignores them). Without python3 the files already
 # there run as they are. --no-cedar-oracle skips them.
 set -euo pipefail
 
@@ -70,12 +70,12 @@ esac
 
 # The generated Cedar oracle files (design d): regenerate them when this run
 # would select any of them.
-CEDAR_GLOB='7[0-5]_cedar_oracle*'
+CEDAR_GLOB='7[0-7]_cedar_oracle*'
 if [ "$DESIGN" = d ] && [ $CEDAR_ORACLE = 1 ]; then
     want=0
     [ ${#PATTERNS[@]} = 0 ] && want=1
     for p in ${PATTERNS[@]+"${PATTERNS[@]}"}; do
-        case "70_cedar_oracle_00 72_cedar_oracle_overlay_00 74_cedar_oracle_reduced_00" in *"$p"*) want=1 ;; esac
+        case "70_cedar_oracle_00 71_cedar_oracle_text_00 72_cedar_oracle_overlay_00 74_cedar_oracle_reduced_00 77_cedar_oracle_parse_00" in *"$p"*) want=1 ;; esac
     done
     if [ $want = 1 ]; then
         if command -v python3 >/dev/null 2>&1; then
