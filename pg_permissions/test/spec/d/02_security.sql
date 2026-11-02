@@ -138,9 +138,10 @@ select set_config(:'g', left(current_setting(:'g'), strpos(current_setting(:'g')
 select tap.is((select ids from public.cedar_forge_rows), '{open,x}', 'cache forgery: an entry cut inside mac1 is a miss');
 -- 3. part 2 swapped (the permit "low" without its condition), mac1 and
 -- part 1 valid: Doc::"secret" reads part 2
-select tap.ok(split_part(current_setting(:'g'), chr(28), 2) ~ '"t": \{"Doc": \[\{"a": \{', 'the entry has a part 2 with the condition of "low"');
-select set_config(:'g', split_part(current_setting(:'g'), chr(28), 1) || chr(28) || left(split_part(current_setting(:'g'), chr(28), 2), 64)
-                        || jsonb_set(substr(split_part(current_setting(:'g'), chr(28), 2), 65)::jsonb, '{pf,t,Doc,0,a}', 'null')::text, true)
+select tap.ok(split_part(current_setting(:'g'), chr(28), 2) ~ ('^[0-9a-f]{64}' || chr(31) || '\{.*"t": \{"Doc": \[\{"a": \{'),
+              'the entry has mac2 and a part 2 with the condition of "low"');
+select set_config(:'g', split_part(current_setting(:'g'), chr(28), 1) || chr(28) || split_part(split_part(current_setting(:'g'), chr(28), 2), chr(31), 1)
+                        || chr(31) || jsonb_set(split_part(split_part(current_setting(:'g'), chr(28), 2), chr(31), 2)::jsonb, '{pf,t,Doc,0,a}', 'null')::text, true)
        is not null as swapped \gset
 select tap.is(permissions.cedar_is_authorized_current(action => 'Action::"view"', resource => 'Doc::"secret"', resource_attrs => '{"level": 9}'), false,
               'cache forgery: a swapped part 2 with a valid mac1 does not let bob view Doc::"secret"');

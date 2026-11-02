@@ -4222,7 +4222,7 @@ $$;
 -- that a forbid or a permit with conditions can match evaluates anything.
 --
 -- A client can write the setting, so the helper trusts only what it wrote:
---   key chr(29) mac1 part1 chr(28) mac2 part2
+--   key chr(29) mac1 part1 chr(28) mac2 chr(31) part2
 -- mac1 = _cedar_mac(secret, octet_length(key) ':' key part1), checked on
 -- every row; mac2 = _cedar_mac(secret, mac1 part2), checked on the rows
 -- that read part 2. An entry with another key, a bad MAC or a bad shape is
@@ -4271,34 +4271,34 @@ begin
     key := format('%s %s %L %L %L %s %L', current_database(), pg_current_snapshot(), current_setting('request.jwt.claims', true),
                   current_setting('permissions.subject_id', true), current_setting('permissions.subject_type', true),
                   coalesce(gen, 0), action) || chr(29);
-    f := current_setting(g, true);
-    if f is not null and starts_with(f, key) then
-        f := substr(f, char_length(key) + 1);
-        i := strpos(f, chr(28));
-        mac := left(f, 64);
-        if i <= 64 or mac is distinct from permissions._cedar_mac(sec, octet_length(key) || ':' || key || substr(f, 65, i - 65)) then
+    -- key chr(29) mac1 part1 chr(28) mac2 chr(31) part2, split byte-wise
+    -- (split_part): substr and left count the characters of the whole
+    -- text, about 2 ns a byte, and part 2 can be 8 KiB. Part 1 never holds
+    -- chr(28), nor part 2 (jsonb text) a control character; a key that
+    -- holds chr(28) (a subject setting can) never verifies: a miss.
+    payload := current_setting(g, true);
+    f := null;
+    if payload is not null and starts_with(payload, key) then
+        f := split_part(payload, chr(28), 1);
+        mac := substr(f, char_length(key) + 1, 64);
+        f := substr(f, char_length(key) + 65);
+        if mac is distinct from permissions._cedar_mac(sec, octet_length(key) || ':' || key || f) then
             f := null;                      -- not the helper's entry: a miss
         end if;
-    else
-        f := null;
     end if;
     if f is null then
         select * into a from permissions._cedar_uid(action, 'action');
-        f := case when permissions.current_subject_id() is null or not permissions._cedar_is_name(permissions.current_subject_type())
-                  then chr(30) || chr(28)
-                  else permissions._cedar_current_filter(permissions.current_subject_type(), permissions.current_subject_id(), a.type, a.id) end;
-        i := strpos(f, chr(28));
+        payload := case when permissions.current_subject_id() is null or not permissions._cedar_is_name(permissions.current_subject_type())
+                        then chr(30) || chr(28)
+                        else permissions._cedar_current_filter(permissions.current_subject_type(), permissions.current_subject_id(), a.type, a.id) end;
+        f := split_part(payload, chr(28), 1);
+        payload := split_part(payload, chr(28), 2);
         -- without a secret no entry verifies (a dash is never a MAC)
-        mac := coalesce(permissions._cedar_mac(sec, octet_length(key) || ':' || key || left(f, i - 1)), repeat('-', 64));
-        payload := substr(f, i + 1);
-        f := mac || left(f, i - 1) || chr(28) || coalesce(permissions._cedar_mac(sec, mac || payload), repeat('-', 64)) || payload;
-        perform set_config(g, key || f, true);
+        mac := coalesce(permissions._cedar_mac(sec, octet_length(key) || ':' || key || f), repeat('-', 64));
+        perform set_config(g, key || mac || f || chr(28) || coalesce(permissions._cedar_mac(sec, mac || payload), repeat('-', 64))
+                              || chr(31) || payload, true);
         fresh := true;
-        i := i + 64;
     end if;
-    -- mac1, part 1, chr(28), mac2, part 2
-    payload := substr(f, i + 1);
-    f := substr(f, 65, i - 65);
     -- the resource uid (_cedar_uid's common case inline: no escapes)
     i := strpos(resource, '::"');
     if i > 0 and right(resource, 1) = '"' and strpos(resource, '\') = 0 and char_length(resource) > i + 2
@@ -4368,13 +4368,17 @@ begin
         return permissions._cedar_current_check(permissions.current_subject_type(), permissions.current_subject_id(),
                                                 a.type, a.id, rt, ri, attrs);
     end if;
-    if not fresh and left(payload, 64) is distinct from permissions._cedar_mac(sec, mac || substr(payload, 65)) then
-        -- part 2 is not the helper's: this row from scratch
-        select * into a from permissions._cedar_uid(action, 'action');
-        return permissions._cedar_current_check(permissions.current_subject_type(), permissions.current_subject_id(),
-                                                a.type, a.id, rt, ri, attrs);
+    if not fresh then
+        payload := split_part(payload, chr(28), 2);     -- mac2 chr(31) part 2
+        if split_part(payload, chr(31), 1) is distinct from permissions._cedar_mac(sec, mac || split_part(payload, chr(31), 2)) then
+            -- part 2 is not the helper's: this row from scratch
+            select * into a from permissions._cedar_uid(action, 'action');
+            return permissions._cedar_current_check(permissions.current_subject_type(), permissions.current_subject_id(),
+                                                    a.type, a.id, rt, ri, attrs);
+        end if;
+        payload := split_part(payload, chr(31), 2);
     end if;
-    return permissions._cedar_decide(substr(payload, 65)::jsonb, rt, ri, attrs, anc, free);
+    return permissions._cedar_decide(payload::jsonb, rt, ri, attrs, anc, free);
 end;
 $$;
 
