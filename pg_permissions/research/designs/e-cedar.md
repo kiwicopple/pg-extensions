@@ -1,6 +1,6 @@
 # Design E: the Cedar model (`cedar_*`) in PL/pgSQL
 
-> Status: phase 0 of [`plan-cedar.md`](../plan-cedar.md). This is a design, and nothing is implemented. The oracle is vendored in [`test/cedar/`](../../test/cedar/README.md). Section 10 lists the open questions. The user must agree to this page before phase 2 starts.
+> Status: phase 0 of [`plan-cedar.md`](../plan-cedar.md), approved with its deviations (static limits, the `ast` column, errors as SQL null, the verbatim principal type, `resource_attrs` replacing attributes). Phase 2 is implemented: the core evaluator in `pg_permissions--0.1.0.sql`. Section 12 has its measurements and decisions. The oracle is vendored in [`test/cedar/`](../../test/cedar/README.md).
 
 The sources for this page are:
 
@@ -317,6 +317,8 @@ There is no counter in the evaluation loop, so there is no cost for each node. T
 
 Phase 2 measures A and C at depths 1, 10 and 117, measures the write throughput under concurrency, and measures the RLS cost for each row. The rule of the plan applies: use the faster option that has no global lock. Cedar rejects a hierarchy with a cycle (to confirm against `transitive_closure.rs` in phase 2). The put must reject a cycle too (`cedar:invalid_entity`), across stored entities.
 
+**Decided in phase 2: C** (section 12.1).
+
 ## 5. Error model
 
 API and argument errors raise. The `DETAIL` is `cedar:<code>`, followed by context in the `key='value'` form. The `MESSAGE` names the values. The `HINT` gives the fix in one sentence. It adds "Did you mean …?" from `_did_you_mean` where a name could be misspelt: policy and template ids, entity types in `cedar_read_entities`, and extension functions and methods in parse errors.
@@ -454,11 +456,13 @@ The size of the suite matters. A run with `--phase all` writes 59 files and 76 M
    - `test/run.sh` runs `generate.py --suite --phase <current>` before it collects the files. This takes about 2 seconds.
 
    The alternative is a separate runner for `test/cedar/spec/`. Phase 2 must decide, because it is the first phase that runs these files.
+
+   **Decided in phase 2:** not committed (`test/spec/d/.gitignore` ignores `7[0-5]_cedar_oracle*.sql`). `test/run.sh` runs `generate.py suite` (the runs in its `SUITE` list) before it collects the files, and `--no-cedar-oracle` skips them (section 12.4).
 2. **A runtime cost counter.** The plan asks for one. This design proposes static limits instead (section 4.3).
 3. **The principal type.** The proposal is verbatim, with no mapping setting (section 7.1).
 4. **The `ast` column** beside `est` (section 2.3). It changes the table list of the plan.
 5. **`resource_attrs`** replaces the attributes of the resource. It does not merge them (section 7.2).
-6. **Ancestors.** Phase 2 measures A and C (section 4.5).
+6. **Ancestors.** Phase 2 measures A and C (section 4.5). **Decided: C** (section 12.1).
 
 ## 11. Divergences from Cedar so far
 
@@ -467,7 +471,77 @@ The size of the suite matters. A run with `--phase all` writes 59 files and 76 M
 | No string can hold U+0000 (`cedar:unsupported`) | A limit of Postgres `text` and `jsonb` | The harness substitutes U+E000 (section 1.3). |
 | No schema-based parsing of entities or context. Write `__extn` and `__entity` explicitly, and store the action entities with `cedar_put_entities`. | The extension does not read schemas (plan, "Not in v1") | convert.py normalizes the data (section 1.3). |
 | `1e3` is accepted as the Long `1000` | `jsonb` does not keep the original number text | None in the corpus |
-| A record literal whose only key is `__entity` or `__extn` is rejected | The escape ambiguity of the value model | None in the corpus |
+| A record with the key `__entity` or `__extn` is rejected: in a policy `cedar:unsupported`, in entity data or the context `cedar:invalid_entity` or `cedar:invalid_context` | The escape ambiguity of the value model | `51_cedar_errors.sql`; none in the corpus |
+| A cycle that only the request overlay makes is not rejected: `in` still ends, and treats the entities of the cycle as each other's ancestors | Checking every overlay for cycles would cost every request a walk | None in the corpus |
+| Two concurrent `cedar_put_entities` calls can make a cycle that neither sees (there is no lock); `in` still ends | No global lock (section 12.1) | None |
 | The `_current` helpers fail closed when a `forbid` errors | Plan, decision 1 | In-house specs (phase 5) |
 | Error messages differ | Only the policy ids are compared | `cedar_test.authz` compares ids only |
 | The limits of section 6 | The size of the work in PL/pgSQL | None in the corpus |
+
+## 12. Phase 2 measurements
+
+Phase 2 built the core evaluator: the Cedar section of `pg_permissions--0.1.0.sql`. The measurements are throwaway, with the tags `cedar-ancestors` and `cedar-requests`. [`e-cedar/phase2.sh`](./e-cedar/phase2.sh) runs [`ancestors.sql`](./e-cedar/ancestors.sql), a concurrent-write test with pgbench, and [`requests.sql`](./e-cedar/requests.sql). They ran on PostgreSQL 16.4 (Postgres.app) on Apple silicon on 2026-11-02, with nothing else running. Each figure is the best of 5 runs, in µs per operation.
+
+### 12.1 Ancestors: C, the recursive walk
+
+The data has chains of groups with only direct parents stored: 1,000 chains for depths 1 and 10, and 100 chains for depth 117. A user sits under the bottom group of each chain.
+
+| Operation | Depth 1 | Depth 10 | Depth 117 |
+| --- | --- | --- | --- |
+| A: ancestors of a user (closure lookup) | 1.1 | 3.6 | 33.0 |
+| C: ancestors of a user (recursive walk) | 5.9 | 17.1 | 144.4 |
+| A: one `in` test (index probe) | 0.9 | 1.2 | 1.4 |
+| C: `cedar_is_authorized`, scope `principal in` the top group | 49.0 | 61.7 | 194.7 |
+| C: the same, plus `resource.owner in` the top group in a condition | 58.9 | 71.7 | 205.3 |
+| A: write a new leaf (closure rows, global lock) | 17.4 | 44.2 | 436.8 |
+| C: write a new leaf (`cedar_put_entities`) | 57.5 | 56.3 | 58.0 |
+| A: link a chain's top group under a new root (every descendant's closure) | 176.8 | 2,838 | 34,500 |
+| C: bulk load, per entity (1,000 per call) | 36.6 | 32.2 | 29.2 |
+| A: closure rebuild after that load, per entity | 2.0 | 8.8 | 149.8 |
+| Rows: A closure / C parents | 2,000 / 2,000 | 56,000 / 11,000 | 690,400 / 11,800 |
+
+Concurrent writes, at depth 10 with 8 clients for 10 s, each putting a new leaf under a random chain: **C 24,564 tps**, and A 8,944 tps. A needs its global lock, so its writes are serialized.
+
+**The decision is C**, the recursive walk over `cedar_entity_parents`.
+
+- Reads favour A only in deep hierarchies. At depths 1 and 10, a whole request costs 49 to 72 µs, and the walks cost 6 to 17 µs of that. The request computes the ancestors of principal, action and resource once, in one query, and keeps them in `env`. Each further `in` on another entity walks once more.
+- Writes favour C. A closure's write cost grows with depth: a re-parent costs 35 ms at depth 117. A also needs the global lock that the plan rules out. C writes the direct parents only, at about 57 µs for a new leaf at any depth.
+- C keeps no derived state. A delete or a re-parent takes effect at once, and the overlay needs no special case: the walk reads the overlay's parents first.
+
+Three details made C this fast:
+
+1. Each step of the walk is a `lateral (... offset 0)` index probe. With a plain join, the planner hashed the whole parents table, because it guesses 10 rows for the work table. That cost 105 µs at depth 1.
+2. `cedar_put_entities` reaches the tables through index probes from the put entities. A cycle is only possible when a put entity is already the parent of another entity, so a new leaf skips the cycle check. Other puts run one depth-first search over the put entities and their ancestors, O(V + E).
+3. With an overlay, the walk is breadth first in PL/pgSQL (`_cedar_ancestors`). The recursive query re-planned on every call and cost 180 µs.
+
+Cycles are rejected, as Cedar does (`compute_tc` with `enforce_dag`). The walk uses `UNION`, so it ends even on a cycle that two concurrent puts made (section 11).
+
+The corpus check: `generate.py --reduce-parents` keeps only the direct parents of each entity, which removes the implied parent links that Cedar's JSON lists. The 6,424 phase 2 requests of the cases that lose a link all pass. `52_cedar_hierarchy.sql` covers depth 120, deletes and re-parenting.
+
+### 12.2 Requests
+
+`requests.sql` uses 1,000 users in 50 groups, 1,000 documents in 20 folders, and actions with groups. Each request asks for a different user and document.
+
+| Case | µs per request |
+| --- | --- |
+| 1 policy, scope only (`principal in` Org, `action in` a group, `resource in` Folder) | 55 |
+| 10 policies with conditions (attributes, `has`, `contains`, `==`, `>=`) | 79 |
+| the same, with a context of 3 values | 94 |
+| the same 10 policies, with the principal and resource only in the overlay | 263 |
+| the same 10 policies, for a principal that is not stored, so 4 policies err (the second pass builds their messages) | 150 |
+
+The fixed cost is about 50 µs: parsing three uids, one walk query, one entity query and the scope query. Each condition adds a few µs, about 0.5 µs per node as in section 8. The overlay costs the most because its entity JSON is checked and converted on every request. Phase 5 should measure the RLS path against these figures.
+
+### 12.3 Oracle
+
+| Run | Requests | Result |
+| --- | --- | --- |
+| `--phase 2` (json, stored) | 26,793 | all pass |
+| `--phase 2 --mode overlay` | 19,688 | all pass |
+| `--phase 2 --reduce-parents` | 6,424 | all pass |
+
+`skip.tsv` has no entries.
+
+### 12.4 How the suite runs the oracle
+
+The generated files are not committed. `test/spec/d/.gitignore` ignores `7[0-5]_cedar_oracle*.sql`. Before each run of the extension, `test/run.sh` calls `generate.py suite`, which writes the runs in the `SUITE` list of `generate.py`. That takes about 3 seconds, and the files add about 35 seconds to the run. `--no-cedar-oracle` skips them. `docker/run-matrix.sh test` generates the files on the host, because the client containers have no Python.
