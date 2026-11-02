@@ -1045,3 +1045,10 @@ Orchestrator choices: fixed constant caps (OpenFGA makes them configurable; here
 ### Angle for the post
 
 - A client library for an authorization extension is mostly a translation layer, and its hard bugs are the same as the extension's: who is the subject right now. The leak lived in connection handling, not in any permission logic.
+
+## Session 8 (2026-11-02): readable examples, tabs, and the push
+
+- **Narrow code.** Every example in the user docs now fits 72 columns: one clause and one named argument per line in SQL, pretty-printed JSON in FGA strings, and in JS nothing constructed inside a call (hoist it into a named `const`). The SQL rewrite was proven whitespace-only by a checker that compared tokens outside strings and deep-compared JSON inside them, so the examples verified in session 6 stayed verified.
+- **SQL/JavaScript tabs.** The source stays plain Markdown (GitHub shows paired blocks one after the other); the site sync turns adjacent blocks tagged `tab="SQL"` and `tab="JavaScript"` into Starlight `<Tabs syncKey="lang">`. The JS usage moved into the RBAC, FGA and Conditions pages; the JavaScript page became setup only.
+- **The site moved** from the repo root `docs/` into `pg_permissions/site/`, since it documents only this extension. A separate docs revision (task guides, navigation, content checks) was committed first. Suite 56 files / 3,650 assertions; JS 140 unit tests.
+- **Pushed** the `pg_permissions` branch to origin for a PR; not merged, and npm `permissions` 0.2.0 is still unpublished.
