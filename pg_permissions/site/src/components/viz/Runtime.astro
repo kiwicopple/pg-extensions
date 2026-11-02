@@ -1,0 +1,130 @@
+---
+// Client runtime shared by every chart: one tooltip and the config tabs. Included once per page
+// (Astro dedupes the bundled script). Charts are complete without it: every value is also in the
+// table view and in the SVG <title> text.
+---
+
+<script>
+	type TipRow = { c?: string; k: string; v: string; x?: string };
+	type Tip = { t: string; s?: string; r: TipRow[] };
+
+	const tooltip = document.createElement('div');
+	tooltip.className = 'viz-tooltip';
+	tooltip.setAttribute('role', 'tooltip');
+	tooltip.hidden = true;
+	document.body.appendChild(tooltip);
+
+	let current: Element | null = null;
+
+	function build(tip: Tip) {
+		tooltip.replaceChildren();
+		const title = document.createElement('div');
+		title.className = 'tt-title';
+		title.textContent = tip.t;
+		tooltip.appendChild(title);
+		if (tip.s) {
+			const sub = document.createElement('div');
+			sub.className = 'tt-sub';
+			sub.textContent = tip.s;
+			tooltip.appendChild(sub);
+		}
+		for (const r of tip.r) {
+			const row = document.createElement('div');
+			row.className = 'tt-row';
+			if (r.c) {
+				const key = document.createElement('span');
+				key.className = 'tt-key';
+				key.style.background = r.c;
+				row.appendChild(key);
+			}
+			const val = document.createElement('span');
+			val.className = 'tt-val';
+			val.textContent = r.v;
+			const label = document.createElement('span');
+			label.className = 'tt-label';
+			label.textContent = r.k;
+			row.append(val, label);
+			if (r.x) {
+				const x = document.createElement('span');
+				x.className = 'tt-x';
+				x.textContent = r.x;
+				row.appendChild(x);
+			}
+			tooltip.appendChild(row);
+		}
+	}
+
+	function place(x: number, y: number) {
+		const pad = 14;
+		const w = tooltip.offsetWidth;
+		const h = tooltip.offsetHeight;
+		let left = x + pad;
+		let top = y + pad;
+		if (left + w > window.innerWidth - 8) left = x - w - pad;
+		if (top + h > window.innerHeight - 8) top = y - h - pad;
+		tooltip.style.left = `${Math.max(8, left)}px`;
+		tooltip.style.top = `${Math.max(8, top)}px`;
+	}
+
+	function show(el: Element, x: number, y: number) {
+		if (current !== el) {
+			try {
+				build(JSON.parse(el.getAttribute('data-tip') ?? ''));
+			} catch {
+				return;
+			}
+			current = el;
+		}
+		tooltip.hidden = false;
+		place(x, y);
+	}
+
+	function hide() {
+		current = null;
+		tooltip.hidden = true;
+	}
+
+	document.addEventListener('pointermove', (e) => {
+		const el = (e.target as Element | null)?.closest?.('[data-tip]');
+		if (el) show(el, e.clientX, e.clientY);
+		else if (!tooltip.hidden) hide();
+	});
+	document.addEventListener('pointerdown', (e) => {
+		if (!(e.target as Element | null)?.closest?.('[data-tip]')) hide();
+	});
+	document.addEventListener('focusin', (e) => {
+		const el = (e.target as Element | null)?.closest?.('[data-tip]');
+		if (!el) return;
+		const b = el.getBoundingClientRect();
+		show(el, b.left + b.width / 2, b.top + b.height / 2);
+	});
+	document.addEventListener('focusout', hide);
+	document.addEventListener('keydown', (e) => {
+		if (e.key === 'Escape') hide();
+	});
+	window.addEventListener('scroll', hide, { passive: true });
+
+	// ---- tabs: one selector above the charts it scopes; all panels stay visible without JS ----
+	for (const group of document.querySelectorAll<HTMLElement>('[data-tabgroup]')) {
+		const buttons = [...group.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+		const panels = [...group.querySelectorAll<HTMLElement>('[data-tab]')];
+		const select = (key: string, focus = false) => {
+			for (const b of buttons) {
+				const on = b.dataset.tabTarget === key;
+				b.setAttribute('aria-selected', String(on));
+				b.tabIndex = on ? 0 : -1;
+				if (on && focus) b.focus();
+			}
+			for (const p of panels) p.hidden = p.dataset.tab !== key;
+		};
+		buttons.forEach((b, i) => {
+			b.addEventListener('click', () => select(b.dataset.tabTarget!));
+			b.addEventListener('keydown', (e) => {
+				const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+				if (d) select(buttons[(i + d + buttons.length) % buttons.length].dataset.tabTarget!, true);
+			});
+		});
+		group.setAttribute('data-tabs-ready', '');
+		if (buttons[0]) select(buttons[0].dataset.tabTarget!);
+	}
+</script>

@@ -1,0 +1,115 @@
+{
+  "name": "permissions",
+  "version": "0.2.0",
+  "description": "JS client for pg_permissions: RBAC and OpenFGA authorization in Postgres, over PostgREST or SQL.",
+  "license": "MIT",
+  "author": "Paul Copplestone",
+  "homepage": "https://permissions.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kiwicopple/pg-extensions.git",
+    "directory": "pg_permissions/js"
+  },
+  "bugs": "https://github.com/kiwicopple/pg-extensions/issues",
+  "keywords": [
+    "postgres",
+    "permissions",
+    "rbac",
+    "openfga",
+    "fga",
+    "authorization",
+    "supabase",
+    "postgrest",
+    "rls"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.cts",
+  "unpkg": "./dist/umd/permissions.js",
+  "jsdelivr": "./dist/umd/permissions.js",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./rbac": {
+      "import": {
+        "types": "./dist/rbac.d.mts",
+        "default": "./dist/rbac.mjs"
+      },
+      "require": {
+        "types": "./dist/rbac.d.cts",
+        "default": "./dist/rbac.cjs"
+      }
+    },
+    "./fga": {
+      "import": {
+        "types": "./dist/fga.d.mts",
+        "default": "./dist/fga.mjs"
+      },
+      "require": {
+        "types": "./dist/fga.d.cts",
+        "default": "./dist/fga.cjs"
+      }
+    },
+    "./sql": {
+      "import": {
+        "types": "./dist/sql.d.mts",
+        "default": "./dist/sql.mjs"
+      },
+      "require": {
+        "types": "./dist/sql.d.cts",
+        "default": "./dist/sql.cjs"
+      }
+    },
+    "./postgrest": {
+      "import": {
+        "types": "./dist/postgrest.d.mts",
+        "default": "./dist/postgrest.mjs"
+      },
+      "require": {
+        "types": "./dist/postgrest.d.cts",
+        "default": "./dist/postgrest.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "typecheck": "tsc -p tsconfig.json && tsc -p test/tsconfig.json && tsc -p examples/tsconfig.json",
+    "check:exports": "publint && attw --pack . --profile node16",
+    "docs": "typedoc",
+    "db:up": "docker compose -f test/docker-compose.yml up -d --wait",
+    "db:down": "docker compose -f test/docker-compose.yml down -v"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
+    "@supabase/supabase-js": "^2.118.0",
+    "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.1",
+    "publint": "^0.3.25",
+    "tsdown": "^0.23.4",
+    "typedoc": "^0.28.20",
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.12"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@11.7.0"
+}

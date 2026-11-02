@@ -1,0 +1,87 @@
+---
+import Frame from '../viz/Frame.astro';
+import Legend from '../viz/Legend.astro';
+import ColPanel from '../viz/ColPanel.astro';
+import { primary, workloadInfo, p50s, times, comparisonLink } from '../../lib/bench';
+import { engine, fmt, DESIGN_IDS } from '../../lib/chart';
+import type { Design } from '../../lib/chart';
+
+const s = primary;
+const KEY = ['share_select_page', 'share_list_objects', 'parents_proj_select_page', 'nest_check'];
+const SCALE = 'medium';
+const shapes = ['default', 'deep', 'wide'].filter((sh) => s?.configs.some((c) => c.scale === SCALE && c.shape === sh));
+const panels = KEY.map((name) => ({
+	name,
+	info: workloadInfo(name),
+	groups: shapes.map((sh) => {
+		const v = p50s(s!, SCALE, sh, name);
+		return { label: sh, cols: DESIGN_IDS.filter((d) => v[d] != null).map((d) => ({ design: d, value: v[d]! })) };
+	}),
+})).filter((p) => p.groups.some((g) => g.cols.length));
+
+let takeaway = '';
+if (shapes.length >= 2) {
+	const g = (name: string, sh: string) => p50s(s!, SCALE, sh, name);
+	const parts: string[] = [];
+	const cd = g('share_select_page', 'default').c;
+	const cdeep = g('share_select_page', 'deep').c;
+	const ad = g('share_select_page', 'default').a;
+	const adeep = g('share_select_page', 'deep').a;
+	if (cd && cdeep && ad && adeep)
+		parts.push(`deep teams leave the sharing page of C almost unchanged (${fmt(cd)} to ${fmt(cdeep)} ms), but A changes from ${fmt(ad)} to ${fmt(adeep)} ms`);
+	const w = g('share_select_page', 'wide');
+	if (w.a && w.b && w.c)
+		parts.push(`in the wide shape the designs differ most: A ${fmt(w.a)}, B ${fmt(w.b)}, C ${fmt(w.c)} ms (${times(w.a / w.c)} between A and C)`);
+	if (!parts.length) {
+		const wd = g('share_select_page', 'wide');
+		const dp = g('share_select_page', 'deep');
+		if (wd.a && wd.c && dp.a && dp.c)
+			parts.push(`the sharing page takes ${fmt(dp.a)} ms on A and ${fmt(dp.c)} ms on C with deep teams, and ${fmt(wd.a)} ms on A and ${fmt(wd.c)} ms on C with wide teams (${times(wd.a / wd.c)} between A and C)`);
+	}
+	takeaway = parts.length ? `Medium data, ${s!.label}: ${parts.join('; ')}.` : '';
+}
+---
+
+{
+	panels.length && shapes.length >= 2 ? (
+		<Frame
+			title={shapes.length === 3 ? 'Default, deep and wide team shapes (medium data)' : `Team shapes: ${shapes.join(' and ')} (medium data)`}
+			subtitle={`${s!.label}: p50 latency, log axis.${shapes.includes('default') ? '' : ' This series has no medium default run (the default shape exists at 1M documents, and at 10k and 100k only on local PG 16).'} In deep, the teams are in chains 9 levels deep. In wide, each user is in 50 teams and each team has 50 shares.`}
+			takeaway={takeaway}
+			source={[{ href: comparisonLink('medium', 'wide'), label: 'COMPARISON.md (local PG 16, before optimization)' }]}
+		>
+			<Legend slot="legend" />
+			<div class="viz-panels">
+				{panels.map((p) => (
+					<div>
+						<p class="viz-panel-title">{p.info.title}</p>
+						<p class="viz-panel-sub">{p.name}</p>
+						<ColPanel groups={p.groups} unit="ms" title={`${p.info.title}, p50 by team shape`} />
+					</div>
+				))}
+			</div>
+			<Fragment slot="table">
+				<table>
+					<thead>
+						<tr>
+							<th>Workload (p50 ms)</th>
+							{shapes.flatMap((sh) => DESIGN_IDS.map((d) => <th>{engine(d).letter} {sh}</th>))}
+						</tr>
+					</thead>
+					<tbody>
+						{panels.map((p) => (
+							<tr>
+								<td>{p.info.title}</td>
+								{p.groups.flatMap((gr) => DESIGN_IDS.map((d) => <td>{fmt(gr.cols.find((c) => c.design === d)?.value)}</td>))}
+							</tr>
+						))}
+					</tbody>
+				</table>
+			</Fragment>
+		</Frame>
+	) : (
+		<div class="viz-note">
+			<p>The shape comparison needs medium-scale runs in at least two shapes. The current data does not have them.</p>
+		</div>
+	)
+}

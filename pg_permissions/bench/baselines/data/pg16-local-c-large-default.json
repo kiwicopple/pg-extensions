@@ -1,0 +1,34 @@
+{
+  "run_id": "pg16-local-c-large-default",
+  "date": "2026-10-28T15:49:00Z",
+  "environment": "local",
+  "host": "Apple M4, 10 CPU, 24 GB",
+  "pg_version": "16.4",
+  "design": "c",
+  "scale": "large", "shape": "default", "clients": 4, "duration_s": 10,
+  "workloads": [
+    {"name": "rbac_check", "p50_ms": 0.23, "p95_ms": 0.34, "tps": 16460, "budget_ms": 1},
+    {"name": "rbac_select_page", "p50_ms": 0.64, "p95_ms": 0.8, "tps": 6050, "budget_ms": 3},
+    {"name": "rbac_select_count", "p50_ms": 0.78, "p95_ms": 0.87, "tps": 5037, "budget_ms": 3},
+    {"name": "rbac_update_one", "p50_ms": 0.68, "p95_ms": 0.8, "tps": 5994, "budget_ms": 3},
+    {"name": "write_assign_role", "p50_ms": 0.2, "p95_ms": 0.34, "tps": 18472, "budget_ms": 1},
+    {"name": "share_list_objects", "p50_ms": 0.23, "p95_ms": 0.35, "tps": 16501, "budget_ms": 2},
+    {"name": "share_select_page", "p50_ms": 0.95, "p95_ms": 1.22, "tps": 4073, "budget_ms": 6},
+    {"name": "write_share", "p50_ms": 0.16, "p95_ms": 0.28, "tps": 22805, "budget_ms": 1},
+    {"name": "parents_proj_select_page", "p50_ms": 1.01, "p95_ms": 1.29, "tps": 3879, "budget_ms": null},
+    {"name": "parents_proj_select_count", "p50_ms": 2.72, "p95_ms": 2.9, "tps": 1464, "budget_ms": null},
+    {"name": "parents_select_page", "p50_ms": 9.57, "p95_ms": 10.34, "tps": 414, "budget_ms": null},
+    {"name": "parents_select_count", "p50_ms": 22.08, "p95_ms": 23.25, "tps": 181, "budget_ms": null},
+    {"name": "write_nest_team", "p50_ms": 333.48, "p95_ms": 384.19, "tps": 11, "budget_ms": null},
+    {"name": "nest_check", "p50_ms": 0.26, "p95_ms": 0.34, "tps": 14697, "budget_ms": null}
+  ],
+  "seeds": [
+    {"phase": "rbac", "seconds": 4.95, "size_mb": 5.3},
+    {"phase": "sharing", "seconds": 4.08, "size_mb": 21.3},
+    {"phase": "parents_proj", "seconds": 0.39, "size_mb": 22.3},
+    {"phase": "parents", "seconds": 16.22, "size_mb": 182.4},
+    {"phase": "nesting", "seconds": 0.14, "size_mb": 183.2}
+  ],
+  "checksums": {"rbac": "2e1dd348", "sharing": "58a66d1d", "parents_proj": "bffa5242", "parents": "bffa5242"},
+  "report": "bench/baselines/c-large-default.md"
+}

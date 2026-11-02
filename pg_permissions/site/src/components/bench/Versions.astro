@@ -1,0 +1,194 @@
+---
+import Frame from '../viz/Frame.astro';
+import Legend from '../viz/Legend.astro';
+import TabGroup from '../viz/TabGroup.astro';
+import ColPanel from '../viz/ColPanel.astro';
+import { allSeries, comparableGroups, tagLabel, usingFixture, workloadInfo, workloadNames, p50, DATA_URL, times } from '../../lib/bench';
+
+const DEFAULT_TAG = 'opt';
+import type { Series } from '../../lib/bench';
+import { engine, fmt } from '../../lib/chart';
+import type { Design } from '../../lib/chart';
+
+const KEY = ['rbac_check', 'share_select_page', 'parents_proj_select_page', 'parents_select_page', 'write_nest_team', 'nest_check'];
+// Design D has runs on PG 18 only (bench/baselines/D.md), so it has no version comparison yet.
+const DESIGNS: Design[] = ['a', 'b', 'c'];
+const order = ['large-default', 'medium-default', 'small-default', 'medium-deep', 'medium-wide'];
+
+// Series are only compared with series of the same environment AND tag: local against Docker, or optimized against
+// pre-optimization, would mix the Postgres version with something else. Optimized (tag opt) Docker comes first.
+const rank = (g: { environment: string; tag?: string }) => (g.tag === DEFAULT_TAG ? 0 : g.tag ? 1 : 2) + (g.environment === 'docker' ? 0 : 0.5);
+const groups = comparableGroups().sort((a, b) => rank(a) - rank(b));
+
+function configsOf(series: Series[]) {
+	const m = new Map<string, { key: string; scale: string; shape: string; label: string; series: Series[] }>();
+	for (const s of series)
+		for (const c of s.configs) {
+			const k = `${c.scale}-${c.shape}`;
+			if (!m.has(k)) m.set(k, { key: k, scale: c.scale, shape: c.shape, label: c.label, series: [] });
+			m.get(k)!.series.push(s);
+		}
+	return [...m.values()].sort((a, b) => ((order.indexOf(a.key) + 100) % 100) - ((order.indexOf(b.key) + 100) % 100));
+}
+
+function panelsFor(c: ReturnType<typeof configsOf>[number]) {
+	return KEY.map((name) => ({
+		name,
+		info: workloadInfo(name),
+		groups: c.series
+			.map((s) => ({
+				label: `PG ${s.major}`,
+				cols: DESIGNS.map((d) => ({ design: d, value: p50(s.get(d, c.scale, c.shape), name) })).filter((x) => x.value != null) as { design: Design; value: number }[],
+			}))
+			.filter((g) => g.cols.length),
+	})).filter((p) => p.groups.length);
+}
+
+type Best = { name: string; d: Design; hi: Series; lo: Series; r: number; vhi: number; vlo: number; cfg: string };
+function takeawayFor(series: Series[], configs: ReturnType<typeof configsOf>, what: string) {
+	if (new Set(series.map((s) => s.major)).size < 2)
+		return `This group has only ${series.map((s) => s.label).join(', ')}, so nothing is available to compare yet.`;
+	let best: Best | undefined;
+	let pairs = 0;
+	for (const c of configs)
+		for (const name of KEY)
+			for (const d of DESIGNS) {
+				const vals = c.series
+					.map((s) => ({ s, v: p50(s.get(d, c.scale, c.shape), name) }))
+					.filter((x): x is { s: Series; v: number } => x.v != null);
+				for (const x of vals)
+					for (const y of vals) {
+						if (x.s.major >= y.s.major) continue;
+						pairs++;
+						const r = Math.max(x.v, y.v) / Math.min(x.v, y.v);
+						if (!best || r > best.r)
+							best = { name, d, hi: x.v > y.v ? x.s : y.s, lo: x.v > y.v ? y.s : x.s, r, vhi: Math.max(x.v, y.v), vlo: Math.min(x.v, y.v), cfg: c.label };
+					}
+			}
+	if (!best) return `No two Postgres versions have a configuration in common in ${what} yet.`;
+	return best.r < 1.2
+		? `In ${pairs} workload pairs in ${what}, no key workload differs by more than about 20% between Postgres versions.`
+		: `In ${what} the largest gap between versions is ${workloadInfo(best.name).title} on ${engine(best.d).letter} (${best.cfg}): ${fmt(best.vlo)} ms on PG ${best.lo.major} against ${fmt(best.vhi)} ms on PG ${best.hi.major} (${times(best.r)}). Gaps under about 20% are noise.`;
+}
+
+const sections = groups.map((g) => {
+	const configs = configsOf(g.series);
+	const name = `${g.environment === 'docker' ? 'Docker' : g.environment === 'local' ? 'Local' : g.environment}, ${g.tag ? tagLabel(g.tag) + ' designs (tag ' + g.tag + ')' : 'untagged runs (before the optimization pass)'}`;
+	return { ...g, configs, name, takeaway: takeawayFor(g.series, configs, 'this group'), compare: new Set(g.series.map((s) => s.major)).size >= 2 };
+});
+const majors = [...new Set(allSeries.map((s) => s.major))].sort((a, b) => a - b);
+---
+
+{
+	usingFixture && (
+		<div class="viz-note">
+			<p>
+				<strong>This page shows the development fixture.</strong> It is a single local PG 16 series that the page parses from the saved
+				reports. Docker runs for pg16, pg17 and pg18 will appear here when their files are in{' '}
+				<code>pg_permissions/bench/baselines/data/</code>.
+			</p>
+		</div>
+	)
+}
+
+{
+	allSeries.length ? (
+		<>
+			<div class="viz-note">
+				<p>
+					{majors.length === 1 ? (
+						<>
+							<strong>Only PG {majors[0]} is available now</strong> ({allSeries.map((s) => s.label).join(', ')}).
+							The page compares versions when the data has runs for another Postgres major version.
+						</>
+					) : (
+						<>
+							<strong>
+								{majors.length} Postgres versions available: {majors.map((m) => `PG ${m}`).join(', ')}.
+							</strong>{' '}
+							A series is one Postgres major version on one environment with one tag (the optimized designs have the tag <code>opt</code>). The page compares only series with the same environment and tag, so a version gap never includes a machine gap or an optimization gap. The optimized designs come first, and the runs before the optimizations follow. The page uses the latest run for each design, scale and shape.
+						</>
+					)}
+				</p>
+			</div>
+
+			<div class="sl-markdown-content">
+				<table>
+					<thead>
+						<tr><th>Series</th><th>Postgres</th><th>Runs</th><th>Designs</th><th>Configurations</th><th>Host</th></tr>
+					</thead>
+					<tbody>
+						{allSeries.map((s) => (
+							<tr>
+								<td>{s.label}</td>
+								<td>{s.versions.join(', ')}</td>
+								<td>{s.runs.length}</td>
+								<td>{[...new Set(s.runs.map((r) => r.design.toUpperCase()))].sort().join(', ')}</td>
+								<td>{s.configs.map((c) => c.label).join(', ')}</td>
+								<td>{[...new Set(s.runs.map((r) => r.host).filter(Boolean))].join('; ')}</td>
+							</tr>
+						))}
+					</tbody>
+				</table>
+			</div>
+
+			{sections.map((sec) => (
+				<>
+					<h2 id={`versions-${sec.environment}-${sec.tag ?? 'untagged'}`}>{sec.name}</h2>
+					{sec.compare ? (
+						<Frame
+							title="p50 latency by Postgres version"
+							subtitle={`Key workloads, one panel for each workload. The columns are designs, and the groups are Postgres versions. Log axis, milliseconds.`}
+							takeaway={sec.takeaway}
+							source={[{ href: DATA_URL, label: 'bench/baselines/data' }]}
+						>
+							<Legend slot="legend" />
+							<TabGroup tabs={sec.configs.map((c) => ({ key: c.key, label: c.label }))} label="Scale and shape">
+								{sec.configs.map((c) => (
+									<div data-tab={c.key}>
+										<p class="viz-tabpanel-title">{c.label}</p>
+										<div class="viz-panels">
+											{panelsFor(c).map((p) => (
+												<div>
+													<p class="viz-panel-title">{p.info.title}</p>
+													<p class="viz-panel-sub">{p.name}</p>
+													<ColPanel groups={p.groups} unit="ms" title={`${p.info.title}, p50 by Postgres version, ${c.label}, ${sec.name}`} />
+												</div>
+											))}
+										</div>
+										<details>
+											<summary>Table view: {c.label}, all workloads</summary>
+											<div class="tbl-wrap">
+												<table>
+													<thead>
+														<tr>
+															<th>Workload (p50 ms)</th>
+															{c.series.flatMap((s) => DESIGNS.map((d) => <th>PG {s.major} {engine(d).letter}</th>))}
+														</tr>
+													</thead>
+													<tbody>
+														{workloadNames(c.series.flatMap((s) => DESIGNS.map((d) => s.get(d, c.scale, c.shape)).filter((r) => !!r)) as any)
+															.map((name) => (
+																<tr>
+																	<td>{workloadInfo(name).title}</td>
+																	{c.series.flatMap((s) => DESIGNS.map((d) => <td>{fmt(p50(s.get(d, c.scale, c.shape), name))}</td>))}
+																</tr>
+															))}
+													</tbody>
+												</table>
+											</div>
+										</details>
+									</div>
+								))}
+							</TabGroup>
+						</Frame>
+					) : (
+						<div class="viz-note"><p>{sec.takeaway}</p></div>
+					)}
+				</>
+			))}
+		</>
+	) : (
+		<div class="viz-note"><p>The page found no benchmark data.</p></div>
+	)
+}

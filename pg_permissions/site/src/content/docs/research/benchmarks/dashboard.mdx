@@ -1,0 +1,51 @@
+---
+title: Benchmarks dashboard
+description: Charts of the latency, scale, shape, read and write, parents and storage results of the three pg_permissions designs.
+---
+
+import DatasetNote from '../../../../components/bench/DatasetNote.astro';
+import EngineComparison from '../../../../components/bench/EngineComparison.astro';
+import Scaling from '../../../../components/bench/Scaling.astro';
+import Shapes from '../../../../components/bench/Shapes.astro';
+import ReadWrite from '../../../../components/bench/ReadWrite.astro';
+import Parents from '../../../../components/bench/Parents.astro';
+import Seeds from '../../../../components/bench/Seeds.astro';
+import WorkloadTable from '../../../../components/bench/WorkloadTable.astro';
+
+The page draws every chart at build time from the run files. Each chart has a table view under it. The design colors are the same everywhere:
+<strong style="color:var(--eng-a)">A</strong> tuple core, <strong style="color:var(--eng-b)">B</strong> policy first,
+<strong style="color:var(--eng-c)">C</strong> compiled model. The [engine comparison report](../comparison/) is the prose summary of these numbers.
+The [decision record](../../decision/) explains how these measurements informed the architecture.
+
+<DatasetNote />
+
+## Design comparison for each workload
+
+<EngineComparison />
+
+## Scale from small to large
+
+<Scaling />
+
+## Default, deep and wide shapes
+
+<Shapes />
+
+## Read against write
+
+<ReadWrite />
+
+## Parents: projection against single branch
+
+<Parents />
+
+## Seed time and storage
+
+<Seeds />
+
+## What each workload measures
+
+The names and the descriptions come from the header of each workload SQL file in
+`pg_permissions/bench/workloads/` and `pg_permissions/bench/designs/c/workloads/`. The three designs use the same workload names and the same intent.
+
+<WorkloadTable />

@@ -1,0 +1,122 @@
+---
+// One line chart panel: categories on x (evenly spaced), one 2px line per engine, 8px+ end markers.
+// Hover shows a crosshair at the nearest category and one tooltip listing every engine.
+import { engine, fmt, fmtShort, fmtTick, linDomain, logAxisTicks, logDomain, scaleLinear, scaleLog, spreadLabels, tip } from '../../lib/chart';
+
+interface Props {
+	categories: string[];
+	series: { design: string; values: (number | null | undefined)[] }[];
+	unit: string;
+	title: string;
+	log?: boolean;
+	/** shared y domain so panels can be compared */
+	domain?: [number, number];
+	width?: number;
+	height?: number;
+	/** categories get their own tooltip subtitle, e.g. "documents" */
+	catNote?: string[];
+}
+const { categories, series, unit, title, log = true, domain, width = 360, height = 220, catNote } = Astro.props;
+
+const mL = 44;
+const mR = 50;
+const mT = 12;
+const mB = 30;
+const pw = width - mL - mR;
+const ph = height - mT - mB;
+const vals = series.flatMap((s) => s.values.filter((v): v is number => v != null));
+let sy: ReturnType<typeof scaleLog>;
+let ticks: number[];
+if (log) {
+	const d = domain ?? logDomain(vals);
+	sy = scaleLog(d[0], d[1], mT + ph, mT);
+	ticks = logAxisTicks(d);
+} else {
+	const d = linDomain(Math.max(...vals, 0));
+	sy = scaleLinear(0, d.domain[1], mT + ph, mT);
+	ticks = d.ticks;
+}
+const band = pw / categories.length;
+const cx = (i: number) => mL + band * (i + 0.5);
+
+const lines = series.map((s) => {
+	let d = '';
+	let pen = false;
+	s.values.forEach((v, i) => {
+		if (v == null) {
+			pen = false;
+			return;
+		}
+		d += `${pen ? 'L' : 'M'}${cx(i).toFixed(1)},${sy(v).toFixed(1)}`;
+		pen = true;
+	});
+	return { design: s.design, d };
+});
+const ends = spreadLabels(
+	series
+		.map((s) => {
+			const i = s.values.reduce((acc, v, k) => (v != null ? k : acc), -1);
+			return i < 0 ? null : { design: s.design, i, v: s.values[i] as number, y: sy(s.values[i] as number) };
+		})
+		.filter((x): x is NonNullable<typeof x> => x !== null),
+	12,
+);
+---
+
+<svg viewBox={`0 0 ${width} ${height}`} role="group" aria-label={title}>
+	{
+		ticks.map((t) => (
+			<g>
+				<line class="grid" x1={mL} x2={width - mR} y1={sy(t)} y2={sy(t)} />
+				<text class="t-muted" x={mL - 6} y={sy(t) + 3.5} text-anchor="end">
+					{fmtTick(t)}
+				</text>
+			</g>
+		))
+	}
+	<line class="axis" x1={mL} x2={width - mR} y1={mT + ph} y2={mT + ph} />
+	{
+		categories.map((c, i) => (
+			<text class="t-ink" x={cx(i)} y={mT + ph + 17} text-anchor="middle">
+				{c}
+			</text>
+		))
+	}
+	{
+		categories.map((c, i) => (
+			<g class="cell">
+				<line class="cross" x1={cx(i)} x2={cx(i)} y1={mT} y2={mT + ph} />
+				<rect
+					class="hit"
+					x={mL + band * i}
+					y={mT}
+					width={band}
+					height={ph + mB - 6}
+					tabindex="0"
+					role="img"
+					aria-label={`${title}, ${c}: ${series.map((s) => `${engine(s.design).letter} ${fmt(s.values[i])} ${unit}`).join('; ')}`}
+					data-tip={tip({
+						t: catNote?.[i] ? `${c} (${catNote[i]})` : c,
+						s: title,
+						r: series
+							.filter((s) => s.values[i] != null)
+							.map((s) => ({ c: engine(s.design).css, k: `${engine(s.design).letter} ${engine(s.design).name}`, v: `${fmt(s.values[i])} ${unit}` })),
+					})}
+				/>
+			</g>
+		))
+	}
+	{lines.map((l) => <path class={`line ln-${l.design}`} d={l.d} />)}
+	{
+		series.map((s) =>
+			s.values.map((v, i) => v != null && <circle class={`dot eng-${s.design}`} cx={cx(i)} cy={sy(v)} r="4.5" style="pointer-events:none" />),
+		)
+	}
+	{
+		ends.map((e) => (
+			<text class="t-val" x={cx(e.i) + 10} y={e.y + 3.5}>
+				{engine(e.design).letter} {fmtShort(e.v)}
+			</text>
+		))
+	}
+</svg>

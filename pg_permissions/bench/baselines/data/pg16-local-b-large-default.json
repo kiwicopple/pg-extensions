@@ -1,0 +1,34 @@
+{
+  "run_id": "pg16-local-b-large-default",
+  "date": "2026-10-28T15:46:00Z",
+  "environment": "local",
+  "host": "Apple M4, 10 CPU, 24 GB",
+  "pg_version": "16.4",
+  "design": "b",
+  "scale": "large", "shape": "default", "clients": 4, "duration_s": 10,
+  "workloads": [
+    {"name": "rbac_check", "p50_ms": 0.33, "p95_ms": 0.48, "tps": 11592, "budget_ms": 1},
+    {"name": "rbac_select_page", "p50_ms": 0.62, "p95_ms": 0.99, "tps": 5940, "budget_ms": 3},
+    {"name": "rbac_select_count", "p50_ms": 0.76, "p95_ms": 0.82, "tps": 5203, "budget_ms": 3},
+    {"name": "rbac_update_one", "p50_ms": 0.79, "p95_ms": 0.86, "tps": 5444, "budget_ms": 3},
+    {"name": "write_assign_role", "p50_ms": 0.14, "p95_ms": 0.24, "tps": 25628, "budget_ms": 1},
+    {"name": "share_list_objects", "p50_ms": 0.31, "p95_ms": 0.38, "tps": 12613, "budget_ms": 2},
+    {"name": "share_select_page", "p50_ms": 1.21, "p95_ms": 1.41, "tps": 3260, "budget_ms": 6},
+    {"name": "write_share", "p50_ms": 0.14, "p95_ms": 0.25, "tps": 25669, "budget_ms": 1},
+    {"name": "parents_proj_select_page", "p50_ms": 1.44, "p95_ms": 1.66, "tps": 2749, "budget_ms": null},
+    {"name": "parents_proj_select_count", "p50_ms": 3.21, "p95_ms": 3.39, "tps": 1243, "budget_ms": null},
+    {"name": "parents_select_page", "p50_ms": 197.22, "p95_ms": 251.96, "tps": 19, "budget_ms": null},
+    {"name": "parents_select_count", "p50_ms": 226.11, "p95_ms": 266.63, "tps": 17, "budget_ms": null},
+    {"name": "write_nest_team", "p50_ms": 285.44, "p95_ms": 325.98, "tps": 14, "budget_ms": null},
+    {"name": "nest_check", "p50_ms": 2.6, "p95_ms": 2.83, "tps": 1524, "budget_ms": null}
+  ],
+  "seeds": [
+    {"phase": "rbac", "seconds": 4.56, "size_mb": 5.3},
+    {"phase": "sharing", "seconds": 1.71, "size_mb": 25.4},
+    {"phase": "parents_proj", "seconds": 0.22, "size_mb": 26.4},
+    {"phase": "parents", "seconds": 167.23, "size_mb": 762.8},
+    {"phase": "nesting", "seconds": 0.11, "size_mb": 763.9}
+  ],
+  "checksums": {"rbac": "2e1dd348", "sharing": "58a66d1d", "parents_proj": "bffa5242", "parents": "bffa5242"},
+  "report": "bench/baselines/b-large-default.md"
+}

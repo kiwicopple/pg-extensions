@@ -1,0 +1,34 @@
+{
+  "run_id": "pg16-local-a-medium-deep",
+  "date": "2026-10-28T15:51:00Z",
+  "environment": "local",
+  "host": "Apple M4, 10 CPU, 24 GB",
+  "pg_version": "16.4",
+  "design": "a",
+  "scale": "medium", "shape": "deep", "clients": 4, "duration_s": 10,
+  "workloads": [
+    {"name": "rbac_check", "p50_ms": 0.27, "p95_ms": 0.37, "tps": 14124, "budget_ms": null},
+    {"name": "rbac_select_page", "p50_ms": 0.53, "p95_ms": 0.64, "tps": 7358, "budget_ms": null},
+    {"name": "rbac_select_count", "p50_ms": 0.47, "p95_ms": 0.56, "tps": 8322, "budget_ms": null},
+    {"name": "rbac_update_one", "p50_ms": 0.8, "p95_ms": 0.94, "tps": 5298, "budget_ms": null},
+    {"name": "write_assign_role", "p50_ms": 0.16, "p95_ms": 0.27, "tps": 23129, "budget_ms": null},
+    {"name": "share_list_objects", "p50_ms": 0.69, "p95_ms": 0.85, "tps": 5609, "budget_ms": null},
+    {"name": "share_select_page", "p50_ms": 2.47, "p95_ms": 2.73, "tps": 1601, "budget_ms": null},
+    {"name": "write_share", "p50_ms": 0.15, "p95_ms": 0.25, "tps": 24867, "budget_ms": null},
+    {"name": "parents_proj_select_page", "p50_ms": 3.47, "p95_ms": 3.9, "tps": 1141, "budget_ms": null},
+    {"name": "parents_proj_select_count", "p50_ms": 3.59, "p95_ms": 4.09, "tps": 1098, "budget_ms": null},
+    {"name": "parents_select_page", "p50_ms": 99.56, "p95_ms": 108.3, "tps": 39, "budget_ms": null},
+    {"name": "parents_select_count", "p50_ms": 97.69, "p95_ms": 105.95, "tps": 40, "budget_ms": null},
+    {"name": "write_nest_team", "p50_ms": 0.15, "p95_ms": 0.25, "tps": 25221, "budget_ms": null},
+    {"name": "nest_check", "p50_ms": 0.87, "p95_ms": 0.94, "tps": 4536, "budget_ms": null}
+  ],
+  "seeds": [
+    {"phase": "rbac", "seconds": 0.8, "size_mb": 3.6},
+    {"phase": "sharing", "seconds": 0.6, "size_mb": 9.5},
+    {"phase": "parents_proj", "seconds": 0.08, "size_mb": 10},
+    {"phase": "parents", "seconds": 3.81, "size_mb": 47.9},
+    {"phase": "nesting", "seconds": 0.04, "size_mb": 47.9}
+  ],
+  "checksums": {"rbac": "d394663f", "sharing": "7cf80111", "parents_proj": "3261b092", "parents": "3261b092"},
+  "report": "bench/baselines/a-medium-deep.md"
+}

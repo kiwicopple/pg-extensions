@@ -1,0 +1,87 @@
+---
+import { DESIGN_IDS } from '../../lib/chart';
+import { allSeries, primary, runs, scalingSeries, seriesVersionLabel, usingFixture, DATA_URL } from '../../lib/bench';
+// What data the dashboard is showing, plus a stat strip and the cross-engine checksum result.
+const s = primary;
+const dates = s ? s.runs.map((r) => r.date.slice(0, 10)).sort() : [];
+const scaling = scalingSeries();
+const hosts = s ? [...new Set(s.runs.map((r) => r.host).filter(Boolean))] : [];
+
+// Checksum agreement: for every configuration where two or more engines ran, do the per-policy checksums match?
+let agree = 0;
+let total = 0;
+if (s) {
+	for (const c of s.configs) {
+		const rs = DESIGN_IDS.map((d) => s.get(d, c.scale, c.shape)).filter((r) => !!r);
+		if (rs.length < 2 || rs.some((r) => !r?.checksums)) continue;
+		const policies = Object.keys(rs[0]!.checksums!);
+		total++;
+		if (policies.every((p) => rs.every((r) => r!.checksums![p] === rs[0]!.checksums![p]))) agree++;
+	}
+}
+---
+
+{
+	usingFixture && (
+		<div class="viz-note">
+			<p>
+				<strong>This page shows the development fixture.</strong> No run files exist yet in{' '}
+				<code>pg_permissions/bench/baselines/data/</code>, so the charts use numbers that the page parses from the saved
+				reports in <code>bench/baselines/</code> (the same numbers as COMPARISON.md). Real data replaces the
+				fixture automatically at the next <code>npm run sync</code>.
+			</p>
+		</div>
+	)
+}
+{
+	s ? (
+		<>
+			<div class="viz-stats">
+				<div class="viz-stat">
+					<div class="label">Dataset</div>
+					<div class="value">{s.label}</div>
+					<div class="note">{seriesVersionLabel(s)}</div>
+				</div>
+				<div class="viz-stat">
+					<div class="label">Runs</div>
+					<div class="value">{s.runs.length}</div>
+					<div class="note">
+						{s.configs.length} configurations, {runs.length} runs in all series
+					</div>
+				</div>
+				<div class="viz-stat">
+					<div class="label">Latest run</div>
+					<div class="value">{dates[dates.length - 1]}</div>
+					<div class="note">first {dates[0]}</div>
+				</div>
+				<div class="viz-stat">
+					<div class="label">Checksums agree</div>
+					<div class="value">
+						{agree} of {total}
+					</div>
+					<div class="note">configurations with identical visible ids on A, B and C</div>
+				</div>
+			</div>
+			<p>
+				The charts use <strong>{s.label}</strong>
+				{hosts.length > 0 && <>{' '}on {hosts.join('; ')}</>}: Postgres {s.versions.join(', ')}, the latest run for each design, scale
+				and shape. This is the primary series, and we chose it on purpose. It is Docker, the newest Postgres version, and the
+				optimized designs when their runs exist (otherwise the newest Docker series, then local).{' '}
+				{s.runs[0]?.clients && <>{s.runs[0].clients} pgbench clients, {s.runs[0].duration_s} s for each workload. </>}
+				Docker runs cover only the large default, medium deep and medium wide configurations.
+				{scaling && scaling !== s && (
+					<> The small and medium default scales exist only for <strong>{scaling.label}</strong>, so the scale chart uses that series and says so.</>
+				)}{' '}
+				A figure never mixes environments or tags. The data has these series: {allSeries.map((x) => x.label).join('; ')}.
+				Compare Postgres versions on the <a href={'../postgres-versions/'}>Postgres versions page</a>. Compare the runs before and
+				after the optimization pass on the <a href={'../optimizations/'}>Optimizations page</a>. All latencies are in
+				milliseconds. There is one run for each configuration, so differences under about 20% are noise. The run files are in{' '}
+				<a href={DATA_URL}>bench/baselines/data</a>.
+			</p>
+		</>
+	) : (
+		<div class="viz-note">
+			<p>The page found no benchmark data (no real runs and no fixture).</p>
+		</div>
+	)
+}

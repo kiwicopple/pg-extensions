@@ -1,0 +1,26 @@
+---
+import { runs, workloadNames, workloadInfo } from '../../lib/bench';
+const names = workloadNames(runs);
+---
+
+<div class="sl-markdown-content workload-table">
+	<table>
+		<thead>
+			<tr><th>Workload</th><th>What it measures</th><th>Kind</th></tr>
+		</thead>
+		<tbody>
+			{
+				names.map((n) => {
+					const i = workloadInfo(n);
+					return (
+						<tr>
+							<td><code>{n}</code><br /><small>{i.title}</small></td>
+							<td>{i.description}</td>
+							<td>{i.kind}</td>
+						</tr>
+					);
+				})
+			}
+		</tbody>
+	</table>
+</div>

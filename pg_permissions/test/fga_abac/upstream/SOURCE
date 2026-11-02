@@ -1,0 +1,12 @@
+Repository: https://github.com/openfga/openfga
+Commit:     44054f542f64e9b9589dd26a595081b3d2cfd942 (tag v1.22.1)
+File:       assets/tests/abac_tests.yaml
+License:    Apache-2.0 (upstream/LICENSE). Copyright OpenFGA authors.
+Models:     converted from DSL to JSON with openfga/cli:v0.8.2@sha256:31a565d14d1c5ca8170d3a2225eb66517d9f490539967bcb3421613c5e2538a4
+            (fga model transform --input-format fga --output-format json)
+Vendored:   2026-10-29 by test/fga_abac/vendor.sh
+
+cases.json is derived from abac_tests.yaml: one test per line, the same
+fields, plus model_json on each stage. Expectations are not modified. Unquoted
+float scalars keep their source text as JSON numbers (yaml2json.rb), so the
+out-of-range double in handles_floats stays 1.79769313486231570814527423731704356798070e+309.

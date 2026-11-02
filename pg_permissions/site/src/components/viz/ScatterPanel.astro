@@ -1,0 +1,81 @@
+---
+// Log-log scatter, one point per engine. Hit area is a 32px circle around each 12px mark.
+import { engine, fmt, fmtTick, logAxisTicks, scaleLog, tip } from '../../lib/chart';
+
+interface Props {
+	points: { design: string; x: number; y: number }[];
+	xDomain: [number, number];
+	yDomain: [number, number];
+	xTitle: string;
+	yTitle: string;
+	title: string;
+	width?: number;
+	height?: number;
+}
+const { points, xDomain, yDomain, xTitle, yTitle, title, width = 360, height = 300 } = Astro.props;
+const mL = 46;
+const mR = 18;
+const mT = 12;
+const mB = 44;
+const sx = scaleLog(xDomain[0], xDomain[1], mL, width - mR);
+const sy = scaleLog(yDomain[0], yDomain[1], height - mB, mT);
+const xt = logAxisTicks(xDomain);
+const yt = logAxisTicks(yDomain);
+---
+
+<svg viewBox={`0 0 ${width} ${height}`} role="group" aria-label={title}>
+	{
+		xt.map((t) => (
+			<g>
+				<line class="grid" x1={sx(t)} x2={sx(t)} y1={mT} y2={height - mB} />
+				<text class="t-muted" x={sx(t)} y={height - mB + 14} text-anchor="middle">{fmtTick(t)}</text>
+			</g>
+		))
+	}
+	{
+		yt.map((t) => (
+			<g>
+				<line class="grid" x1={mL} x2={width - mR} y1={sy(t)} y2={sy(t)} />
+				<text class="t-muted" x={mL - 6} y={sy(t) + 3.5} text-anchor="end">{fmtTick(t)}</text>
+			</g>
+		))
+	}
+	<line class="axis" x1={mL} x2={width - mR} y1={height - mB} y2={height - mB} />
+	<line class="axis" x1={mL} x2={mL} y1={mT} y2={height - mB} />
+	<text class="t-muted" x={(mL + width - mR) / 2} y={height - 6} text-anchor="middle">{xTitle}</text>
+	<text class="t-muted" x={mL + 6} y={mT + 12}>{yTitle}</text>
+	{
+		points.map((p) => {
+			const e = engine(p.design);
+			const cx = sx(p.x);
+			const cy = sy(p.y);
+			const near = points.some((q) => q !== p && sx(q.x) > cx && sx(q.x) - cx < 44 && Math.abs(sy(q.y) - cy) < 18);
+			const left = cx > width - 70 || near;
+			return (
+				<g class="cell">
+					<circle class={`dot eng-${p.design}`} cx={cx} cy={cy} r="6" />
+					<text class="t-ink" x={left ? cx - 11 : cx + 11} y={cy + 4} text-anchor={left ? 'end' : 'start'} style="font-weight:600">
+						{e.letter}
+					</text>
+					<circle
+						class="hit"
+						cx={cx}
+						cy={cy}
+						r="16"
+						tabindex="0"
+						role="img"
+						aria-label={`${e.letter} ${e.name}: read ${fmt(p.x)} ms, write ${fmt(p.y)} ms`}
+						data-tip={tip({
+							t: `${e.letter} ${e.name}`,
+							s: title,
+							r: [
+								{ c: e.css, k: 'read p50', v: `${fmt(p.x)} ms` },
+								{ c: e.css, k: 'write p50', v: `${fmt(p.y)} ms` },
+							],
+						})}
+					/>
+				</g>
+			);
+		})
+	}
+</svg>

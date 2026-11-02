@@ -1,0 +1,147 @@
+---
+// Horizontal grouped bars, one row per workload, one bar per engine: bar = p50, whisker = p95.
+// Log axis (values span four orders of magnitude). Rendered to static SVG at build time.
+import { fmt, fmtTick, logAxisTicks, logDomain, scaleLog, tip, engine } from '../../lib/chart';
+import { workloadInfo } from '../../lib/bench';
+
+export interface Bar {
+	design: string;
+	p50: number;
+	p95?: number;
+	tps?: number;
+	budget?: number;
+}
+interface Props {
+	rows: { name: string; bars: Bar[] }[];
+	context: string;
+}
+const { rows, context } = Astro.props;
+
+const W = 760;
+const labelW = 190;
+const x0 = labelW + 26;
+const x1 = W - 64;
+const barH = 10;
+const gap = 2;
+const rowPad = 7;
+const headH = 26;
+const top = 22;
+
+const all = rows.flatMap((r) => r.bars.flatMap((b) => [b.p50, b.p95 ?? b.p50]));
+const dom = logDomain(all);
+const sx = scaleLog(dom[0], dom[1], x0, x1);
+const ticks = logAxisTicks(dom);
+
+type Item =
+	| { kind: 'head'; y: number; text: string }
+	| { kind: 'row'; y: number; h: number; row: (typeof rows)[number]; info: ReturnType<typeof workloadInfo> };
+const items: Item[] = [];
+let y = top;
+let lastGroup = '';
+for (const row of rows) {
+	const info = workloadInfo(row.name);
+	if (info.group !== lastGroup) {
+		items.push({ kind: 'head', y: y + 14, text: info.group });
+		y += headH;
+		lastGroup = info.group;
+	}
+	const h = row.bars.length * barH + (row.bars.length - 1) * gap + rowPad * 2;
+	items.push({ kind: 'row', y, h, row, info });
+	y += h;
+}
+const plotTop = top - 4;
+const plotBottom = y + 2;
+const H = plotBottom + 26;
+
+/** bar with a 4px rounded data end and a square baseline */
+function barPath(w: number, h: number, bx: number, by: number) {
+	const r = Math.min(4, h / 2, w);
+	return `M${bx},${by}h${w - r}a${r},${r} 0 0 1 ${r},${r}v${h - 2 * r}a${r},${r} 0 0 1 ${-r},${r}h${-(w - r)}z`;
+}
+---
+
+<svg viewBox={`0 0 ${W} ${H}`} style="min-width:600px" role="group" aria-label={`Latency by workload and design, ${context}`}>
+	{
+		ticks.map((t) => (
+			<g>
+				<line class="grid" x1={sx(t)} x2={sx(t)} y1={plotTop} y2={plotBottom} />
+				<text class="t-muted" x={sx(t)} y={11} text-anchor="middle">
+					{fmtTick(t)}
+				</text>
+				<text class="t-muted" x={sx(t)} y={plotBottom + 16} text-anchor="middle">
+					{fmtTick(t)}
+				</text>
+			</g>
+		))
+	}
+	<text class="t-muted" x={0} y={11}>ms, log scale</text>
+	<line class="axis" x1={x0} x2={x0} y1={plotTop} y2={plotBottom} />
+	{
+		items.map((it) =>
+			it.kind === 'head' ? (
+				<text class="t-head" x={0} y={it.y}>
+					{it.text}
+				</text>
+			) : (
+				<g class="cell">
+					<rect class="row-wash" x={0} y={it.y} width={W} height={it.h} rx="4" />
+					<text class="t-ink" x={0} y={it.y + it.h / 2 - 1} style="font-size:12px">
+						{it.info.label}
+					</text>
+					<text class="t-muted t-mono" x={0} y={it.y + it.h / 2 + 12}>
+						{it.row.name.length > 30 ? it.row.name.slice(0, 29) + '…' : it.row.name}
+					</text>
+					{it.row.bars.map((b, i) => {
+						const by = it.y + rowPad + i * (barH + gap);
+						const w = Math.max(2, sx(b.p50) - x0);
+						const end = b.p95 && b.p95 > b.p50 ? sx(b.p95) : sx(b.p50);
+						const e = engine(b.design);
+						return (
+							<g>
+								<text class="t-muted" x={x0 - 8} y={by + 9} text-anchor="end" style="font-size:9px">
+									{e.letter}
+								</text>
+								<path class={`bar eng-${b.design}`} d={barPath(w, barH, x0, by)} />
+								{b.p95 && b.p95 > b.p50 && (
+									<>
+										<line class="whisker" x1={sx(b.p50)} x2={sx(b.p95)} y1={by + barH / 2} y2={by + barH / 2} />
+										<line class="whisker" x1={sx(b.p95)} x2={sx(b.p95)} y1={by + 1} y2={by + barH - 1} />
+									</>
+								)}
+								<text class="t-val" x={end + 6} y={by + 9}>
+									{fmt(b.p50)}
+								</text>
+							</g>
+						);
+					})}
+					<rect
+						class="hit"
+						x={0}
+						y={it.y}
+						width={W}
+						height={it.h}
+						tabindex="0"
+						role="img"
+						aria-label={`${it.info.title}: ${it.row.bars.map((b) => `${engine(b.design).letter} p50 ${fmt(b.p50)} ms, p95 ${fmt(b.p95)} ms`).join('; ')}`}
+						data-tip={tip({
+							t: it.info.title,
+							s: it.info.description,
+							r: it.row.bars.map((b) => ({
+								c: engine(b.design).css,
+								k: `${engine(b.design).letter} p50 ms`,
+								v: fmt(b.p50),
+								x: [
+									b.p95 != null ? `p95 ${fmt(b.p95)}` : '',
+									b.tps != null ? `${fmt(b.tps, 0)} tps` : '',
+									b.budget != null ? `budget ${fmt(b.budget)}` : '',
+								]
+									.filter(Boolean)
+									.join(' · '),
+							})),
+						})}
+					/>
+				</g>
+			),
+		)
+	}
+</svg>

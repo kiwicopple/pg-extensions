@@ -1,0 +1,53 @@
+---
+import Frame from '../viz/Frame.astro';
+import Legend from '../viz/Legend.astro';
+import Dumbbell from '../viz/Dumbbell.astro';
+import { BASELINES_URL } from '../../lib/bench';
+import { fmt } from '../../lib/chart';
+import { MAIN_MAJOR, SEED_TIME_CASES, STORAGE_CASES, allChanges, caseConfig, describeChange, dumbbellRows, beforeAfterText, pairFor } from '../../lib/optimizations';
+
+const pair = pairFor(MAIN_MAJOR);
+const timeRows = dumbbellRows(pair, SEED_TIME_CASES);
+const sizeRows = dumbbellRows(pair, STORAGE_CASES);
+const ct = allChanges(SEED_TIME_CASES);
+const cs = allChanges(STORAGE_CASES);
+const moved = (xs: typeof ct) => xs.filter((x) => x.dir !== 'same').sort((a, b) => Math.abs(Math.log(b.r)) - Math.abs(Math.log(a.r)));
+const takeaway = [
+	moved(ct).length ? `Seeding: ${moved(ct).slice(0, 3).map((x) => describeChange(x, fmt)).join('; ')}.` : '',
+	moved(cs).length ? `Storage: ${moved(cs).slice(0, 3).map((x) => describeChange(x, fmt)).join('; ')}.` : '',
+	cs.filter((x) => x.dir === 'same' && x.r < 1).length
+		? `${cs.filter((x) => x.dir === 'same' && x.r < 1).map((x) => `${x.design.toUpperCase()} ${x.c.cls.toLowerCase()} grew ${fmt(x.before)} to ${fmt(x.after)} MB`).join(', ')} (a new index).`
+		: '',
+]
+	.filter(Boolean)
+	.join(' ');
+---
+
+{
+	timeRows.length || sizeRows.length ? (
+		<Frame
+			title="Seed time and storage, before and after"
+			subtitle={`${beforeAfterText(pair)}. Top: seconds to load a phase. Bottom: cumulative size of the permissions tables (MB) after that phase. Log axes, lower is better.`}
+			takeaway={takeaway}
+			source={[{ href: BASELINES_URL, label: 'per-run reports (Storage and seed cost)' }]}
+		>
+			<Legend slot="legend" extra={[{ label: 'before', kind: 'before' }, { label: 'after', kind: 'after' }]} />
+			<p class="viz-panel-title">Seed time</p>
+			<Dumbbell rows={timeRows} unit="s" context="Seed time before and after the optimizations, by design" />
+			<p class="viz-panel-title">Storage</p>
+			<Dumbbell rows={sizeRows} unit="MB" context="Storage after the seed, before and after the optimizations, by design" />
+			<Fragment slot="table">
+				<table>
+					<thead>
+						<tr><th>Measure</th><th>Configuration</th><th>Design</th><th>Before</th><th>After</th><th>Change</th></tr>
+					</thead>
+					<tbody>
+						{[...ct, ...cs].map((x) => (
+							<tr><td>{x.c.title}</td><td>{caseConfig(x.c)}</td><td>{x.design.toUpperCase()}</td><td>{fmt(x.before)} {x.c.metric === 'seed_s' ? 's' : 'MB'}</td><td>{fmt(x.after)} {x.c.metric === 'seed_s' ? 's' : 'MB'}</td><td>{x.text}</td></tr>
+						))}
+					</tbody>
+				</table>
+			</Fragment>
+		</Frame>
+	) : null
+}

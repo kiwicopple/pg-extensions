@@ -1,0 +1,79 @@
+---
+import Frame from '../viz/Frame.astro';
+import Legend from '../viz/Legend.astro';
+import ScatterPanel from '../viz/ScatterPanel.astro';
+import { primary, p50s, times, comparisonLink } from '../../lib/bench';
+import { engine, fmt, logDomain, DESIGN_IDS } from '../../lib/chart';
+import type { Design } from '../../lib/chart';
+
+const s = primary;
+const READ = 'share_select_page';
+const WRITE = 'write_nest_team';
+const CANDIDATES = [
+	{ scale: 'medium', shape: 'wide', title: 'Medium, wide shape' },
+	{ scale: 'large', shape: 'default', title: 'Large, default shape' },
+];
+const panels = CANDIDATES.map((c) => {
+	const r = p50s(s!, c.scale, c.shape, READ);
+	const w = p50s(s!, c.scale, c.shape, WRITE);
+	return {
+		...c,
+		points: DESIGN_IDS.filter((d) => r[d] != null && w[d] != null).map((d) => ({ design: d, x: r[d]!, y: w[d]! })),
+	};
+}).filter((p) => p.points.length >= 2);
+
+const all = panels.flatMap((p) => p.points);
+const xDomain = logDomain(all.map((p) => p.x), 1.5);
+const yDomain = logDomain(all.map((p) => p.y), 1.5);
+
+const w0 = panels[0];
+const pt = (d: Design) => w0?.points.find((p) => p.design === d);
+let takeaway = '';
+if (w0 && pt('a') && pt('c')) {
+	const a = pt('a')!;
+	const c = pt('c')!;
+	takeaway = `No design wins on both axes. In the ${w0.title.toLowerCase()}, A reads the sharing page in ${fmt(a.x)} ms and nests a team in ${fmt(a.y)} ms. C reads in ${fmt(c.x)} ms (${times(a.x / c.x)} faster), but a nest costs ${fmt(c.y)} ms (${times(c.y / a.y)} slower), because C writes membership rows under a global lock.`;
+}
+---
+
+{
+	panels.length ? (
+		<Frame
+			title="Read cost against write cost"
+			subtitle={`${s!.label}. Each point is one design. The x axis is the read of the sharing page (share_select_page p50). The y axis is a nest of a team of 1,000 members (write_nest_team p50). Both axes are in ms on a log scale. A point nearer the bottom left is better.`}
+			takeaway={takeaway}
+			source={[{ href: comparisonLink('large', 'default'), label: 'COMPARISON.md (local PG 16, before optimization: Nesting)' }]}
+		>
+			<Legend slot="legend" />
+			<div class="viz-panels">
+				{panels.map((p) => (
+					<div>
+						<p class="viz-panel-title">{p.title}</p>
+						<ScatterPanel
+							points={p.points}
+							xDomain={xDomain}
+							yDomain={yDomain}
+							xTitle="read: share_select_page p50 (ms)"
+							yTitle="write: write_nest_team p50 (ms)"
+							title={`Read against write, ${p.title}`}
+						/>
+					</div>
+				))}
+			</div>
+			<Fragment slot="table">
+				<table>
+					<thead>
+						<tr><th>Configuration</th><th>Design</th><th>share_select_page p50</th><th>write_nest_team p50</th></tr>
+					</thead>
+					<tbody>
+						{panels.flatMap((p) => p.points.map((q) => (
+							<tr><td>{p.title}</td><td>{engine(q.design).letter}</td><td>{fmt(q.x)}</td><td>{fmt(q.y)}</td></tr>
+						)))}
+					</tbody>
+				</table>
+			</Fragment>
+		</Frame>
+	) : (
+		<div class="viz-note"><p>The read and write chart needs share_select_page and write_nest_team for at least two designs. The current data does not have them.</p></div>
+	)
+}

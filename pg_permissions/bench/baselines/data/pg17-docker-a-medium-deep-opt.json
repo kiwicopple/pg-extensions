@@ -1,0 +1,35 @@
+{
+  "run_id": "pg17-docker-a-medium-deep-opt",
+  "tag": "opt",
+  "date": "2026-10-29T04:16:46Z",
+  "environment": "docker",
+  "host": "Apple M4, 10 CPU, 24 GB; container cpus=4 mem=6g",
+  "pg_version": "17.11",
+  "design": "a",
+  "scale": "medium", "shape": "deep", "clients": 4, "duration_s": 10,
+  "workloads": [
+    {"name": "rbac_check", "p50_ms": 0.31, "p95_ms": 0.41, "tps": 13575, "budget_ms": 1},
+    {"name": "rbac_select_page", "p50_ms": 0.47, "p95_ms": 0.61, "tps": 8601, "budget_ms": 2},
+    {"name": "rbac_select_count", "p50_ms": 0.38, "p95_ms": 0.48, "tps": 10938, "budget_ms": 2},
+    {"name": "rbac_update_one", "p50_ms": 0.56, "p95_ms": 0.75, "tps": 7079, "budget_ms": 3},
+    {"name": "write_assign_role", "p50_ms": 0.16, "p95_ms": 0.24, "tps": 24609, "budget_ms": 1},
+    {"name": "share_list_objects", "p50_ms": 0.34, "p95_ms": 0.43, "tps": 12032, "budget_ms": 1},
+    {"name": "share_select_page", "p50_ms": 0.83, "p95_ms": 1, "tps": 4799, "budget_ms": 3},
+    {"name": "write_share", "p50_ms": 0.14, "p95_ms": 0.22, "tps": 26827, "budget_ms": 1},
+    {"name": "parents_proj_select_page", "p50_ms": 1.06, "p95_ms": 1.27, "tps": 3760, "budget_ms": 4},
+    {"name": "parents_proj_select_count", "p50_ms": 1.4, "p95_ms": 1.72, "tps": 2775, "budget_ms": 4},
+    {"name": "parents_select_page", "p50_ms": 7.84, "p95_ms": 10.69, "tps": 485, "budget_ms": 25},
+    {"name": "parents_select_count", "p50_ms": 6.89, "p95_ms": 9.2, "tps": 553, "budget_ms": 23},
+    {"name": "write_nest_team", "p50_ms": 0.15, "p95_ms": 0.26, "tps": 23963, "budget_ms": 1},
+    {"name": "nest_check", "p50_ms": 0.3, "p95_ms": 0.41, "tps": 13306, "budget_ms": 2}
+  ],
+  "seeds": [
+    {"phase": "rbac", "seconds": 0.63, "size_mb": 3.6},
+    {"phase": "sharing", "seconds": 0.34, "size_mb": 9.5},
+    {"phase": "parents_proj", "seconds": 0.04, "size_mb": 10},
+    {"phase": "parents", "seconds": 2.18, "size_mb": 48.6},
+    {"phase": "nesting", "seconds": 0.02, "size_mb": 48.6}
+  ],
+  "checksums": {"rbac": "d394663f", "sharing": "7cf80111", "parents_proj": "3261b092", "parents": "3261b092"},
+  "report": "bench/baselines/pg17-docker-a-medium-deep-opt.md"
+}

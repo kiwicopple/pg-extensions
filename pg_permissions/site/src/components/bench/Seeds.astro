@@ -1,0 +1,111 @@
+---
+import Frame from '../viz/Frame.astro';
+import Legend from '../viz/Legend.astro';
+import TabGroup from '../viz/TabGroup.astro';
+import ColPanel from '../viz/ColPanel.astro';
+import LinePanel from '../viz/LinePanel.astro';
+import { primary, PHASES, PHASE_LABELS, comparisonLink } from '../../lib/bench';
+import { engine, fmt, DESIGN_IDS } from '../../lib/chart';
+import type { Design } from '../../lib/chart';
+
+const s = primary;
+const configs = s?.configs ?? [];
+const SHORT: Record<string, string> = { rbac: 'RBAC', sharing: 'Sharing', parents_proj: 'Proj.', parents: 'Links', nesting: 'Nesting' };
+
+function data(scale: string, shape: string) {
+	const designs = DESIGN_IDS.filter((d) => s!.get(d, scale, shape));
+	const phases = PHASES.filter((p) => designs.some((d) => s!.get(d, scale, shape)?.seeds.some((x) => x.phase === p)));
+	const get = (d: Design, p: string) => s!.get(d, scale, shape)?.seeds.find((x) => x.phase === p);
+	return { designs, phases, get };
+}
+
+const ref = configs.find((c) => c.scale === 'large' && c.shape === 'default') ?? configs[0];
+let takeaway = '';
+if (ref) {
+	const { designs, get } = data(ref.scale, ref.shape);
+	const parts = designs
+		.map((d) => {
+			const a = get(d, 'parents');
+			const b = get(d, 'parents_proj');
+			if (!a?.seconds || a.size_mb == null || b?.size_mb == null) return '';
+			return `${engine(d).letter} ${fmt(a.seconds)} s and +${fmt(a.size_mb - b.size_mb)} MB`;
+		})
+		.filter(Boolean);
+	if (parts.length >= 2)
+		takeaway = `Per-document parent links are the largest part of both costs at ${ref.scale}/${ref.shape}: ${parts.join(', ')}. The two-arm projection needs none of them. The other phases are small in comparison.`;
+}
+---
+
+{
+	configs.length ? (
+		<Frame
+			title="Seed time and storage, per phase"
+			subtitle="Left: native-API load time for each phase (seconds, log axis). Right: size of the permissions tables after each phase (cumulative MB, after VACUUM FULL). Proj. is parents seeded through the folder_id projection. Links is a parent row for each document."
+			takeaway={takeaway}
+			source={[{ href: comparisonLink(ref?.scale, ref?.shape), label: 'COMPARISON.md (local PG 16, before optimization: storage and seed cost)' }]}
+		>
+			<Legend slot="legend" />
+			<TabGroup tabs={configs.map((c) => ({ key: `${c.scale}-${c.shape}`, label: c.label }))} label="Scale and shape">
+				{configs.map((c) => {
+					const d = data(c.scale, c.shape);
+					return (
+						<div data-tab={`${c.scale}-${c.shape}`}>
+							<p class="viz-tabpanel-title">{c.label}</p>
+							<div class="viz-panels">
+								<div>
+									<p class="viz-panel-title">Seed time</p>
+									<p class="viz-panel-sub">seconds per phase, log axis</p>
+									<ColPanel
+										unit="s"
+										title={`Seed time, ${c.label}`}
+										groups={d.phases.map((p) => ({
+											label: SHORT[p] ?? p,
+											cols: d.designs
+												.filter((e) => d.get(e, p)?.seconds != null)
+												.map((e) => ({ design: e, value: d.get(e, p)!.seconds as number, extra: PHASE_LABELS[p] })),
+										}))}
+									/>
+								</div>
+								<div>
+									<p class="viz-panel-title">Storage</p>
+									<p class="viz-panel-sub">cumulative MB after each phase</p>
+									<LinePanel
+										log={false}
+										unit="MB"
+										title={`Storage, ${c.label}`}
+										categories={d.phases.map((p) => SHORT[p] ?? p)}
+										catNote={d.phases.map((p) => PHASE_LABELS[p] ?? p)}
+										series={d.designs.map((e) => ({ design: e, values: d.phases.map((p) => d.get(e, p)?.size_mb ?? null) }))}
+									/>
+								</div>
+							</div>
+							<details>
+								<summary>Table view: {c.label}</summary>
+								<div class="tbl-wrap">
+									<table>
+										<thead>
+											<tr>
+												<th>Phase</th>
+												{d.designs.map((e) => <th>{engine(e).letter} seed s</th>)}
+												{d.designs.map((e) => <th>{engine(e).letter} MB</th>)}
+											</tr>
+										</thead>
+										<tbody>
+											{d.phases.map((p) => (
+												<tr>
+													<td>{PHASE_LABELS[p] ?? p}</td>
+													{d.designs.map((e) => <td>{fmt(d.get(e, p)?.seconds)}</td>)}
+													{d.designs.map((e) => <td>{fmt(d.get(e, p)?.size_mb)}</td>)}
+												</tr>
+											))}
+										</tbody>
+									</table>
+								</div>
+							</details>
+						</div>
+					);
+				})}
+			</TabGroup>
+		</Frame>
+	) : null
+}

@@ -1,0 +1,130 @@
+---
+import { ENGINES } from '../../lib/chart';
+import { fmt } from '../../lib/chart';
+import { primary, p50s, seriesVersionLabel } from '../../lib/bench';
+import type { Design } from '../../lib/chart';
+
+const s = primary;
+const info: Record<Design, { line: string; pick: string; link: string }> = {
+	a: {
+		line: 'Zanzibar-style tuples. Every check is a recursive walk at read time. The design derives nothing, so nothing can drift.',
+		pick: 'Shallow and narrow sharing graphs, frequent team edits, and the smallest design to maintain.',
+		link: '../designs/a-tuple-core/',
+	},
+	b: {
+		line: 'Cedar-style policies. The design computes closures at write time. Forbid rules and conditions are first-class.',
+		pick: 'Forbid rules on groups, or conditions that the design evaluates, in year one; text or bigint keys.',
+		link: '../designs/b-policy-first/',
+	},
+	c: {
+		line: 'A typed JSON model that the design compiles to SQL. The design materializes memberships at write time. Reads barely change with the shape.',
+		pick: 'Apps with many reads and wide or deep groups, where nests of teams are rare.',
+		link: '../designs/c-compiled-model/',
+	},
+	d: {
+		line: 'First-class rbac_* tables plus OpenFGA-compatible fga_* tables, composed in RLS. It passes the test suite of OpenFGA.',
+		pick: 'Teams that want the model and the API of OpenFGA inside Postgres, next to plain RBAC. Benchmarked, and optimized in two passes.',
+		link: '../designs/d-per-model/',
+	},
+};
+const metrics = [
+	{ label: 'Sharing page, 1M docs', scale: 'large', shape: 'default', name: 'share_select_page' },
+	{ label: 'Sharing page, wide teams', scale: 'medium', shape: 'wide', name: 'share_select_page' },
+	{ label: 'Nest a 1,000-member team', scale: 'large', shape: 'default', name: 'write_nest_team' },
+].map((m) => ({ ...m, v: s ? p50s(s, m.scale, m.shape, m.name) : {} }));
+---
+
+<div class="engine-cards">
+	{
+		ENGINES.map((e) => (
+			<section class="engine-card" style={`--c:${e.css}`}>
+				<div class="engine-head">
+					<span class="engine-letter">{e.letter}</span>
+					<a href={info[e.id].link}>{e.name}</a>
+				</div>
+				<p>{info[e.id].line}</p>
+				<p class="pick"><strong>Explored for:</strong> {info[e.id].pick}</p>
+				<div class="metrics">
+					{metrics.filter((m) => m.v[e.id] != null).map((m) => (
+						<div class="metric">
+							<span class="m-label">{m.label}</span>
+							<span class="m-val">{fmt(m.v[e.id])} ms</span>
+						</div>
+					))}
+				</div>
+			</section>
+		))
+	}
+</div>
+<p class="engine-foot">p50 latency, 4 pgbench clients, {s ? <>{seriesVersionLabel(s)}</> : 'no data'}. The numbers come from the primary series of the dashboard. The <a href="../benchmarks/optimizations/">Optimizations page</a> shows the runs before and after the optimization pass. The source is the <a href="../benchmarks/dashboard/">benchmarks dashboard</a>.</p>
+
+<style>
+	.engine-cards {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+		gap: 1rem;
+		margin: 1rem 0 0.5rem;
+	}
+	.engine-card {
+		padding: 0.9rem 1rem 0.7rem;
+		background: var(--viz-surface);
+		border: 1px solid var(--viz-border);
+		border-top: 4px solid var(--c);
+		border-radius: 10px;
+	}
+	.engine-head {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+		font-weight: 600;
+		font-size: 1.05rem;
+	}
+	.engine-head a {
+		color: var(--viz-ink);
+		text-decoration: none;
+	}
+	.engine-head a:hover {
+		text-decoration: underline;
+	}
+	.engine-letter {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.7rem;
+		height: 1.7rem;
+		border-radius: 6px;
+		background: var(--c);
+		color: #fff;
+		font-weight: 700;
+	}
+	.engine-cards > .engine-card {
+		margin-top: 0 !important;
+	}
+	.engine-card p {
+		margin: 0.5rem 0 0 !important;
+		font-size: 0.85rem;
+		color: var(--viz-ink-2);
+	}
+	.engine-card .metrics {
+		margin-top: 0.7rem;
+		font-size: 0.8rem;
+	}
+	.engine-card .metric {
+		display: flex;
+		justify-content: space-between;
+		gap: 0.6rem;
+		margin: 0.2rem 0 0 !important;
+	}
+	.m-label {
+		color: var(--viz-ink-2);
+	}
+	.m-val {
+		font-weight: 600;
+		color: var(--viz-ink);
+		font-variant-numeric: tabular-nums;
+	}
+	.engine-foot {
+		font-size: 0.75rem;
+		color: var(--sl-color-gray-3);
+	}
+</style>

@@ -1,0 +1,34 @@
+{
+  "run_id": "pg18-docker-b-medium-default-p6",
+  "tag": "p6",
+  "date": "2026-10-30T08:03:43Z",
+  "environment": "docker",
+  "host": "Apple M4, 10 CPU, 24 GB; container cpus=4 mem=6g",
+  "pg_version": "18.6",
+  "design": "b",
+  "scale": "medium", "shape": "default", "clients": 4, "duration_s": 10,
+  "workloads": [
+    {"name": "rbac_check", "p50_ms": 0.27, "p95_ms": 0.37, "tps": 15319, "budget_ms": 1},
+    {"name": "rbac_select_page", "p50_ms": 0.46, "p95_ms": 0.81, "tps": 8157, "budget_ms": 2},
+    {"name": "rbac_select_count", "p50_ms": 0.33, "p95_ms": 0.76, "tps": 10762, "budget_ms": 2},
+    {"name": "rbac_update_one", "p50_ms": 0.46, "p95_ms": 0.98, "tps": 7911, "budget_ms": 3},
+    {"name": "write_assign_role", "p50_ms": 0.14, "p95_ms": 0.27, "tps": 25738, "budget_ms": 1},
+    {"name": "share_list_objects", "p50_ms": 0.29, "p95_ms": 0.39, "tps": 14540, "budget_ms": 1},
+    {"name": "share_select_page", "p50_ms": 0.64, "p95_ms": 1.32, "tps": 5632, "budget_ms": 3},
+    {"name": "write_share", "p50_ms": 0.06, "p95_ms": 0.25, "tps": 36749, "budget_ms": 1},
+    {"name": "parents_proj_select_page", "p50_ms": 0.73, "p95_ms": 1.17, "tps": 5146, "budget_ms": 3},
+    {"name": "parents_proj_select_count", "p50_ms": 1.09, "p95_ms": 2.37, "tps": 3138, "budget_ms": 3},
+    {"name": "parents_select_page", "p50_ms": 4.41, "p95_ms": 5.9, "tps": 864, "budget_ms": 16},
+    {"name": "parents_select_count", "p50_ms": 3.67, "p95_ms": 4.62, "tps": 1043, "budget_ms": 14},
+    {"name": "write_nest_team", "p50_ms": 0.69, "p95_ms": 0.78, "tps": 5875, "budget_ms": 1},
+    {"name": "nest_check", "p50_ms": 0.32, "p95_ms": 0.42, "tps": 13114, "budget_ms": 1}
+  ],
+  "seeds": [
+    {"phase": "rbac", "seconds": 0.55, "size_mb": 3.9},
+    {"phase": "sharing", "seconds": 0.46, "size_mb": 10},
+    {"phase": "parents_proj", "seconds": 0.05, "size_mb": 10.6},
+    {"phase": "parents", "seconds": 3.73, "size_mb": 46.4},
+    {"phase": "nesting", "seconds": 0.02, "size_mb": 46.4}
+  ],
+  "checksums": {"rbac": "d394663f", "sharing": "9b43a472", "parents_proj": "afbedca5", "parents": "afbedca5"}
+}

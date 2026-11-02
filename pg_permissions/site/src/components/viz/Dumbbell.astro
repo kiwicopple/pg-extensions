@@ -1,0 +1,132 @@
+---
+// Before -> after dumbbells on a log axis: one group per workload, one row per engine. Hollow dot = before,
+// filled dot = after, both in the engine's colour; the line between them is the change. Lower is better.
+// Rendered to static SVG at build time; every value is also in the right-hand columns and the tooltip.
+import { fmt, fmtTick, scaleLog, tip, engine } from '../../lib/chart';
+import { change } from '../../lib/optimizations';
+
+export interface DumbbellItem {
+	design: string;
+	before: number;
+	after: number;
+}
+export interface DumbbellRow {
+	title: string;
+	/** muted second line, e.g. the workload name */
+	sub?: string;
+	/** muted third line, e.g. the data scale and shape */
+	ctx?: string;
+	items: DumbbellItem[];
+}
+interface Props {
+	rows: DumbbellRow[];
+	unit: string;
+	/** aria-label of the whole chart */
+	context: string;
+	beforeLabel?: string;
+	afterLabel?: string;
+}
+const { rows, unit, context, beforeLabel = 'before', afterLabel = 'after' } = Astro.props;
+
+const W = 760;
+const labelW = 190;
+const x0 = labelW + 28;
+const x1 = 566;
+const rowH = 16;
+const pad = 7;
+const gapRows = 6;
+const top = 22;
+const R = 5;
+
+const all = rows.flatMap((r) => r.items.flatMap((i) => [i.before, i.after]));
+// Domain on 1-2-5 steps just outside the data, so the axis does not run a decade past the largest value.
+const STEPS = [1, 2, 5, 10];
+const nice = (v: number, dir: 'down' | 'up') => {
+	const e = Math.floor(Math.log10(v));
+	const cands = [e - 1, e, e + 1].flatMap((k) => STEPS.map((m) => Number((m * 10 ** k).toPrecision(12))));
+	cands.sort((a, b) => a - b);
+	return dir === 'down' ? [...cands].reverse().find((c) => c <= v)! : cands.find((c) => c >= v)!;
+};
+const dom: [number, number] = [nice(Math.min(...all) / 1.25, 'down'), nice(Math.max(...all) * 1.15, 'up')];
+const sx = scaleLog(dom[0], dom[1], x0, x1);
+// every 1-2-5 tick when the axis spans two decades or fewer, else powers of ten
+const fine = Math.log10(dom[1] / dom[0]) <= 2.01;
+const ticks = (() => {
+	const out: number[] = [];
+	for (let k = Math.floor(Math.log10(dom[0])); k <= Math.ceil(Math.log10(dom[1])); k++)
+		for (const m of fine ? [1, 2, 5] : [1]) {
+			const v = Number((m * 10 ** k).toPrecision(12));
+			if (v >= dom[0] * 0.9999 && v <= dom[1] * 1.0001) out.push(v);
+		}
+	return out;
+})();
+
+const laid = rows.map((row, i) => {
+	const h = row.items.length * rowH + pad * 2;
+	const y = top + rows.slice(0, i).reduce((s, r) => s + r.items.length * rowH + pad * 2 + gapRows, 0);
+	return { row, y, h };
+});
+const plotTop = top - 4;
+const last = laid[laid.length - 1];
+const plotBottom = last ? last.y + last.h + 2 : top;
+const H = plotBottom + 26;
+---
+
+<svg viewBox={`0 0 ${W} ${H}`} style="min-width:620px" role="group" aria-label={context}>
+	{
+		ticks.map((t) => (
+			<g>
+				<line class="grid" x1={sx(t)} x2={sx(t)} y1={plotTop} y2={plotBottom} />
+				<text class="t-muted" x={sx(t)} y={11} text-anchor="middle">{fmtTick(t)}</text>
+				<text class="t-muted" x={sx(t)} y={plotBottom + 16} text-anchor="middle">{fmtTick(t)}</text>
+			</g>
+		))
+	}
+	<text class="t-muted" x={x1 + 14} y={11}>{unit}, {beforeLabel} to {afterLabel}</text>
+	<line class="axis" x1={x0} x2={x0} y1={plotTop} y2={plotBottom} />
+	{
+		laid.map(({ row, y, h }) => (
+			<g class="cell">
+				<rect class="row-wash" x={0} y={y} width={W} height={h} rx="4" />
+				<text class="t-ink" x={0} y={y + h / 2 - 8} style="font-size:12px">{row.title}</text>
+				{row.sub && <text class="t-muted t-mono" x={0} y={y + h / 2 + 5}>{row.sub.length > 30 ? row.sub.slice(0, 29) + '…' : row.sub}</text>}
+				{row.ctx && <text class="t-muted" x={0} y={y + h / 2 + 18} style="font-size:10px">{row.ctx}</text>}
+				{row.items.map((it, i) => {
+					const cy = y + pad + i * rowH + rowH / 2;
+					const ch = change(it.before, it.after);
+					const e = engine(it.design);
+					return (
+						<g>
+							<text class="t-muted" x={x0 - 12} y={cy + 3.5} text-anchor="end" style="font-size:10px">{e.letter}</text>
+							<line class={`db-line ln-${it.design}`} x1={sx(it.before)} x2={sx(it.after)} y1={cy} y2={cy} />
+							<circle class={`db-before ln-${it.design}`} cx={sx(it.before)} cy={cy} r={R} />
+							<circle class={`dot eng-${it.design}`} cx={sx(it.after)} cy={cy} r={R} />
+							<text class="t-val" x={x1 + 14} y={cy + 3.5}>{fmt(it.before)} → {fmt(it.after)}</text>
+							<text class={`t-val db-change ${ch.dir}`} x={x1 + 104} y={cy + 3.5}>{ch.text}</text>
+						</g>
+					);
+				})}
+				<rect
+					class="hit"
+					x={0}
+					y={y}
+					width={W}
+					height={h}
+					tabindex="0"
+					role="img"
+					aria-label={`${row.title}${row.ctx ? `, ${row.ctx}` : ''}: ${row.items.map((it) => `${engine(it.design).letter} ${fmt(it.before)} to ${fmt(it.after)} ${unit}, ${change(it.before, it.after).text}`).join('; ')}`}
+					data-tip={tip({
+						t: row.title,
+						s: [row.sub, row.ctx].filter(Boolean).join(', '),
+						r: row.items.map((it) => ({
+							c: engine(it.design).css,
+							k: `${engine(it.design).letter} ${beforeLabel} → ${afterLabel}`,
+							v: `${fmt(it.before)} → ${fmt(it.after)} ${unit}`,
+							x: change(it.before, it.after).text,
+						})),
+					})}
+				/>
+			</g>
+		))
+	}
+</svg>
