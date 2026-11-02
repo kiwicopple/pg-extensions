@@ -6105,7 +6105,9 @@ declare
     r text := '';
     i int := 1;
     c text;
-    h text[];
+    n int := 0;
+    cp int;
+    parts text[] := '{}';
     bad text;
 begin
     -- the common case without escapes: the type ends at the first ::" (a
@@ -6128,35 +6130,32 @@ begin
     if m is null then
         bad := 'it is not Type::"id"';
     else
+        -- one token per run of plain characters or per escape, decoded and
+        -- joined once (linear in the length; i is the character position)
         s := m[2];
-        while i <= char_length(s) loop
-            c := substr(s, i, 1);
-            if c <> '\' then
-                r := r || c;
-                i := i + 1;
-                continue;
-            end if;
-            c := substr(s, i + 1, 1);
-            if c in ('n', 'r', 't', '\', '"', '''') then
-                r := r || case c when 'n' then e'\n' when 'r' then e'\r' when 't' then e'\t' else c end;
-                i := i + 2;
-            elsif c = 'x' and substr(s, i + 2, 2) ~ '^[0-7][0-9a-fA-F]$' and substr(s, i + 2, 2) <> '00' then
-                r := r || chr(('x' || lpad(substr(s, i + 2, 2), 8, '0'))::bit(32)::int);
-                i := i + 4;
-            elsif c = 'u' then
-                h := regexp_match(substr(s, i + 2), '^\{([0-9a-fA-F]{1,6})\}');
-                if h is null or ('x' || lpad(h[1], 8, '0'))::bit(32)::int not between 1 and 1114111
-                   or ('x' || lpad(h[1], 8, '0'))::bit(32)::int between 55296 and 57343 then
+        for c in select t[1] from regexp_matches(s, '[^\\]+|\\x[0-7][0-9a-fA-F]|\\u\{[0-9a-fA-F]{1,6}\}|\\.', 'g') t loop
+            n := n + 1;
+            if left(c, 1) <> '\' then
+                parts[n] := c;
+            elsif substr(c, 2, 1) in ('n', 'r', 't', '\', '"', '''') then
+                parts[n] := case substr(c, 2, 1) when 'n' then e'\n' when 'r' then e'\r' when 't' then e'\t' else substr(c, 2, 1) end;
+            elsif substr(c, 2, 1) = 'x' and length(c) = 4 and substr(c, 3) <> '00' then
+                parts[n] := chr(('x' || lpad(substr(c, 3), 8, '0'))::bit(32)::int);
+            elsif substr(c, 2, 1) = 'u' then
+                -- \u{1 to 6 hex digits} is one token; a bare \u is \. (cp null)
+                cp := case when length(c) > 4 then ('x' || lpad(substr(c, 4, length(c) - 4), 8, '0'))::bit(32)::int end;
+                if cp is null or cp not between 1 and 1114111 or cp between 55296 and 57343 then
                     bad := format('the escape \u%s is not a Unicode scalar value (U+0000 is not supported)', coalesce(substr(s, i + 2, 8), ''));
                     exit;
                 end if;
-                r := r || chr(('x' || lpad(h[1], 8, '0'))::bit(32)::int);
-                i := i + 3 + char_length(h[1]) + 1;
+                parts[n] := chr(cp);
             else
-                bad := format('the escape \%s is not valid in a Cedar string (U+0000 is not supported)', c);
+                bad := format('the escape \%s is not valid in a Cedar string (U+0000 is not supported)', substr(c, 2, 1));
                 exit;
             end if;
+            i := i + length(c);
         end loop;
+        r := array_to_string(parts, '');
         if bad is null then
             type := m[1];
             id := r;
@@ -6457,6 +6456,19 @@ begin
 end;
 $$;
 
+-- A Bool, a String or a Long: a value that is its own internal form.
+create function permissions._cedar_is_plain(v jsonb)
+returns boolean
+language sql immutable
+as $$
+    select case jsonb_typeof(v)
+        when 'boolean' then true
+        when 'string' then true
+        when 'number' then v::text ~ '^-?[0-9]{1,18}$'
+                           or (v::text ~ '^-?[0-9]{19}$' and v::text::numeric between -9223372036854775808 and 9223372036854775807)
+        else false end
+$$;
+
 -- A Cedar JSON value (entity attrs and tags, context, an EST Value) in the
 -- internal form, or an error: code is invalid, unsupported or limit, and err
 -- says what and where (p_path, a JSON path).
@@ -6474,6 +6486,8 @@ declare
     fn text;
     w jsonb;
     vals jsonb[];
+    keys text[];
+    n int;
 begin
     if t in ('boolean', 'string') then
         val := v;
@@ -6497,21 +6511,24 @@ begin
         return;
     end if;
     if t = 'array' then
-        acc := '[]';
-        for i in 0 .. jsonb_array_length(v) - 1 loop
-            if jsonb_typeof(v -> i) in ('boolean', 'string') then
-                acc := acc || jsonb_build_array(v -> i);
-                continue;
-            end if;
-            select * into x from permissions._cedar_value_in(v -> i, p_path || '[' || i || ']', p_depth + 1) r;
+        -- the elements already in internal form (Bools, Strings, Longs) are
+        -- kept in one query; the others are checked or converted one by
+        -- one, in order (the first error wins), and the set is built once
+        n := 0;
+        for u in select e.v, e.o - 1 as i from jsonb_array_elements(v) with ordinality e(v, o)
+                 where not permissions._cedar_is_plain(e.v) order by e.o loop
+            select * into x from permissions._cedar_value_in(u.v, p_path || '[' || u.i || ']', p_depth + 1) r;
             if x.code is not null then
                 code := x.code;
                 err := x.err;
                 return;
             end if;
-            acc := acc || jsonb_build_array(x.val);
+            n := n + 1;
+            vals[n] := x.val;
         end loop;
-        val := permissions._cedar_set(acc);
+        val := permissions._cedar_set(case when n = 0 then v
+                                           else coalesce((select jsonb_agg(e) from jsonb_array_elements(v) e where permissions._cedar_is_plain(e)), '[]')
+                                                || to_jsonb(vals) end);
         return;
     end if;
     -- an object: an entity reference, an extension value or a record
@@ -6576,10 +6593,10 @@ begin
         end if;
         return;
     end if;
-    -- a record: Bools and Strings stay as they are; everything else is
-    -- checked or converted, and the record is rebuilt only if a value changed
-    acc := v;
-    for kv in select * from jsonb_each(v) e where jsonb_typeof(e.value) not in ('boolean', 'string') loop
+    -- a record: Bools, Strings and Longs stay as they are; everything else
+    -- is checked or converted, and the changed values replace theirs once
+    n := 0;
+    for kv in select * from jsonb_each(v) e where not permissions._cedar_is_plain(e.value) loop
         select * into x from permissions._cedar_value_in(kv.value, p_path || '.' || kv.key, p_depth + 1) r;
         if x.code is not null then
             code := x.code;
@@ -6587,10 +6604,12 @@ begin
             return;
         end if;
         if x.val <> kv.value then
-            acc := acc || jsonb_build_object(kv.key, x.val);
+            n := n + 1;
+            keys[n] := kv.key;
+            vals[n] := x.val;
         end if;
     end loop;
-    val := acc;
+    val := case when n = 0 then v else v || (select jsonb_object_agg(q.qk, q.qw) from unnest(keys, vals) q(qk, qw)) end;
 end;
 $$;
 
@@ -6623,7 +6642,7 @@ declare
     u record;
     x record;
     pv jsonb;
-    acc jsonb[];
+    pj jsonb;
 begin
     code := 'invalid';
     if jsonb_typeof(e) <> 'object' then
@@ -6654,14 +6673,23 @@ begin
         return;
     end if;
     if jsonb_typeof(e -> 'parents') = 'array' then
-        for pv in select p from jsonb_array_elements(e -> 'parents') p loop
-            select * into x from permissions._cedar_uid_json(pv);
-            if x.type is null then
-                err := format('%s: a parent is not a uid {"type": "<Type>", "id": "<id>"}: %s', permissions._cedar_uid_text(u.type, u.id), pv);
-                return;
-            end if;
-            acc := acc || jsonb_build_array(x.type, x.id);
-        end loop;
+        -- _cedar_uid_json for each parent, in one query: the first one that
+        -- is not a uid, and the [type, id] pairs
+        with p as (select t.o, t.v, case when jsonb_typeof(t.v) = 'object' and t.v ? '__entity' and t.v - '__entity' = '{}'
+                                         then t.v -> '__entity' else t.v end as w
+                   from jsonb_array_elements(e -> 'parents') with ordinality t(v, o)),
+             q as (select p.o, p.v, case when jsonb_typeof(p.w) = 'object' and jsonb_typeof(p.w -> 'type') = 'string'
+                                              and jsonb_typeof(p.w -> 'id') = 'string' and p.w - 'type' - 'id' = '{}'
+                                              and permissions._cedar_is_name(p.w ->> 'type') then p.w end as uid
+                   from p)
+        select (select q.v from q where q.uid is null order by q.o limit 1),
+               jsonb_agg(jsonb_build_array(q.uid ->> 'type', q.uid ->> 'id') order by q.o)
+        into pv, pj
+        from q;
+        if pv is not null then
+            err := format('%s: a parent is not a uid {"type": "<Type>", "id": "<id>"}: %s', permissions._cedar_uid_text(u.type, u.id), pv);
+            return;
+        end if;
     end if;
     attrs := '{}';
     tags := '{}';
@@ -6684,7 +6712,7 @@ begin
     code := null;
     t := u.type;
     i := u.id;
-    parents := case when cardinality(acc) > 1 then permissions._cedar_set(to_jsonb(acc)) else coalesce(to_jsonb(acc), '[]') end;
+    parents := case when jsonb_array_length(pj) > 1 then permissions._cedar_set(pj) else coalesce(pj, '[]') end;
 end;
 $$;
 
@@ -6799,6 +6827,8 @@ declare
     n int := 1;
     lits boolean := true;
     acc jsonb;
+    asts jsonb[];                   -- the compiled elements, joined once
+    keys text[];
     pat text := '';
     attrs jsonb;
     bin constant jsonb := '{"==": "eq", "!=": "ne", "<": "lt", "<=": "le", ">": "gt", ">=": "ge",
@@ -6930,10 +6960,9 @@ begin
     elsif op = 'like' then
         x := permissions._cedar_compile(a -> 'left', p_path, p_depth + 1);
         if x ? 'code' then return x; end if;
-        for z in select t from jsonb_array_elements(a -> 'pattern') t loop
-            pat := pat || case when z = '"Wildcard"' then '%'
-                               else regexp_replace(z ->> 'Literal', '([\\%_])', '\\\1', 'g') end;
-        end loop;
+        pat := coalesce((select string_agg(case when t = '"Wildcard"' then '%'
+                                                else regexp_replace(t ->> 'Literal', '([\\%_])', '\\\1', 'g') end, '' order by o)
+                         from jsonb_array_elements(a -> 'pattern') with ordinality p(t, o)), '');
         return jsonb_build_object('ast', jsonb_build_object('k', 'like', 'a', x -> 'ast', 'p', pat),
                                   'n', 1 + (x ->> 'n')::int);
     elsif op = 'if-then-else' then
@@ -6949,14 +6978,14 @@ begin
         if jsonb_typeof(a) <> 'array' then
             return jsonb_build_object('code', 'invalid_policy', 'path', p_path, 'err', 'Set takes an array of expressions');
         end if;
-        acc := '[]';
         for i in 0 .. jsonb_array_length(a) - 1 loop
             x := permissions._cedar_compile(a -> i, p_path || '[' || i || ']', p_depth + 1);
             if x ? 'code' then return x; end if;
-            acc := acc || jsonb_build_array(x -> 'ast');
+            asts[i + 1] := x -> 'ast';
             n := n + (x ->> 'n')::int;
             lits := lits and x -> 'ast' ->> 'k' = 'lit';
         end loop;
+        acc := coalesce(to_jsonb(asts), '[]');
         if lits then
             return jsonb_build_object('ast', jsonb_build_object('k', 'lit', 'v',
                                           permissions._cedar_set(coalesce((select jsonb_agg(t -> 'v') from jsonb_array_elements(acc) t), '[]'))),
@@ -6971,14 +7000,17 @@ begin
             return jsonb_build_object('code', 'unsupported', 'path', p_path,
                                       'err', 'a record with the key __entity or __extn (it would read as an entity or an extension value)');
         end if;
-        acc := '{}';
+        i := 0;
         for kv in select * from jsonb_each(a) loop
             x := permissions._cedar_compile(kv.value, p_path || '.' || kv.key, p_depth + 1);
             if x ? 'code' then return x; end if;
-            acc := acc || jsonb_build_object(kv.key, x -> 'ast');
+            i := i + 1;
+            keys[i] := kv.key;
+            asts[i] := x -> 'ast';
             n := n + (x ->> 'n')::int;
             lits := lits and x -> 'ast' ->> 'k' = 'lit';
         end loop;
+        acc := coalesce((select jsonb_object_agg(u.k, u.w) from unnest(keys, asts) u(k, w)), '{}');
         if lits then
             return jsonb_build_object('ast', jsonb_build_object('k', 'lit', 'v',
                                           coalesce((select jsonb_object_agg(t.key, t.value -> 'v') from jsonb_each(acc) t), '{}')),
@@ -6993,13 +7025,13 @@ begin
                                       'hint', permissions._did_you_mean(op, array(select jsonb_object_keys(permissions._cedar_extensions())),
                                                                         'Extension functions'));
         end if;
-        acc := '[]';
         for i in 0 .. jsonb_array_length(a) - 1 loop
             x := permissions._cedar_compile(a -> i, p_path || '[' || i || ']', p_depth + 1);
             if x ? 'code' then return x; end if;
-            acc := acc || jsonb_build_array(x -> 'ast');
+            asts[i + 1] := x -> 'ast';
             n := n + (x ->> 'n')::int;
         end loop;
+        acc := coalesce(to_jsonb(asts), '[]');
         -- A constructor of a valid string literal is folded into its value.
         -- Cedar checks the string only when it evaluates the call, so an
         -- invalid one stays a call and errs then (the arity, too).
@@ -7400,8 +7432,9 @@ declare
     h text;
     cp int;
     ch text;
-    s text := '';
-    pat jsonb := '[]';
+    n int := 0;
+    parts text[] := '{}';           -- the decoded text, one piece per token
+    stars boolean[] := '{}';        -- in a pattern: the piece is \*, a literal star
     bad text;
 begin
     if strpos(p_raw, '\') = 0 and strpos(p_raw, E'\r') = 0 then
@@ -7418,12 +7451,9 @@ begin
         select t[1] from regexp_matches(p_raw, '[^\\\r]+|\\u\{[0-9A-Fa-f_]*\}|\\x[0-9A-Fa-f]{2}|\\[\s\S]?|\r', 'g') t
     loop
         if left(m, 1) <> '\' and m <> E'\r' then
-            if p_pattern then
-                pat := pat || (select jsonb_agg(case when c = '*' then '"Wildcard"'::jsonb else jsonb_build_object('Literal', c) end order by o)
-                               from regexp_split_to_table(m, '') with ordinality t(c, o));
-            else
-                s := s || m;
-            end if;
+            n := n + 1;
+            parts[n] := m;
+            stars[n] := false;
             continue;
         end if;
         e := substr(m, 2, 1);
@@ -7436,7 +7466,9 @@ begin
         elsif e = '0' then
             cp := 0;
         elsif e = '*' and p_pattern then
-            pat := pat || jsonb_build_array(jsonb_build_object('Literal', '*'));
+            n := n + 1;
+            parts[n] := '*';
+            stars[n] := true;
             continue;
         elsif e = 'x' and length(m) = 4 then
             cp := ('x' || lpad(substr(m, 3), 8, '0'))::bit(32)::int;
@@ -7473,16 +7505,19 @@ begin
             end if;
             ch := chr(cp);
         end if;
-        if p_pattern then
-            pat := pat || jsonb_build_array(case when ch = '*' then '"Wildcard"'::jsonb else jsonb_build_object('Literal', ch) end);
-        else
-            s := s || ch;
-        end if;
+        n := n + 1;
+        parts[n] := ch;
+        stars[n] := false;
     end loop;
+    -- joined once: appending to a jsonb or a text in the loop copies it
+    -- each time (quadratic in the length)
     if p_pattern then
-        return pat;
+        return (select coalesce(jsonb_agg(case when p.star then '{"Literal": "*"}'::jsonb when x.c = '*' then '"Wildcard"'::jsonb
+                                               else jsonb_build_object('Literal', x.c) end order by p.o, x.o), '[]')
+                from unnest(parts, stars) with ordinality p(t, star, o)
+                cross join lateral regexp_split_to_table(p.t, '') with ordinality x(c, o));
     end if;
-    return to_jsonb(s);
+    return to_jsonb(array_to_string(parts, ''));
 end;
 $$;
 
@@ -7527,6 +7562,11 @@ declare
     xd int;
     y jsonb;
     a jsonb;
+    an int;                         -- the elements of a literal or call: avals[1:an]
+    avals jsonb[];
+    akeys text[];                   -- a record's keys (a has path's names)
+    akq int[];                      -- and the token of each key
+    dup int;
     ad int;
     op text;
     pr int;
@@ -7616,7 +7656,7 @@ begin
             q := q + 1;
         elsif k[q] in ('[', '{') then
             op := k[q];
-            a := case op when '[' then '[]' else '{}' end::jsonb;
+            an := 0; avals := '{}'; akeys := '{}'; akq := '{}';
             ad := 0;
             seg := case op when '[' then ']' else '}' end;
             q := q + 1;
@@ -7632,18 +7672,15 @@ begin
                     else
                         perform permissions._cedar_syntax_error(k, v, ln, cl, q, 'a record key (an identifier or a string literal)', null);
                     end if;
-                    if a ? key then
-                        perform permissions._cedar_parse_fail(format('duplicate key %L in a record literal', key), ln[q], cl[q],
-                            'Each key of a record literal must be different.');
-                    end if;
                     if k[q + 1] <> ':' then
                         perform permissions._cedar_syntax_error(k, v, ln, cl, q + 1, ''':''', 'A record literal is {key: value, ...}.');
                     end if;
+                    an := an + 1; akeys[an] := key; akq[an] := q;
                     r := permissions._cedar_parse_expr(k, v, ln, cl, q + 2, lvl + 1, 0);
-                    a := a || jsonb_build_object(key, r.node);
+                    avals[an] := r.node;
                 else
                     r := permissions._cedar_parse_expr(k, v, ln, cl, q, lvl + 1, 0);
-                    a := a || jsonb_build_array(r.node);
+                    an := an + 1; avals[an] := r.node;
                 end if;
                 ad := greatest(ad, r.dep); cnt := cnt + r.cnt; q := r.np;
                 if k[q] = ',' then
@@ -7652,6 +7689,21 @@ begin
                     perform permissions._cedar_syntax_error(k, v, ln, cl, q, format(''','' or ''%s''', seg), null);
                 end if;
             end loop;
+            -- the elements are joined once (a jsonb grown in the loop is
+            -- copied each time); a repeated key is found once, here
+            if op = '{' then
+                select u.i into dup
+                from (select u.i, row_number() over (partition by u.k order by u.i) as n
+                      from unnest(akeys collate "C") with ordinality u(k, i)) u
+                where u.n = 2 order by u.i limit 1;
+                if dup is not null then
+                    perform permissions._cedar_parse_fail(format('duplicate key %L in a record literal', akeys[dup]), ln[akq[dup]], cl[akq[dup]],
+                        'Each key of a record literal must be different.');
+                end if;
+                a := coalesce((select jsonb_object_agg(u.k, u.w) from unnest(akeys, avals) u(k, w)), '{}');
+            else
+                a := to_jsonb(avals);
+            end if;
             x := jsonb_build_object(case op when '[' then 'Set' else 'Record' end, a);
             xd := ad + 1; cnt := cnt + 1; q := q + 1;
         elsif k[q] = 'slot' then
@@ -7699,11 +7751,11 @@ begin
                     perform permissions._cedar_parse_fail(format('%s is not a valid function', name), ln[nq], cl[nq],
                         permissions._did_you_mean(name, ext_fns, 'The extension functions are'));
                 end if;
-                a := '[]'; ad := 0;
+                an := 0; avals := '{}'; ad := 0;
                 q := q + 1;
                 while k[q] <> ')' loop
                     r := permissions._cedar_parse_expr(k, v, ln, cl, q, lvl + 1, 0);
-                    a := a || jsonb_build_array(r.node);
+                    an := an + 1; avals[an] := r.node;
                     ad := greatest(ad, r.dep); cnt := cnt + r.cnt; q := r.np;
                     if k[q] = ',' then
                         q := q + 1;
@@ -7711,7 +7763,7 @@ begin
                         perform permissions._cedar_syntax_error(k, v, ln, cl, q, ''','' or '')''', null);
                     end if;
                 end loop;
-                x := jsonb_build_object(name, a);
+                x := jsonb_build_object(name, to_jsonb(avals));
                 xd := ad + 1; cnt := cnt + 1; q := q + 1;
             elsif nq + 1 = q and name = any (vars) then
                 x := jsonb_build_object('Var', name);
@@ -7740,11 +7792,11 @@ begin
                 end if;
                 if k[q + 2] = '(' then
                     nq := q + 1;
-                    a := '[]'; ad := 0;
+                    an := 0; avals := '{}'; ad := 0;
                     q := q + 3;
                     while k[q] <> ')' loop
                         r := permissions._cedar_parse_expr(k, v, ln, cl, q, lvl + 1, 0);
-                        a := a || jsonb_build_array(r.node);
+                        an := an + 1; avals[an] := r.node;
                         ad := greatest(ad, r.dep); cnt := cnt + r.cnt; q := r.np;
                         if k[q] = ',' then
                             q := q + 1;
@@ -7752,6 +7804,7 @@ begin
                             perform permissions._cedar_syntax_error(k, v, ln, cl, q, ''','' or '')''', null);
                         end if;
                     end loop;
+                    a := to_jsonb(avals);
                     q := q + 1;
                     if name = any (bin_methods) or name = 'isEmpty' then
                         if jsonb_array_length(a) <> (case when name = 'isEmpty' then 0 else 1 end) then
@@ -7840,7 +7893,7 @@ begin
                         x := jsonb_build_object('has', jsonb_build_object('left', x, 'attr', permissions._cedar_unescape(v[q], false, ln[q], cl[q])));
                         q := q + 1;
                     elsif k[q] = 'id' then
-                        a := '[]';
+                        an := 0; akeys := '{}';
                         loop
                             if v[q] = any (reserved) then
                                 perform permissions._cedar_parse_fail(
@@ -7848,11 +7901,12 @@ begin
                                          else format('this identifier is reserved and cannot be used: %s', v[q]) end,
                                     ln[q], cl[q], reserved_hint);
                             end if;
-                            a := a || to_jsonb(v[q]);
+                            an := an + 1; akeys[an] := v[q];
                             q := q + 1;
                             exit when k[q] <> '.' or k[q + 1] <> 'id';
                             q := q + 1;
                         end loop;
+                        a := to_jsonb(akeys);
                         x := jsonb_build_object('has', jsonb_build_object('left', x,
                                 'attr', case when jsonb_array_length(a) = 1 then a -> 0 else a end));
                     else
@@ -7989,7 +8043,11 @@ declare
     pid text;
     eff text;
     scope jsonb;
-    conds jsonb;
+    an int;                         -- avals[1:an]: annotation values, action uids, conditions
+    avals jsonb[];
+    anames text[];
+    aq int[];
+    dup int;
     est jsonb;
     is_template boolean;
     statics jsonb := '{}';
@@ -8015,7 +8073,7 @@ begin
 
     while k[q] <> 'eof' loop
         start := q;
-        annos := '{}';
+        an := 0; anames := '{}'; avals := '{}'; aq := '{}';
         pid := null;
         nodes := 0;
 
@@ -8024,10 +8082,7 @@ begin
             if k[q + 1] <> 'id' then
                 perform permissions._cedar_syntax_error(k, v, ln, cl, q + 1, 'an annotation name', 'An annotation is @name("value") or @name.');
             end if;
-            if annos ? v[q + 1] then
-                perform permissions._cedar_parse_fail(format('duplicate annotation @%s', v[q + 1]), ln[q], cl[q],
-                    'Each annotation name may appear once in a policy.');
-            end if;
+            an := an + 1; anames[an] := v[q + 1]; aq[an] := q;
             if k[q + 2] = '(' then
                 if k[q + 3] <> 'str' then
                     perform permissions._cedar_syntax_error(k, v, ln, cl, q + 3, 'a string literal', 'An annotation is @name("value") or @name.');
@@ -8035,13 +8090,24 @@ begin
                 if k[q + 4] <> ')' then
                     perform permissions._cedar_syntax_error(k, v, ln, cl, q + 4, ''')''', 'An annotation is @name("value") or @name.');
                 end if;
-                annos := annos || jsonb_build_object(v[q + 1], permissions._cedar_unescape(v[q + 3], false, ln[q + 3], cl[q + 3]));
+                avals[an] := permissions._cedar_unescape(v[q + 3], false, ln[q + 3], cl[q + 3]);
                 q := q + 5;
             else
-                annos := annos || jsonb_build_object(v[q + 1], null);
+                avals[an] := 'null';
                 q := q + 2;
             end if;
         end loop;
+        -- joined once (a jsonb grown in the loop is copied each time), and
+        -- a repeated name is found once, here
+        select u.i into dup
+        from (select u.i, row_number() over (partition by u.k order by u.i) as n
+              from unnest(anames collate "C") with ordinality u(k, i)) u
+        where u.n = 2 order by u.i limit 1;
+        if dup is not null then
+            perform permissions._cedar_parse_fail(format('duplicate annotation @%s', anames[dup]), ln[aq[dup]], cl[aq[dup]],
+                'Each annotation name may appear once in a policy.');
+        end if;
+        annos := coalesce((select jsonb_object_agg(u.k, u.w) from unnest(anames, avals) u(k, w)), '{}');
         if annos ? 'id' then
             pid := coalesce(annos ->> 'id', '');
         end if;
@@ -8094,11 +8160,11 @@ begin
                     q := r.np;
                 elsif k[q] = 'id' and v[q] = 'in' then
                     if k[q + 1] = '[' then
-                        ents := '[]';
+                        an := 0; avals := '{}';
                         q := q + 2;
                         while k[q] <> ']' loop
                             r := permissions._cedar_parse_ref(k, v, ln, cl, q, sv);
-                            ents := ents || jsonb_build_array(r.ent);
+                            an := an + 1; avals[an] := r.ent;
                             q := r.np;
                             if k[q] = ',' then
                                 q := q + 1;
@@ -8107,6 +8173,7 @@ begin
                             end if;
                         end loop;
                         q := q + 1;
+                        ents := to_jsonb(avals);
                         scope := scope || jsonb_build_object('action',
                             case when jsonb_array_length(ents) = 1 then jsonb_build_object('op', 'in', 'entity', ents -> 0)
                                  else jsonb_build_object('op', 'in', 'entities', ents) end);
@@ -8204,7 +8271,7 @@ begin
         q := q + 1;
 
         -- conditions
-        conds := '[]';
+        an := 0; avals := '{}';
         while k[q] = 'id' and v[q] in ('when', 'unless') loop
             if k[q + 1] <> '{' then
                 perform permissions._cedar_syntax_error(k, v, ln, cl, q + 1, '''{''', format('A condition is %s { <expression> }.', v[q]));
@@ -8224,7 +8291,7 @@ begin
                     p_detail => 'limit=''policy_depth''');
             end if;
             nodes := nodes + r.cnt;
-            conds := conds || jsonb_build_array(jsonb_build_object('kind', v[q], 'body', r.node));
+            an := an + 1; avals[an] := jsonb_build_object('kind', v[q], 'body', r.node);
             q := r.np + 1;
         end loop;
         if k[q] <> ';' then
@@ -8250,7 +8317,7 @@ begin
         end if;
         q := q + 1;
 
-        est := jsonb_build_object('effect', eff) || scope || jsonb_build_object('conditions', conds);
+        est := jsonb_build_object('effect', eff) || scope || jsonb_build_object('conditions', to_jsonb(avals));
         if annos <> '{}' then
             est := est || jsonb_build_object('annotations', annos);
         end if;
@@ -8321,8 +8388,9 @@ $$;
 -- Every ancestor of an entity (not the entity itself), as a jsonb array of
 -- keys. Without an overlay, a recursive walk over the direct parents (UNION
 -- ends it on a cycle: cedar_put_entities rejects cycles, but two concurrent
--- puts could still make one). With an overlay, breadth first: each entity's
--- parents come from the overlay if it has the entity, else from storage.
+-- puts could still make one). With an overlay, the same walk: each
+-- entity's parents come from the overlay if it has the entity, else from
+-- storage.
 -- A generic plan: the walk's plan does not depend on the uid, and planning
 -- it per call would cost more than running it.
 create function permissions._cedar_ancestors(p_type text, p_id text, p_ov jsonb)
@@ -8332,14 +8400,6 @@ set plan_cache_mode = force_generic_plan
 as $$
 declare
     r jsonb;
-    seen jsonb := '{}';
-    ts text[] := array[p_type];
-    ids text[] := array[p_id];
-    nt text[];
-    ni text[];
-    k text;
-    e jsonb;
-    i int;
 begin
     if p_ov is null then
         with recursive a(t, i) as (
@@ -8356,34 +8416,23 @@ begin
         select jsonb_agg(permissions._cedar_key(a.t, a.i)) into r from a;
         return coalesce(r, '[]');
     end if;
-    while cardinality(ts) > 0 loop
-        nt := '{}';
-        ni := '{}';
-        for i in 1 .. cardinality(ts) loop
-            k := permissions._cedar_key(ts[i], ids[i]);
-            if p_ov ? k then
-                for e in select x from jsonb_array_elements(p_ov -> k -> 'parents') x loop
-                    nt := nt || (e ->> 0);
-                    ni := ni || (e ->> 1);
-                end loop;
-            else
-                select nt || array_agg(p.parent_type), ni || array_agg(p.parent_id) into nt, ni
-                from permissions.cedar_entity_parents p
-                where p.type = ts[i] and p.id = ids[i];
-            end if;
-        end loop;
-        ts := '{}';
-        ids := '{}';
-        for i in 1 .. cardinality(nt) loop
-            k := permissions._cedar_key(nt[i], ni[i]);
-            if not seen ? k then
-                seen := seen || jsonb_build_object(k, true);
-                ts := ts || nt[i];
-                ids := ids || ni[i];
-            end if;
-        end loop;
-    end loop;
-    return coalesce((select jsonb_agg(x) from jsonb_object_keys(seen) x), '[]');
+    -- the same walk, each entity's parents from the overlay if it has the
+    -- entity, else from storage (a key lookup in the overlay per step)
+    with recursive a(t, i) as (
+        select x.t, x.i from (
+            select e ->> 0 as t, e ->> 1 as i from jsonb_array_elements(p_ov -> permissions._cedar_key(p_type, p_id) -> 'parents') e
+            union all
+            select p.parent_type, p.parent_id from permissions.cedar_entity_parents p
+            where p.type = p_type and p.id = p_id and not p_ov ? permissions._cedar_key(p_type, p_id)) x
+        union
+        select q.t, q.i from a cross join lateral (
+            select e ->> 0 as t, e ->> 1 as i from jsonb_array_elements(p_ov -> permissions._cedar_key(a.t, a.i) -> 'parents') e
+            union all
+            select p.parent_type, p.parent_id from permissions.cedar_entity_parents p
+            where p.type = a.t and p.id = a.i and not p_ov ? permissions._cedar_key(a.t, a.i) offset 0) q
+    )
+    select jsonb_agg(permissions._cedar_key(a.t, a.i)) into r from a;
+    return coalesce(r, '[]');
 end;
 $$;
 
@@ -8446,8 +8495,11 @@ begin
     if jsonb_typeof(y) = 'object' then
         return to_jsonb(anc ? permissions._cedar_key(y -> '__entity' ->> 'type', y -> '__entity' ->> 'id'));
     end if;
-    return to_jsonb(exists (select 1 from jsonb_array_elements(y) e
-                            where anc ? permissions._cedar_key(e -> '__entity' ->> 'type', e -> '__entity' ->> 'id')));
+    -- a set operation, not a scan of anc (jsonb ? on an array) per element
+    return to_jsonb(exists (select permissions._cedar_key(e -> '__entity' ->> 'type', e -> '__entity' ->> 'id') collate "C"
+                            from jsonb_array_elements(y) e
+                            intersect
+                            select a collate "C" from jsonb_array_elements_text(anc) a));
 end;
 $$;
 
@@ -8549,6 +8601,7 @@ declare
     d jsonb;
     f text;
     vals jsonb[];
+    keys text[];
     kv record;
 begin
     if k = 'lit' then
@@ -8669,15 +8722,15 @@ begin
         end loop;
         return permissions._cedar_set(to_jsonb(vals));
     elsif k = 'rec' then
-        d := '{}';
         for kv in select * from jsonb_each(n -> 'a') loop
             y := permissions._cedar_eval(kv.value, env, why);
             if y is null then
                 return null;
             end if;
-            d := d || jsonb_build_object(kv.key, y);
+            keys := keys || kv.key;
+            vals := vals || y;
         end loop;
-        return d;
+        return coalesce((select jsonb_object_agg(u.k, u.w) from unnest(keys, vals) u(k, w)), '{}');
     elsif k = 'call' then
         for x in select e from jsonb_array_elements(n -> 'a') e loop
             y := permissions._cedar_eval(x, env, why);
@@ -8747,10 +8800,11 @@ begin
             return permissions._cedar_eval_fail(why, format('type_error: %s: expected two Sets, got %s and %s', k,
                                                              permissions._cedar_type_of(x), permissions._cedar_type_of(y)));
         elsif k = 'containsAll' then
-            return to_jsonb(not exists (select 1 from jsonb_array_elements(y) b
-                                        where not exists (select 1 from jsonb_array_elements(x) a where a = b)));
+            -- set operations (hashed or sorted), not a scan of x for each
+            -- element of y; jsonb = is Cedar == on the canonical form
+            return to_jsonb(not exists (select b from jsonb_array_elements(y) b except select a from jsonb_array_elements(x) a));
         end if;
-        return to_jsonb(exists (select 1 from jsonb_array_elements(y) b join jsonb_array_elements(x) a on a = b));
+        return to_jsonb(exists (select b from jsonb_array_elements(y) b intersect select a from jsonb_array_elements(x) a));
     elsif k = 'hasTag' or k = 'getTag' then
         if not (jsonb_typeof(x) = 'object' and x ? '__entity') or jsonb_typeof(y) <> 'string' then
             return permissions._cedar_eval_fail(why, format('type_error: %s: expected an entity and a String, got %s and %s', k,
@@ -8962,7 +9016,7 @@ declare
     msg text;
     permits text[] := '{}';
     forbids text[] := '{}';
-    errs jsonb := '[]';
+    errs jsonb[] := '{}';
 begin
     if principal is null or action is null or resource is null then
         perform permissions._cedar_error('null_argument',
@@ -8999,14 +9053,14 @@ begin
             exception when sqlstate 'CE001' then
                 msg := sqlerrm;
             end;
-            errs := errs || jsonb_build_array(jsonb_build_object('policy_id', pol.policy_id, 'message', msg));
+            errs := errs || jsonb_build_object('policy_id', pol.policy_id, 'message', msg);
         end if;
     end loop;
     return jsonb_build_object(
         'decision', case when cardinality(forbids) = 0 and cardinality(permits) > 0 then 'allow' else 'deny' end,
         'reasons', to_jsonb(array(select x from unnest(case when cardinality(forbids) > 0 then forbids else permits end) x
                                   order by x collate "C")),
-        'errors', coalesce((select jsonb_agg(x order by x ->> 'policy_id' collate "C") from jsonb_array_elements(errs) x), '[]'));
+        'errors', coalesce((select jsonb_agg(x order by x ->> 'policy_id' collate "C") from unnest(errs) x), '[]'));
 end;
 $$;
 
