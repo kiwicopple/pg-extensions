@@ -34,3 +34,19 @@ grant execute on function
     permissions.fga_list_objects(text, text, text, jsonb, text, jsonb),
     permissions.fga_list_users(text, text, text[], jsonb, text, jsonb)
 to service_role;
+
+-- The Cedar admin functions: policies, templates and links, entities, and
+-- requests for any principal.
+grant execute on function
+    permissions.cedar_put_policy(text, text, jsonb),
+    permissions.cedar_delete_policy(text),
+    permissions.cedar_policies(),
+    permissions.cedar_put_template(text, text, jsonb),
+    permissions.cedar_link_template(text, text, text, text),
+    permissions.cedar_delete_template(text),
+    permissions.cedar_templates(),
+    permissions.cedar_put_entities(jsonb),
+    permissions.cedar_delete_entities(jsonb),
+    permissions.cedar_read_entities(text, text[]),
+    permissions.cedar_is_authorized(text, text, text, jsonb, jsonb)
+to service_role;

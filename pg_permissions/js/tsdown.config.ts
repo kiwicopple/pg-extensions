@@ -6,6 +6,7 @@ export default defineConfig([
       index: 'src/index.ts',
       rbac: 'src/rbac/index.ts',
       fga: 'src/fga/index.ts',
+      cedar: 'src/cedar/index.ts',
       sql: 'src/transport/sql.ts',
       postgrest: 'src/transport/postgrest.ts',
     },

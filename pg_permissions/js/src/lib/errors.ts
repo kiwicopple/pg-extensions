@@ -27,6 +27,28 @@ export type FgaErrorName =
   | 'unsupported_schema_version'
   | (string & {})
 
+/**
+ * The Cedar codes of `DETAIL`. Each is one cause, for example `unknown_policy`
+ * (no policy has the id) or `invalid_uid` (the text is not `Type::"id"`).
+ * Other strings are allowed for codes added later.
+ */
+export type CedarErrorCode =
+  | 'parse_error'
+  | 'invalid_policy'
+  | 'unknown_policy'
+  | 'unknown_template'
+  | 'template_in_use'
+  | 'id_in_use'
+  | 'invalid_link'
+  | 'invalid_uid'
+  | 'invalid_entity'
+  | 'invalid_context'
+  | 'invalid_argument'
+  | 'unsupported'
+  | 'null_argument'
+  | 'limit_exceeded'
+  | (string & {})
+
 /** A parsed `rbac:<code>[ key='value' ...]` DETAIL. */
 export interface RbacErrorReason {
   model: 'rbac'
@@ -44,7 +66,19 @@ export interface FgaErrorReason {
   name: FgaErrorName
 }
 
-export type PermissionsErrorReason = RbacErrorReason | FgaErrorReason
+/**
+ * A parsed `cedar:<code>[ key='value' ...]` DETAIL, for example
+ * `cedar:unknown_policy policy_id='alice-edit'` or
+ * `cedar:parse_error line=1 column=8`.
+ */
+export interface CedarErrorReason {
+  model: 'cedar'
+  code: CedarErrorCode
+  /** The `key=value` pairs after the code, with the values unquoted. */
+  context: Record<string, string>
+}
+
+export type PermissionsErrorReason = RbacErrorReason | FgaErrorReason | CedarErrorReason
 
 /** The fields of a PostgREST error body, and of a Postgres error. */
 export interface PermissionsErrorContext {
@@ -66,7 +100,7 @@ export class PermissionsError extends Error {
   hint: string | null
   /** The SQLSTATE, for example `22023`. Empty for errors that do not come from Postgres. */
   code: string
-  /** The `DETAIL` code, parsed. `null` when `details` is not an `rbac:` or `openfga:` code. */
+  /** The `DETAIL` code, parsed. `null` when `details` is not an `rbac:`, `openfga:` or `cedar:` code. */
   reason: PermissionsErrorReason | null
 
   constructor(context: PermissionsErrorContext) {
@@ -112,11 +146,12 @@ export class PermissionsHttpError extends PermissionsError {
 }
 
 const RBAC_DETAIL = /^rbac:([A-Za-z0-9_]+)(?:\s+([\s\S]*))?$/
+const CEDAR_DETAIL = /^cedar:([A-Za-z0-9_]+)(?:\s+([\s\S]*))?$/
 const FGA_DETAIL = /^openfga:(\d+)\s+(\S+)\s*$/
 
 /**
  * Parses a `DETAIL` string into a reason. Returns `null` when the string is not
- * an `rbac:` or `openfga:` code.
+ * an `rbac:`, `openfga:` or `cedar:` code.
  */
 export function parseDetail(details: string | null | undefined): PermissionsErrorReason | null {
   if (typeof details !== 'string') return null
@@ -127,6 +162,11 @@ export function parseDetail(details: string | null | undefined): PermissionsErro
     const context = rbac[2] === undefined ? {} : parseContext(rbac[2])
     if (context === null) return { model: 'rbac', code: rbac[1] as string, context: {} }
     return { model: 'rbac', code: rbac[1] as string, context }
+  }
+  const cedar = CEDAR_DETAIL.exec(details)
+  if (cedar) {
+    const context = cedar[2] === undefined ? {} : parseContext(cedar[2])
+    return { model: 'cedar', code: cedar[1] as string, context: context ?? {} }
   }
   return null
 }
@@ -214,4 +254,17 @@ export function isFgaError(
   if (!isPermissionsError(error) || error.reason === null || error.reason.model !== 'openfga') return false
   if (code === undefined) return true
   return typeof code === 'number' ? error.reason.code === code : error.reason.name === code
+}
+
+/** True for an error with a `cedar:` DETAIL code; with `code`, only for that code. */
+export function isCedarError(
+  error: unknown,
+  code?: CedarErrorCode,
+): error is PermissionsError & { reason: CedarErrorReason } {
+  return (
+    isPermissionsError(error) &&
+    error.reason !== null &&
+    error.reason.model === 'cedar' &&
+    (code === undefined || error.reason.code === code)
+  )
 }

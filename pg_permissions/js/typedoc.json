@@ -4,6 +4,7 @@
     "src/index.ts",
     "src/rbac/index.ts",
     "src/fga/index.ts",
+    "src/cedar/index.ts",
     "src/transport/sql.ts",
     "src/transport/postgrest.ts"
   ],

@@ -1,6 +1,6 @@
 # permissions
 
-`permissions` is the JavaScript client for [`pg_permissions`](https://permissions.dev), an authorization extension for Postgres. The extension has two permission models: roles (RBAC) and relationships (OpenFGA). The client calls the functions of both models.
+`permissions` is the JavaScript client for [`pg_permissions`](https://permissions.dev), an authorization extension for Postgres. The extension has three permission models: roles (RBAC), relationships (OpenFGA) and policies (Cedar). The client calls the functions of each model.
 
 The client has no runtime dependency. It works in Node, in browsers, in Deno and in Bun.
 
@@ -10,7 +10,7 @@ The client has no runtime dependency. It works in Node, in browsers, in Deno and
 npm install permissions
 ```
 
-The database must have `pg_permissions` 0.0.1. See [Install](https://permissions.dev/install/) for the steps.
+The database must have `pg_permissions` 0.1.0. The RBAC and FGA clients also work with 0.0.1, which has no Cedar functions. See [Install](https://permissions.dev/install/) for the steps.
 
 ## Choose an entry point
 
@@ -23,7 +23,7 @@ The package has two entry points. Each entry point has a different trust level.
 
 Admin calls never go over HTTP. A browser never needs a service key.
 
-The browser client has seven methods. They call eight functions of the extension that Postgres grants to every role.
+The browser client has nine methods. They call ten functions of the extension that Postgres grants to every role.
 
 | Method | Result |
 | --- | --- |
@@ -32,6 +32,8 @@ The browser client has seven methods. They call eight functions of the extension
 | `rbac.scopesWithPermission({ permission })` | `string[]` |
 | `fga.check({ relation, object })` | `boolean` |
 | `fga.listObjects({ type, relation, idsOnly })` | `string[]` |
+| `cedar.isAuthorized({ action, resource, resourceAttrs })` | `boolean` |
+| `cedar.listResources({ action, resourceType })` | `string[]` |
 | `currentSubjectId()` | `string`, or `null` when there is no subject |
 | `currentSubjectType()` | `string`. The default is `'user'`. |
 
@@ -200,6 +202,133 @@ const { data } = await permissions.rbac.hasPermission({
 
 PostgREST must list the schema `permissions` in `db-schemas`. To use another schema name, pass `db: { schema: 'my_schema' }`.
 
+## Cedar policies
+
+The `cedar` client calls the Cedar model of the extension. A server puts the policies and the entities with `cedar.admin`. A browser checks the current user with `cedar.isAuthorized` and `cedar.listResources`.
+
+A uid is Cedar text, `'Document::"q3"'`, or an object, `{ type: 'Document', id: 'q3' }`. The client turns an object into Cedar text and escapes `"` and `\` in the id. To build the text yourself, use `uid(type, id)`. Do not join strings: an id with a `"` gives the error `cedar:invalid_uid`.
+
+### Put policies and entities
+
+The role of the connection must have `execute` on the Cedar admin functions.
+
+```ts
+import pg from 'pg'
+import { createServerClient } from 'permissions'
+
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+})
+const permissions = createServerClient(pool)
+
+const policy = `permit (
+  principal in Team::"eng",
+  action == Action::"view",
+  resource in Folder::"reports"
+);`
+await permissions.cedar.admin.putPolicy({
+  policyId: 'eng-reports',
+  policy,
+})
+
+const entities = [
+  {
+    uid: { type: 'user', id: 'alice' },
+    parents: [{ type: 'Team', id: 'eng' }],
+  },
+  {
+    uid: { type: 'Document', id: 'q3' },
+    parents: [{ type: 'Folder', id: 'reports' }],
+  },
+]
+await permissions.cedar.admin.putEntities(entities)
+```
+
+`putPolicy` also takes `policyJson`, a policy in the JSON format of Cedar. `policyId` names the policy. An `@id` annotation does not.
+
+The admin methods are the SQL functions in camelCase:
+
+| Method | SQL function | Result |
+| --- | --- | --- |
+| `putPolicy({ policyId, policy, policyJson })` | `cedar_put_policy` | `null` |
+| `deletePolicy({ policyId })` | `cedar_delete_policy` | `null` |
+| `policies()` | `cedar_policies` | `PolicyInfo[]` |
+| `putTemplate({ templateId, template, templateJson })` | `cedar_put_template` | `null` |
+| `linkTemplate({ policyId, templateId, principal, resource })` | `cedar_link_template` | `null` |
+| `deleteTemplate({ templateId })` | `cedar_delete_template` | `null` |
+| `templates()` | `cedar_templates` | `TemplateInfo[]` |
+| `putEntities(entities)` | `cedar_put_entities` | `null` |
+| `deleteEntities(uids)` | `cedar_delete_entities` | `number`, the entities deleted |
+| `readEntities({ type, ids })` | `cedar_read_entities` | Entity JSON |
+| `isAuthorized({ principal, action, resource, context, entities })` | `cedar_is_authorized` | `AuthorizationResponse` |
+
+### Check a request for any principal
+
+`admin.isAuthorized` answers a full Cedar request. The response has the shape of the `response` of `isAuthorized` in `@cedar-policy/cedar-wasm`, Cedar's own JavaScript API.
+
+```ts
+import pg from 'pg'
+import { createServerClient } from 'permissions'
+
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+})
+const permissions = createServerClient(pool)
+
+const request = {
+  principal: { type: 'user', id: 'alice' },
+  action: 'Action::"view"',
+  resource: 'Document::"q3"',
+  context: { mfa: true },
+}
+const { data } = await permissions.cedar.admin.isAuthorized(request)
+// {
+//   decision: 'allow',
+//   diagnostics: { reason: ['eng-reports'], errors: [] },
+// }
+```
+
+| Field | Content |
+| --- | --- |
+| `decision` | `'allow'` or `'deny'` |
+| `diagnostics.reason` | The ids of the policies that decided. For a deny, the forbids that hold. Empty for the default deny. |
+| `diagnostics.errors` | `{ policyId, error: { message } }` for each policy that failed to evaluate. That policy was skipped. |
+
+The SQL function returns `reasons` and `errors[].policy_id`. The client renames them to match Cedar.
+
+### Check the current user
+
+`isAuthorized` and `listResources` answer for the current subject. The principal is `current_subject_type()::"current_subject_id()"`, for example `user::"alice"`. Write the policies with that type.
+
+```ts
+import { createClient } from 'permissions'
+
+const SUPABASE_URL = 'https://your-project.supabase.co'
+const SUPABASE_ANON_KEY = 'your-anon-key'
+
+const permissions = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+const { data: canView } = await permissions.cedar.isAuthorized({
+  action: 'Action::"view"',
+  resource: { type: 'Document', id: 'q3' },
+})
+
+// ['q3', ...]: ids, without the type
+const { data: ids } = await permissions.cedar.listResources({
+  action: 'Action::"view"',
+  resourceType: 'Document',
+})
+```
+
+These methods fail closed:
+
+- Without a subject, the answer is `false` or `[]`.
+- When a forbid that applies fails to evaluate, the answer is `false`. `admin.isAuthorized` can allow the same request and report the error.
+
+`resourceAttrs` replaces the attributes of the resource for one check. Use it for a row that is not a stored entity. `listResources` returns stored entities only.
+
+The same methods exist on the clients of `as()`, which give the same answers as the browser client. The browser client and the clients of `as()` have no `admin`.
+
 ## Check as one subject
 
 On a server, `as()` runs the checks for one subject. It gives the same answers as the browser client gives for that user.
@@ -330,10 +459,11 @@ A mistake in your code always throws. For example, an unknown function name or a
 | `code` | The SQLSTATE, for example `22023`. It is an empty string when the error does not come from Postgres. |
 | `reason` | The `DETAIL` text, parsed. It is `null` for an error from Postgres, such as `42501`. |
 
-`reason` has one of two forms:
+`reason` has one of three forms:
 
 - `{ model: 'rbac', code: 'unknown_role', context: { role: 'admn' } }`
 - `{ model: 'openfga', code: 2001, name: 'authorization_model_not_found' }`
+- `{ model: 'cedar', code: 'unknown_policy', context: { policy_id: 'x' } }`
 
 Two subclasses cover failures that have no error body. `PermissionsFetchError` means that the request did not reach the server. `PermissionsHttpError` means that the response has an error status and no PostgREST error body. It has `status` and `body`.
 
@@ -367,7 +497,7 @@ if (isRbacError(error, 'role_exists')) {
 }
 ```
 
-`isFgaError` accepts the error number or the error name. [Errors and limits](https://permissions.dev/errors-and-limits/) lists every code.
+`isFgaError` accepts the error number or the error name. `isCedarError(error, code)` tests a `cedar:` code, as `isRbacError` tests an `rbac:` code. [Errors and limits](https://permissions.dev/errors-and-limits/) lists every code.
 
 ## Import one part of the package
 
@@ -378,10 +508,11 @@ The package has subpaths. Each subpath works alone.
 | `permissions` | `createClient`, `createServerClient`, and the exports of each subpath below |
 | `permissions/rbac` | `RbacClient` |
 | `permissions/fga` | `FgaClient` |
+| `permissions/cedar` | `CedarClient` and `uid` |
 | `permissions/sql` | `sqlTransport` |
 | `permissions/postgrest` | `postgrestTransport` |
 
-The constructors of `RbacClient` and `FgaClient` take a PostgREST URL, or a transport. Only a client on an SQL transport has `admin`.
+The constructors of `RbacClient`, `FgaClient` and `CedarClient` take a PostgREST URL, or a transport. Only a client on an SQL transport has `admin`.
 
 ```ts
 import pg from 'pg'
@@ -480,9 +611,12 @@ The package has a UMD bundle for a `<script>` tag. It sets the global `permissio
 
 ## Compatibility
 
-| `permissions` | `pg_permissions` | Runtime |
+| `permissions` | `pg_permissions` | Models |
 | --- | --- | --- |
-| 0.2.x | 0.0.1 | Node 20 or later. Browsers, Deno and Bun that have `fetch`. |
+| The first release with `cedar` | 0.1.0 | RBAC, OpenFGA and Cedar. RBAC and OpenFGA also work with 0.0.1. |
+| 0.2.x | 0.0.1 | RBAC and OpenFGA |
+
+The runtime is Node 20 or later, or a browser, Deno or Bun that has `fetch`.
 
 The package ships ESM and CommonJS, with types for both.
 
