@@ -37,7 +37,7 @@ Each error has a SQLSTATE and three text fields. Every error sets all three fiel
 | Field | Content |
 | --- | --- |
 | `MESSAGE` | What went wrong. It names the values that were wrong. |
-| `DETAIL` | A code that a program can read. It starts with a namespace: `openfga:<code> <name>` for the `fga_*` functions, and `rbac:<code>` for the `rbac_*` functions. |
+| `DETAIL` | A code that a program can read. It starts with a namespace: `openfga:<code> <name>` for the `fga_*` functions, `rbac:<code>` for the `rbac_*` functions, and `cedar:<code>` for the `cedar_*` functions. |
 | `HINT` | How to fix the error. For a misspelled name, the hint gives the nearest name and the list of valid names. |
 
 The code in `DETAIL` is stable. Your code can match on it.
@@ -75,8 +75,9 @@ The `DETAIL` code has two parts: a namespace and a code. A colon separates them.
 | --- | --- | --- | --- |
 | `openfga:` | The `fga_*` functions | `openfga:<number> <name>`, for example `openfga:2000 validation_error` | The number and the name are the OpenFGA API error code and its name. |
 | `rbac:` | The `rbac_*` functions | `rbac:<code>`, then optional context, for example `rbac:unknown_role role='admn'` | The code is a name in snake case. It names the cause. One cause has one code in every function. |
+| `cedar:` | The `cedar_*` functions | `cedar:<code>`, then optional context, for example `cedar:unknown_policy policy_id='x'` | The code is a name in snake case. It names the cause. |
 
-The `rbac:` context is a list of `key=value` pairs. The value is a quoted literal. To get the code only, read the text before the first space.
+The `rbac:` and `cedar:` context is a list of `key=value` pairs. The value is a quoted literal. To get the code only, read the text before the first space.
 
 The shared functions `current_subject_id`, `current_subject_type` and `delete_subject` raise no error. They have no `DETAIL` code.
 
@@ -161,6 +162,43 @@ Every row has the SQLSTATE `22023`, except code `2002`. Each row has one code, i
 | `openfga:2057 unsupported_schema_version` | `22023` | The schema version is `1.2`, the version for modular models. | Use schema 1.1. |
 
 The RLS helpers raise a subset of these errors. They raise no error when there is no subject, when there is no model, or when the model does not define the subject type. They return `false` or no rows. They never raise an error for a condition.
+
+## Cedar errors
+
+Each row has one code, in the column `DETAIL`. The same code has the same cause in each function that raises it. The `DETAIL` column shows the form of the context after the code.
+
+| `DETAIL` | SQLSTATE | Raised by | Cause | Fix |
+| --- | --- | --- | --- | --- |
+| `cedar:parse_error line=<n> column=<n>` | `42601` | `cedar_put_policy`, `cedar_put_template` (text) | The text is not one Cedar policy. It has a syntax error, no policy, or more than one policy. The message names the position. | Fix the text at the line and the column. The hint links the Cedar grammar. Put each policy with its own call. |
+| `cedar:invalid_policy path='<json path>'` | `22023` | `cedar_put_policy`, `cedar_put_template` (JSON, and the checks of text) | The JSON does not have the shape of Cedar's policy format. Or a static policy has a slot. Or a template has no slot, or has a slot outside the principal and resource scopes. | Pass the policy as the Cedar CLI writes it. Use `cedar_put_template` for a policy with a slot, and `cedar_put_policy` for a policy without one. |
+| `cedar:invalid_argument argument='policy'` | `22023` | `cedar_put_policy`, `cedar_put_template` | A call passes both the text and the JSON. | Pass exactly one. |
+| `cedar:invalid_argument value='<text>'` | `22023` | `cedar_list_resources_current` | `resource_type` is not an entity type name. | Pass a type name without an id, such as `'Document'` or `'App::Document'`. |
+| `cedar:unknown_policy policy_id='<id>'` | `22023` | `cedar_delete_policy` | No policy has this id. | Use an id from `cedar_policies`. The hint lists the ids. |
+| `cedar:unknown_template template_id='<id>'` | `22023` | `cedar_link_template`, `cedar_delete_template` | No template has this id. | Use an id from `cedar_templates`. The hint gives the nearest id. |
+| `cedar:template_in_use template_id='<id>'` | `2BP01` | `cedar_delete_template`, `cedar_put_template` | The template has links. Or a new template does not keep a slot that a link fills. | Delete the links with `cedar_delete_policy` first. The hint names them. Keep the slots in the new template. |
+| `cedar:id_in_use id='<id>'` | `23505` | `cedar_put_policy`, `cedar_put_template`, `cedar_link_template` | The id belongs to the other kind: a static policy, a template or a link. | Choose another id, or delete the existing one first. |
+| `cedar:invalid_link slot='?<name>'` | `22023` | `cedar_link_template` | A slot of the template has no value, or a value has no slot. | Pass a value for each slot of the template and nothing else. The hint names the slots. |
+| `cedar:invalid_uid value='<text>'` | `22023` | Every function that takes a uid | The text is not `Type::"id"`. For `cedar_delete_entities`, an item is not `{"type", "id"}` or Cedar text. | Write `User::"alice"`, or build the text with `cedar_uid`. |
+| `cedar:invalid_entity index=<n>` | `22023` | `cedar_put_entities`, `entities` of `cedar_is_authorized` | The entity at this index is not valid. The uid is a duplicate. A value is not a Long, a String, a Boolean, a set, a record, an entity or an extension value. An extension value is not valid. The `entities` argument is not an array. | Fix the entity. The message names the path of the value. The hint shows the format. |
+| `cedar:invalid_entity uid='<uid>'` | `22023` | `cedar_put_entities` | The put makes a cycle in the hierarchy. The uid is on the cycle. | Remove one of the parent links of the cycle. |
+| `cedar:invalid_context` | `22023` | `cedar_is_authorized` | The context is not a JSON object, or a value in it is not valid. | Pass a JSON object. Write an extension value as `{"__extn": {"fn": "ip", "arg": "10.0.0.1"}}`. |
+| `cedar:unsupported feature='<name>'` | `0A000` | `cedar_put_policy`, `cedar_put_template`, and the parser | A string holds U+0000. Or a record literal in a policy has the only key `__entity` or `__extn`. | Remove the character or the key. See [Compatibility](../models/cedar/compatibility.md#differences-from-cedar). |
+| `cedar:null_argument argument='<name>'` | `22004` | `cedar_put_policy`, `cedar_delete_policy`, `cedar_put_template`, `cedar_link_template`, `cedar_delete_template`, `cedar_put_entities`, `cedar_delete_entities`, `cedar_read_entities`, `cedar_is_authorized` | A required argument is `null`. Or `cedar_put_policy` has neither `policy` nor `policy_json`. Or `cedar_read_entities` has `ids` and no `type`. | Pass the argument. The hint shows a call. |
+| `cedar:limit_exceeded limit='<name>'` | `54000` | `cedar_put_policy`, `cedar_put_template`, `cedar_is_authorized` | A policy or a context is over a limit. The name is `policy_bytes`, `policy_nodes`, `policy_depth` or `value_depth`. | Split the policy into smaller policies. Flatten the data. See [Limits](limits.md#cedar-limits). |
+| `cedar:limit_exceeded index=<n>` | `54000` | `cedar_put_entities`, `entities` of `cedar_is_authorized` | The array has more entities than the limit, or a value nests deeper than 32 levels. | Put the entities in batches. See [Limits](limits.md#cedar-limits). |
+
+The functions for RLS raise a small subset of these errors. `cedar_is_authorized_current` and `cedar_list_resources_current` raise `cedar:invalid_uid` for an action that is not a uid. `cedar_is_authorized_current` raises it for a resource that is not of the form `Type::"..."`. `cedar_list_resources_current` raises `cedar:invalid_argument` for a bad `resource_type`. They return `false` or no rows when there is no subject, when an argument is `null`, and when a `forbid` fails. They never raise an error for a policy that fails, and they never raise an error for an id that holds a `"` or a `\`.
+
+A policy that fails while it runs is not an error of the call. `cedar_is_authorized` returns it in `errors`, and the message starts with one of these codes:
+
+| Code | Cause |
+| --- | --- |
+| `attribute_not_found` | The expression reads an attribute that the entity or the record does not have. |
+| `entity_does_not_exist` | The expression reads an attribute of an entity that is not stored. |
+| `tag_not_found` | `getTag` reads a tag that the entity does not have. |
+| `type_error` | An operator or a method got a value of the wrong type. |
+| `overflow` | A Long operation went outside -2^63 to 2^63-1. |
+| `extension_error` | An extension function got a value that it cannot read, or the wrong number of arguments. |
 
 ## Errors from Postgres
 

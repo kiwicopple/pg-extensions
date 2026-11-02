@@ -13,7 +13,7 @@ export default defineConfig({
 		starlight({
 			title: 'pg_permissions',
 			description:
-				'pg_permissions: authorization for Postgres with RBAC and OpenFGA-compatible relationships, usable in RLS policies.',
+				'pg_permissions: authorization for Postgres with RBAC, OpenFGA-compatible relationships and Cedar policies, usable in RLS policies.',
 			logo: { src: './src/assets/logo.svg', alt: '' },
 			favicon: '/favicon.svg',
 			social: [

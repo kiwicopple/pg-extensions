@@ -1,6 +1,6 @@
 # Overview
 
-`pg_permissions` is an authorization extension for Postgres. It stores application roles and sharing relationships in your database, and gives you functions to use in row level security (RLS) policies. Your application manages who has access; Postgres enforces that access when it reads or writes rows.
+`pg_permissions` is an authorization extension for Postgres. It stores application roles, sharing relationships and policies in your database, and gives you functions to use in row level security (RLS) policies. Your application manages who has access; Postgres enforces that access when it reads or writes rows.
 
 For example, a document app might let editors change any document in their organization, let a guest read one shared document, and block a suspended user from both. The extension provides the permission models for those rules, while RLS brings them together on the documents table.
 
@@ -22,20 +22,21 @@ An app can start with roles and add sharing later, without replacing its existin
 
 Established models come with documentation, examples, tooling, and a body of work explaining how to use them. Developers and LLMs can draw on that knowledge when writing authorization rules, instead of learning a language invented for this extension.
 
-Following OpenFGA gives us a concrete model language and public test suites to check against. Keeping that familiar model inside Postgres makes it easier for agents to generate useful code and for developers to understand and review it. The [architecture overview](../research/architecture.md) explains why we chose separate model APIs and how future models can fit.
+Following OpenFGA and Cedar gives us concrete model languages and public test suites to check against. Keeping that familiar model inside Postgres makes it easier for agents to generate useful code and for developers to understand and review it. The [architecture overview](../research/architecture.md) explains why we chose separate model APIs and how future models can fit.
 
 ## What you can express
 
-The extension currently has two permission models in the `permissions` schema:
+The extension has three permission models in the `permissions` schema:
 
 | Model | Use it for | Example |
 | --- | --- | --- |
 | Roles and permissions (RBAC) | Roles across an application or within a tenant, with role inheritance | Alice is an editor in Acme and a viewer in Globex. |
 | Relationships (OpenFGA) | Individual shares, nested teams, and access inherited from folders | Bob can read a document because it is shared with his team. |
+| Policies (Cedar) | Rules on the attributes of the user, the resource and the request, and a deny that always wins | Owners edit their own documents. Nobody opens a confidential document without MFA. |
 
-OpenFGA relationships can also have CEL conditions, such as an expiry time. The models can work together: one RLS policy grants access through a role, another grants it through a share, and a restrictive policy can deny access across both.
+OpenFGA relationships can also have CEL conditions, such as an expiry time. The models can work together: one RLS policy grants access through a role, another grants it through a share or a Cedar policy, and a restrictive policy can deny access across all of them.
 
-[Choose a permission model](get-started/choose-a-model.md) walks through the options. Cedar is a future direction; it is not implemented. The structure leaves room for it and other models alongside the existing ones.
+[Choose a permission model](get-started/choose-a-model.md) walks through the options. Each model has its own guide, its own functions and its own data. The structure leaves room for other models alongside them.
 
 ## Goals that shape the extension
 
@@ -43,7 +44,7 @@ OpenFGA relationships can also have CEL conditions, such as an expiry time. The 
 - Make read policies practical on large tables. Helpers list accessible scopes or object IDs so a query can compute them once and use an index. [Policy shape matters](rls/performance.md); a per-row check is not always the right choice.
 - Work with an application's existing identity system. The extension reads a subject from JWT claims or transaction-local settings. It does not store users or require a Supabase `auth` schema.
 - Keep installation portable. The implementation is SQL and PL/pgSQL, supports Postgres 16, 17, and 18, and can be installed without superuser rights. There is no C module or separate authorization service to run.
-- Make behavior inspectable. The project uses executable examples, pinned OpenFGA test suites, and benchmarks to check its rules and performance. [Compatibility differences](models/openfga/compatibility.md) and [limits](reference/limits.md) are documented explicitly.
+- Make behavior inspectable. The project uses executable examples, pinned OpenFGA and Cedar test suites, and benchmarks to check its rules and performance. Compatibility differences ([OpenFGA](models/openfga/compatibility.md), [Cedar](models/cedar/compatibility.md)) and [limits](reference/limits.md) are documented explicitly.
 
 ## Where it fits in your application
 

@@ -2,7 +2,7 @@
 
 The client maps methods to SQL functions. Client methods answer for the current subject; admin methods accept explicit subjects or change permission data.
 
-Create a client using [JavaScript setup](../integrations/javascript.md). The [RBAC](../models/rbac/overview.md) and [OpenFGA](../models/openfga/overview.md) guides show each operation alongside SQL.
+Create a client using [JavaScript setup](../integrations/javascript.md). The [RBAC](../models/rbac/overview.md), [OpenFGA](../models/openfga/overview.md) and [Cedar](../models/cedar/overview.md) guides show each operation alongside SQL.
 
 ## Results and errors
 
@@ -28,6 +28,7 @@ const permissions = createServerClient(pool, {
 | --- | --- | --- |
 | An RBAC error of the extension, such as `rbac:unknown_role role='admn'` | `PermissionsError` | `{ model: 'rbac', code: 'unknown_role', context: { role: 'admn' } }` |
 | An OpenFGA error of the extension, such as `openfga:2001 authorization_model_not_found` | `PermissionsError` | `{ model: 'openfga', code: 2001, name: 'authorization_model_not_found' }` |
+| A Cedar error of the extension, such as `cedar:unknown_policy policy_id='x'` | `PermissionsError` | `{ model: 'cedar', code: 'unknown_policy', context: { policy_id: 'x' } }` |
 | An error from Postgres, such as `42501` or `57014` | `PermissionsError` | `null` |
 | The request did not reach the server, or the database connection failed | `PermissionsFetchError` | `null` |
 | An error status from PostgREST, with no PostgREST error body | `PermissionsHttpError`, with `status` and `body` | `null` |
@@ -35,7 +36,7 @@ const permissions = createServerClient(pool, {
 
 [Errors and limits](errors.md) lists each `DETAIL` code.
 
-Use the type guards `isPermissionsError`, `isRbacError` and `isFgaError` to test an error. `isRbacError` takes an optional code. `isFgaError` takes an optional number or name.
+Use the type guards `isPermissionsError`, `isRbacError`, `isFgaError` and `isCedarError` to test an error. `isRbacError` and `isCedarError` take an optional code. `isFgaError` takes an optional number or name.
 
 ```ts
 import { createClient, isFgaError, isRbacError } from 'permissions'
@@ -59,7 +60,7 @@ if (isFgaError(error, 2000)) {
 
 ## Methods
 
-The tables show the SQL function that each method calls, and the type of `data`. For an example of each method, see [RBAC](../models/rbac/overview.md) and [The OpenFGA model](../models/openfga/overview.md).
+The tables show the SQL function that each method calls, and the type of `data`. For an example of each method, see [RBAC](../models/rbac/overview.md), [The OpenFGA model](../models/openfga/overview.md) and [Policies (Cedar)](../models/cedar/overview.md).
 
 ### Client methods
 
@@ -73,6 +74,8 @@ These methods answer for the current subject. They exist on both entry points. O
 | `fga.check({ relation, object })` | `fga_check_current` | `boolean` |
 | `fga.listObjects({ type, relation })` | `fga_list_objects_current` | `string[]`, as `type:id` |
 | `fga.listObjects({ type, relation, idsOnly: true })` | `fga_list_object_ids_current` | `string[]`, as `id` |
+| `cedar.isAuthorized({ action, resource, resourceAttrs? })` | `cedar_is_authorized_current` | `boolean` |
+| `cedar.listResources({ action, resourceType })` | `cedar_list_resources_current` | `string[]`, as `id` |
 | `currentSubjectId()` | `current_subject_id` | `string`, or `null` when there is no subject |
 | `currentSubjectType()` | `current_subject_type` | `string`. The default is `'user'`. |
 
@@ -99,6 +102,17 @@ These methods exist only on `createServerClient`, and on a standalone client wit
 | `fga.admin.listObjects({ user, type, relation, ... })` | `fga_list_objects` | `string[]` |
 | `fga.admin.listUsers({ object, relation, userFilters, ... })` | `fga_list_users` | `string[]` |
 | `fga.admin.deleteStore()` | `fga_delete_store` | `null` |
+| `cedar.admin.putPolicy({ policyId, policy?, policyJson? })` | `cedar_put_policy` | `null` |
+| `cedar.admin.deletePolicy({ policyId })` | `cedar_delete_policy` | `null` |
+| `cedar.admin.policies()` | `cedar_policies` | `PolicyInfo[]` |
+| `cedar.admin.putTemplate({ templateId, template?, templateJson? })` | `cedar_put_template` | `null` |
+| `cedar.admin.linkTemplate({ policyId, templateId, principal?, resource? })` | `cedar_link_template` | `null` |
+| `cedar.admin.deleteTemplate({ templateId })` | `cedar_delete_template` | `null` |
+| `cedar.admin.templates()` | `cedar_templates` | `TemplateInfo[]` |
+| `cedar.admin.putEntities(entities)` | `cedar_put_entities` | `null` |
+| `cedar.admin.deleteEntities(uids)` | `cedar_delete_entities` | `number`, the entities deleted |
+| `cedar.admin.readEntities({ type?, ids? })` | `cedar_read_entities` | `CedarEntity[]` |
+| `cedar.admin.isAuthorized({ principal, action, resource, context?, entities? })` | `cedar_is_authorized` | `{ decision, diagnostics: { reason, errors } }` |
 | `admin.deleteSubject({ type, id })` | `delete_subject` | `number` |
 
 In `check`, `listObjects` and `listUsers`, `...` stands for the options `contextualTuples`, `context` and `authorizationModelId`.
@@ -120,11 +134,15 @@ The FGA methods use the names of the OpenFGA SDK, in camel case. The client maps
 | `userId` | `user_id` |
 | `onDuplicate`, `onMissing` | `on_duplicate` and `on_missing` in the `writes` and `deletes` arguments |
 
+A uid argument of a Cedar method is Cedar text, `'Document::"q3"'`, or an object, `{ type: 'Document', id: 'q3' }`. The client turns an object into Cedar text, and escapes `"` and `\` in the id. `uid(type, id)` builds the same text, and it is the JavaScript form of the SQL function [`cedar_uid`](cedar.md#cedar_uid). The Cedar methods have no `plan_time_guard` argument.
+
+`cedar.admin.isAuthorized` returns the shape of the `response` of `@cedar-policy/cedar-wasm`. The SQL function returns `reasons` and `errors[].policy_id`. The client renames them to `diagnostics.reason` and `diagnostics.errors[].policyId`.
+
 A scope of `null` or `undefined` means app-wide. The client does not change the keys inside `context`, in a tuple condition, or in a model.
 
 ## Other imports
 
-The subpaths `permissions/rbac`, `permissions/fga`, `permissions/sql` and `permissions/postgrest` each export one part of the package. A standalone client takes a PostgREST URL, or a transport:
+The subpaths `permissions/rbac`, `permissions/fga`, `permissions/cedar`, `permissions/sql` and `permissions/postgrest` each export one part of the package. A standalone client takes a PostgREST URL, or a transport:
 
 ```ts
 import pg from 'pg'

@@ -99,6 +99,7 @@ The author does not claim which answer is correct. The report says that the APIs
 | [`designs/c-compiled-model.md`](./designs/c-compiled-model.md) | Design C: compiled model. |
 | [`designs/d-per-model.md`](./designs/d-per-model.md) | Design D: per-model tables. This is the design record of the extension. |
 | [`designs/d-conditions.md`](./designs/d-conditions.md) | Design D: OpenFGA conditions (CEL) in PL/pgSQL. |
+| [`designs/e-cedar.md`](./designs/e-cedar.md) | Design E: the Cedar model (`cedar_*`) in PL/pgSQL. It has the oracle, the evaluator, the RLS helpers and the measurements. |
 | [`prototypes/README.md`](./prototypes/README.md) | The prototypes A, B and C as measured history. |
 | [`prototypes/a-tuple-core.md`](./prototypes/a-tuple-core.md) | The usage guide of prototype A. |
 | [`prototypes/b-policy-first.md`](./prototypes/b-policy-first.md) | The usage guide of prototype B. |
@@ -108,6 +109,7 @@ The author does not claim which answer is correct. The report says that the APIs
 | [`benchmarks/OPTIMIZATIONS.md`](./benchmarks/OPTIMIZATIONS.md) | A, B and C after the session 3 optimizations (PG 16 to 18 in Docker). |
 | [`benchmarks/VERSIONS.md`](./benchmarks/VERSIONS.md) | A, B and C on Postgres 16, 17 and 18 in Docker. |
 | [`benchmarks/D.md`](./benchmarks/D.md) | Design D benchmarked, with the passes opt, opt2, opt3 and phase 6. |
+| [`benchmarks/cedar.md`](./benchmarks/cedar.md) | Design E (Cedar) benchmarked on the same data, and compared with D. |
 | [`upstream/openfga-cycle-but-not-inconsistency.md`](./upstream/openfga-cycle-but-not-inconsistency.md) | The report to OpenFGA about the `but not` cycle problem. The script [`upstream/openfga-cycle-but-not-repro.sh`](./upstream/openfga-cycle-but-not-repro.sh) reproduces it. |
 | [`journal.md`](./journal.md) | The raw build record. It keeps its original style and is not in simplified English. |
 

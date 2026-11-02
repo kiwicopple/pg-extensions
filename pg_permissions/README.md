@@ -1,9 +1,10 @@
 # `pg_permissions`
 
-`pg_permissions` is an authorization extension for Postgres. It has one schema, `permissions`, with two permission models. You can use the models in row level security (RLS) policies.
+`pg_permissions` is an authorization extension for Postgres. It has one schema, `permissions`, with three permission models. You can use the models in row level security (RLS) policies.
 
 - **RBAC** (`rbac_*` functions): roles that grant permissions. A user holds a role app-wide or in one tenant.
 - **Relationships** (`fga_*` functions): an [OpenFGA](https://openfga.dev)-compatible engine. It has authorization models, tuples, Check, ListObjects, ListUsers and Read, with the error codes of OpenFGA.
+- **Policies** (`cedar_*` functions): a [Cedar](https://www.cedarpolicy.com)-compatible engine. It has policies and templates in Cedar text or JSON, entities with groups, attributes and tags, and `cedar_is_authorized`. It follows Cedar 4.14 and passes Cedar's own integration tests.
 
 The extension is pure SQL. It needs no other extension and no C code. It runs on Postgres 16, 17 and 18.
 
@@ -15,10 +16,11 @@ The extension is pure SQL. It needs no other extension and no C code. It runs on
 - Roles with inheritance. Assign a role app-wide or in a scope, such as a tenant.
 - Access to single objects, nested teams and folders, with the OpenFGA model language (schema 1.1).
 - Conditions in [CEL](https://github.com/google/cel-spec) on tuples, for example access that expires.
+- Cedar policies with `permit`, `forbid` (a deny that always wins), conditions on attributes and on the request context, templates, and the extension types `ipaddr`, `decimal`, `datetime` and `duration`.
 - Functions for RLS policies that answer for the current user, with a fast path for tenant tables.
 - Support for Supabase and PostgREST (the JWT `sub` claim). Plain Postgres uses a value that is local to the transaction.
-- Denies across both models, with restrictive policies.
-- Tests that include the OpenFGA test suites.
+- Denies across the models, with restrictive policies.
+- Tests that include the OpenFGA test suites and Cedar's integration tests.
 
 ## Quick start
 
@@ -43,9 +45,10 @@ Start with the [documentation map](docs/README.md) or [choose a permission model
 | Assign roles and permissions | [RBAC](docs/models/rbac/overview.md) |
 | Share objects through relationships | [OpenFGA](docs/models/openfga/overview.md) |
 | Add expiry or attribute conditions | [Conditions](docs/models/openfga/conditions.md) |
+| Write policies with conditions and denies | [Cedar](docs/models/cedar/overview.md) |
 | Enforce access on a table | [RLS policies](docs/rls/policies.md) |
-| Combine roles, shares, and denies | [Combine models](docs/rls/combine-models.md) |
-| Look up a function | [Shared](docs/reference/shared.md), [RBAC](docs/reference/rbac.md), [OpenFGA](docs/reference/openfga.md) |
+| Combine roles, shares, policies and denies | [Combine models](docs/rls/combine-models.md) |
+| Look up a function | [Shared](docs/reference/shared.md), [RBAC](docs/reference/rbac.md), [OpenFGA](docs/reference/openfga.md), [Cedar](docs/reference/cedar.md) |
 | Connect from JavaScript | [Setup](docs/integrations/javascript.md) and [reference](docs/reference/javascript.md) |
 
 ## JavaScript client
@@ -69,7 +72,7 @@ const { data: canEdit } = await permissions.rbac.hasPermission({
 })
 ```
 
-See [JavaScript client: setup](docs/integrations/javascript.md) for the methods and the errors. The RBAC and OpenFGA pages show each call next to the SQL.
+See [JavaScript client: setup](docs/integrations/javascript.md) for the methods and the errors. The RBAC, OpenFGA and Cedar pages show each call next to the SQL.
 
 ## Development scripts
 

@@ -1,8 +1,8 @@
 # Client and admin privileges
 
-Application clients can check their own access. A trusted backend manages roles, models, and tuples. These privileges apply regardless of the language you use.
+Application clients can check their own access. A trusted backend manages roles, models, tuples, policies and entities. These privileges apply regardless of the language you use.
 
-The examples are fragments. They assume the `authenticated` and `service_role` database roles exist. The RBAC example uses the `alice` and `bob` variables from [RBAC setup](../models/rbac/overview.md#before-you-start); the OpenFGA example uses the [sharing model](../models/openfga/models.md). Run expected-error statements separately when your client stops on errors.
+The examples are fragments. They assume the `authenticated` and `service_role` database roles exist. The RBAC example uses the `alice` and `bob` variables from [RBAC setup](../models/rbac/overview.md#before-you-start); the OpenFGA example uses the [sharing model](../models/openfga/models.md); the Cedar example uses the [policies and entities](../models/cedar/policies.md). Run expected-error statements separately when your client stops on errors.
 
 ## RBAC and shared functions
 
@@ -10,8 +10,8 @@ The extension has two kinds of functions.
 
 | Kind | Functions | Who can call them |
 | --- | --- | --- |
-| Client functions: answer for the current subject only | `current_subject_id`, `current_subject_type`, `rbac_has_permission`, `rbac_has_role`, `rbac_scopes_with_permission`, `fga_check_current`, `fga_list_objects_current`, `fga_list_object_ids_current` | Everyone (granted to `PUBLIC`), so `anon` and `authenticated` too |
-| Admin functions: change data, or take a subject as an argument | `rbac_create_role`, `rbac_drop_role`, `rbac_assign_role`, `rbac_unassign_role`, `rbac_user_permissions`, `rbac_users_with_role`, `delete_subject`, and each other `fga_*` function | The extension owner. Other roles need an explicit `grant execute` |
+| Client functions: answer for the current subject only | `current_subject_id`, `current_subject_type`, `rbac_has_permission`, `rbac_has_role`, `rbac_scopes_with_permission`, `fga_check_current`, `fga_list_objects_current`, `fga_list_object_ids_current`, `cedar_is_authorized_current`, `cedar_list_resources_current`, `cedar_uid` | Everyone (granted to `PUBLIC`), so `anon` and `authenticated` too |
+| Admin functions: change data, or take a subject as an argument | `rbac_create_role`, `rbac_drop_role`, `rbac_assign_role`, `rbac_unassign_role`, `rbac_user_permissions`, `rbac_users_with_role`, `delete_subject`, and each other `fga_*` and `cedar_*` function | The extension owner. Other roles need an explicit `grant execute` |
 
 Clients have no privilege on the tables of the extension. The functions that read the tables are `security definer`, with a fixed `search_path`.
 
@@ -91,3 +91,56 @@ to service_role;
 ```
 
 Grant only the functions that the backend uses. Keep `fga_delete_store()` for the owner. See [Privileges](../reference.md#privileges) in the function reference.
+
+## Cedar functions
+
+The Cedar admin functions follow the same rule. Only the extension owner can call them, unless it grants execution to another role. Current-subject helpers are available to clients. `cedar_uid` is also available to clients. It is a pure function that builds the text of a uid, and it reads no data.
+
+A client that can call `cedar_is_authorized` can ask what anyone can do. A client that can put policies or entities can give itself any access.
+
+```sql
+set role authenticated;
+select permissions.cedar_is_authorized(
+  principal => 'user::"alice"',
+  action => 'Action::"view"',
+  resource => 'Document::"q3"'
+);
+-- ERROR:  permission denied for function cedar_is_authorized
+select permissions.cedar_put_entities(
+  entities => '[
+    {
+      "uid": {"type": "user", "id": "mallory"},
+      "parents": [{"type": "Team", "id": "eng"}]
+    }
+  ]'
+);
+-- ERROR:  permission denied for function cedar_put_entities
+select permissions.cedar_is_authorized_current(
+  action => 'Action::"view"',
+  resource => permissions.cedar_uid('Document', 'q3')
+);
+-- allowed: answers for the current subject
+reset role;
+```
+
+To give a trusted backend role the other functions, use an explicit grant:
+
+```sql
+grant execute on function
+    permissions.cedar_put_policy(text, text, jsonb),
+    permissions.cedar_delete_policy(text),
+    permissions.cedar_policies(),
+    permissions.cedar_put_template(text, text, jsonb),
+    permissions.cedar_link_template(text, text, text, text),
+    permissions.cedar_delete_template(text),
+    permissions.cedar_templates(),
+    permissions.cedar_put_entities(jsonb),
+    permissions.cedar_delete_entities(jsonb),
+    permissions.cedar_read_entities(text, text[]),
+    permissions.cedar_is_authorized(text, text, text, jsonb, jsonb)
+to service_role;
+```
+
+Grant only the functions that the backend uses. The Cedar tables have no client privileges. The functions run with the rights of the owner, so a client reads and writes no table directly.
+
+The current-subject helpers read the subject from the same settings as the other models. See [Identity and request context](identity.md). A role that can run `set_config` can choose its subject. Do not give such a role to a client that is not trusted.

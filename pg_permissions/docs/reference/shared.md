@@ -92,6 +92,10 @@ The extension stores its data in tables in the schema `permissions`. The extensi
 | `fga_models` | The authorization models, as written, with their ids. |
 | `fga_conditions` | The conditions of each model: `name`, `expression` and `parameters`. |
 | `fga_tuples` | The stored tuples, with their conditions. The column `seq` is the order of the writes. |
+| `cedar_policies` | The static policies and the template links, as Cedar text and JSON. |
+| `cedar_templates` | The policy templates. |
+| `cedar_entities` | The entities, with their attributes and tags. |
+| `cedar_entity_parents` | The direct parents of each entity. |
 
 Read these tables for reports and to find faults. Do not write to them. A direct write skips the checks of the functions, and it can leave the derived tables wrong. Use the functions.
 
@@ -100,4 +104,5 @@ An internal object is an object that the extension uses to work. Do not read it,
 - Each function whose name starts with `_`. One of them, `_unfolded_null`, is public, because a default value uses it.
 - The tables that hold derived data: `rbac_role_closure` and the tables for the compiled model, `fga_types`, `fga_relations`, `fga_type_restrictions`, `fga_rewrite_nodes`, `fga_edges`, `fga_computed_closure`, `fga_paths`, `fga_reach` and `fga_walk_steps`.
 - The sequences of the tables, and the types `fga_tuple` and `fga_cel_result`.
-- The columns of a table that hold compiled data, such as `ast` in `fga_conditions`.
+- The table `cedar_policy_scopes`, which indexes the scope of each policy.
+- The columns of a table that hold compiled data, such as `ast` in `fga_conditions` and in `cedar_policies`.

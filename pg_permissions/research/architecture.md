@@ -22,6 +22,8 @@ The OpenFGA test suites are pinned oracles, not a claim that every service featu
 
 ## Future models
 
+> Note, 2026-11-02: Cedar is now implemented as the `cedar_*` model in `pg_permissions--0.1.0.sql`. It has its own API, [compatibility statement](../docs/models/cedar/compatibility.md), tests and [RLS guidance](../docs/rls/policies.md#policies-for-cedar). The design is in [`designs/e-cedar.md`](designs/e-cedar.md). The text below is the earlier statement, kept as history.
+
 The design reserves Cedar as a future, separate model. It is not implemented. The policy-first prototype is research for that work, not a Cedar installation option. A new model would need its own API, compatibility statement, tests, and RLS guidance.
 
 ## Evidence and design details

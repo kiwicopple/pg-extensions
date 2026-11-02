@@ -101,6 +101,7 @@ The scenarios and the work plan are in [`../research/plan.md`](../research/plan.
 | `5x_cedar_` | Cedar: API, errors and limits, hierarchy, evaluator, overlay, text parser, templates (`research/plan-cedar.md`) | `spec/d/` |
 | `6x_` | OpenFGA oracles (generated, committed) | `spec/d/` |
 | `7x_cedar_oracle` | Cedar oracle (generated before each run, not committed) | `spec/d/` |
+| `90_usage_` | The SQL examples of the user docs: RBAC, OpenFGA, conditions, RLS and Cedar (`90_usage_cedar.sql`) | `spec/d/` |
 
 ## Write a test
 
