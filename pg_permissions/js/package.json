@@ -1,6 +1,6 @@
 {
   "name": "permissions",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "JS client for pg_permissions: RBAC, OpenFGA and Cedar authorization in Postgres, over PostgREST or SQL.",
   "license": "MIT",
   "author": "Paul Copplestone",

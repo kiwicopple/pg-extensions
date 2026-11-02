@@ -76,7 +76,7 @@ const { data: canEdit } = await permissions.rbac.hasPermission({
 
 See [JavaScript client: setup](docs/integrations/javascript.md) for the methods and the errors. The RBAC, OpenFGA and Cedar pages show each call next to the SQL.
 
-The published `permissions` 0.2.0 package supports RBAC and OpenFGA. To try the Cedar JavaScript examples before the next client release, [build and install the client from source](docs/integrations/javascript.md#install).
+`permissions` 0.3.0 adds Cedar and needs `pg_permissions` 0.1.0 for Cedar. RBAC and OpenFGA work with 0.0.1 or 0.1.0. See [Install](docs/integrations/javascript.md#install).
 
 ## Development scripts
 

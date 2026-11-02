@@ -10,22 +10,7 @@ The client has no runtime dependency. It works in Node, in browsers, in Deno and
 npm install permissions
 ```
 
-The published `0.2.0` package supports RBAC and OpenFGA. Cedar methods are available in this source checkout and need `pg_permissions` 0.1.0 in the database. RBAC and OpenFGA work with both database versions. See [Install](../docs/install.md) for the database steps.
-
-To use Cedar before the next client release, build the package from `pg_permissions/`:
-
-```bash
-npm run js:install
-npm run js:build
-```
-
-Then install it from your application's directory, using the path to your checkout:
-
-```bash
-npm install /absolute/path/to/pg-extensions/pg_permissions/js
-```
-
-The repository uses pnpm to install and build the client. The examples below describe the source version, including Cedar.
+`permissions` 0.3.0 adds Cedar and needs `pg_permissions` 0.1.0 for Cedar. RBAC and OpenFGA work with `pg_permissions` 0.0.1 or 0.1.0. See [Install](../docs/install.md) for the database steps.
 
 ## Choose an entry point
 
@@ -608,7 +593,7 @@ The package has a UMD bundle for a `<script>` tag. It sets the global `permissio
 
 ```html
 <script
-  src="https://cdn.jsdelivr.net/npm/permissions@0.2/dist/umd/permissions.js"
+  src="https://cdn.jsdelivr.net/npm/permissions@0.3/dist/umd/permissions.js"
 ></script>
 <script>
   const url = 'https://your-project.supabase.co'
@@ -628,8 +613,8 @@ The package has a UMD bundle for a `<script>` tag. It sets the global `permissio
 
 | `permissions` | `pg_permissions` | Models |
 | --- | --- | --- |
-| Source checkout (not yet published) | 0.1.0 | RBAC, OpenFGA and Cedar. RBAC and OpenFGA also work with 0.0.1. |
-| Published 0.2.0 | 0.0.1 or 0.1.0 | RBAC and OpenFGA |
+| 0.3.x | 0.1.0 (Cedar); 0.0.1 or 0.1.0 (RBAC, OpenFGA) | RBAC, OpenFGA and Cedar |
+| 0.2.x | 0.0.1 or 0.1.0 | RBAC and OpenFGA |
 
 The runtime is Node 20 or later, or a browser, Deno or Bun that has `fetch`.
 
