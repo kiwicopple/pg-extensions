@@ -3,12 +3,14 @@
 The Astro + Starlight site publishes application guides, API reference, and research for `pg_permissions`. Canonical prose lives in the parent directory, `pg_permissions/` (`../docs`, `../research` and so on). Edit those files, not the generated site pages.
 
 ```bash
-make docs              # from the repo root: install if needed, build, and check links/content
-make docs.dev          # local development server
-# or, from pg_permissions/site/:
-npm run sync           # regenerate pages, Markdown exports, and data
-npm run build          # sync, build, and validate
-npm run check:quickstart # execute the quickstart in a temporary Postgres
+# from pg_permissions/ (the scripts are in package.json there):
+npm run docs:install            # npm ci in site/
+npm run docs:dev                # local development server (syncs first)
+npm run docs:build              # sync, build into site/dist, and validate
+npm run docs:preview            # serve the built site
+npm run docs:check:quickstart   # execute the quickstart in a temporary Postgres
+# or from the repo root: make docs, make docs.dev
+# or from pg_permissions/site/: npm run sync, npm run build, npm run check:quickstart
 ```
 
 The site uses Astro 7, Starlight 0.42, and `starlight-links-validator`. Charts are build-time SVG components. Use the Node version required by the installed Astro release.
@@ -40,9 +42,11 @@ Adjacent fenced blocks with `tab="SQL"` and `tab="JavaScript"` become synchroniz
 
 ## Sync and deployment
 
+Vercel builds the site from source with the Root Directory `pg_permissions` and the settings in `../vercel.json`. The built site and the generated pages are never committed. `npm run docs:publish` (from `pg_permissions/`) deploys by hand; the Git integration deploys on push to `main`.
+
 Sync runs before development and build. It adds page metadata, rewrites relative links, exports plain Markdown, copies benchmark data, and extracts workload descriptions. Links to code and other non-page files point to GitHub. Missing targets produce a warning; resolve warnings before publishing.
 
-Set `DOCS_REPO_URL` and `DOCS_REPO_REF` for source and edit links. The defaults are `kiwicopple/pg-extensions` and the `pg_permissions` branch. Set `DOCS_SITE` to the deployment origin and `DOCS_BASE` when hosting below a path, for example `/pg-extensions`. Markdown and index links honor the same base.
+Set `DOCS_REPO_URL` and `DOCS_REPO_REF` for source and edit links. The defaults are `kiwicopple/pg-extensions` and the `main` branch. Set `DOCS_SITE` to the deployment origin and `DOCS_BASE` when hosting below a path, for example `/pg-extensions`. Markdown and index links honor the same base.
 
 The plain Markdown exports preserve the source code fences without tab markup. `llms.txt` lists canonical pages and their descriptions; compatibility pages are exported for old links but omitted from that index. The homepage links to the index. Historical records retain their status notes.
 

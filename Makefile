@@ -46,16 +46,17 @@ test.pg_permissions:
 bench.pg_permissions:
 	cd $(REPO_DIR)/pg_permissions && ./bench/run.sh --impl $(IMPL) --scale $(SCALE)
 
-# Documentation site (Astro + Starlight). See pg_permissions/site/README.md.
+# Documentation site (Astro + Starlight): thin wrappers over the npm scripts in
+# pg_permissions/package.json. See pg_permissions/site/README.md.
 SITE := $(REPO_DIR)/pg_permissions/site
-$(SITE)/node_modules: $(SITE)/package.json
-	cd $(SITE) && npm install
+$(SITE)/node_modules: $(SITE)/package-lock.json
+	npm --prefix pg_permissions run docs:install
 
 docs: $(SITE)/node_modules
-	cd $(SITE) && npm run build
+	npm --prefix pg_permissions run docs:build
 
 docs.dev: $(SITE)/node_modules
-	cd $(SITE) && npm run dev
+	npm --prefix pg_permissions run docs:dev
 
 docs.sync: $(SITE)/node_modules
-	cd $(SITE) && npm run sync
+	npm --prefix pg_permissions run docs:sync
