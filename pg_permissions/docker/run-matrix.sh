@@ -13,8 +13,10 @@
 #   --versions 16,17,18   which servers, in this order (default all three)
 #   --designs ext,a,b,c   which implementations, in this order (default ext);
 #                         `ext` (or `d`) is the extension file
-#                         pg_permissions--0.1.0.sql, `a`, `b` and `c` are the
-#                         prototypes in prototypes/ (measured history)
+#                         pg_permissions--0.1.0.sql, `e` the same file with
+#                         bench/run.sh --design e (its Cedar model), `a`, `b`
+#                         and `c` are the prototypes in prototypes/ (measured
+#                         history)
 #   --keep-running        leave the last server running (default: compose down)
 #   -- ARGS               passed to test/run.sh or bench/run.sh
 #                         (--external and --impl are added here)
@@ -64,8 +66,8 @@ impl_for() {
         a) echo prototypes/a-tuple-core.sql ;;
         b) echo prototypes/b-policy-first.sql ;;
         c) echo prototypes/c-compiled-model.sql ;;
-        d|ext) echo pg_permissions--0.1.0.sql ;;
-        *) echo "unknown design: $1 (expected a, b, c, d or ext)" >&2; return 1 ;;
+        d|ext|e) echo pg_permissions--0.1.0.sql ;;
+        *) echo "unknown design: $1 (expected a, b, c, d, e or ext)" >&2; return 1 ;;
     esac
 }
 IFS=, read -r -a VERSION_LIST <<<"$VERSIONS"
@@ -125,7 +127,7 @@ for v in "${VERSION_LIST[@]}"; do
         compose run --rm --no-deps -T --entrypoint bash -u postgres \
             -e PGHOST=/var/run/postgresql -e PGUSER=postgres -e TZ="${TZ_NAME:-UTC}" \
             -e BENCH_ENVIRONMENT=docker -e BENCH_HOST="$host" \
-            "$svc" "/pg_permissions/$MODE/run.sh" --external --impl "$impl" ${PASS[@]+"${PASS[@]}"} 2>&1 |
+            "$svc" "/pg_permissions/$MODE/run.sh" --external --impl "$impl" $( [ "$d" = e ] && echo --design e ) ${PASS[@]+"${PASS[@]}"} 2>&1 |
             grep --line-buffered -v -E '^ ?Container .*(Creating|Created|Starting|Started|Running|Waiting|Healthy)' | tee "$out_file"
         status=${PIPESTATUS[0]}
         secs=$(( $(date +%s) - start ))

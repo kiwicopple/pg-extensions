@@ -17,9 +17,11 @@
 #   --clients N                  pgbench clients (default 4)
 #   --only NAME[,NAME...]        run only workloads whose name contains one of these;
 #                                phases after the last selected workload aren't seeded
-#   --design a|b|c|d|none        default: the letter before the first dash of the
+#   --design a|b|c|d|e|none      default: the letter before the first dash of the
 #                                --impl file name (a-tuple-core.sql -> a), d for the
-#                                extension file (pg_permissions--*.sql), else none
+#                                extension file (pg_permissions--*.sql), else none;
+#                                e is the extension's Cedar model (cedar_*): pass
+#                                --design e with the extension file
 #   --external                   use the server from PGHOST/PGPORT/PGUSER
 #   --tag NAME                   appended to the JSON run_id (e.g. smoke)
 #   --check                      exit 1 if a p95 is over budget or a workload fails
@@ -50,8 +52,11 @@
 #   7. blocklist  designs/<design>/seed_blocklist.sql (relations with `but not`
 #               and `and`); block_list_objects, block_or_mute_list_objects,
 #               intersect_list_objects
-# Phases 2-7 are skipped if the design has no files for them (6 and 7 exist
-# for design d only). All designs read
+#   8. rowcheck  designs/<design>/seed_rowcheck.sql (one select policy that
+#               checks every row; its checksum must equal parents');
+#               row_select_page
+# Phases 2-8 are skipped if the design has no files for them (6 and 7 exist
+# for design d only, 8 for design e only). All designs read
 # the same data from the shape tables (bench/seed_shape.sql). Checksums are
 # saved to bench/results/equivalence-<scale>-<shape>-<design>.tsv (complete
 # runs only, not --only) and compared with the other designs' latest files: identical data and correct engines
@@ -125,8 +130,8 @@ if [ -z "$DESIGN" ]; then
     esac
 fi
 case "$DESIGN" in
-    a|b|c|d|none) ;;
-    *) echo "unknown design: $DESIGN (expected a, b, c, d or none)" >&2; exit 2 ;;
+    a|b|c|d|e|none) ;;
+    *) echo "unknown design: $DESIGN (expected a, b, c, d, e or none)" >&2; exit 2 ;;
 esac
 DESIGN_DIR="$HERE/designs/$DESIGN"
 
@@ -137,6 +142,7 @@ PHASE4="parents_select_page parents_select_count"
 PHASE5="write_nest_team nest_check"
 PHASE6="plain_list_objects cond_list_objects cond_select_page cond_nest_check plain_list_users cond_list_users"
 PHASE7="block_list_objects block_or_mute_list_objects intersect_list_objects"
+PHASE8="row_select_page"
 # users whose visible documents are checksummed (every 5th user is a folder viewer)
 SAMPLE_USERS="1 2 3 5 10 77 500 $USERS"
 
@@ -180,7 +186,7 @@ selected() {
 # so phase N must be seeded if so.
 phase_needed() {
     local p w list
-    for p in 1 2 3 4 5 6 7; do
+    for p in 1 2 3 4 5 6 7 8; do
         [ "$p" -ge "$1" ] || continue
         eval "list=\$PHASE$p"
         for w in $list; do selected "$w" && return 0; done
@@ -377,7 +383,7 @@ if phase_needed 2; then
     echo
     if [ ! -f "$DESIGN_DIR/seed_sharing.sql" ]; then
         echo "Sharing skipped: no sharing benchmark for design $DESIGN (bench/designs/$DESIGN/)"
-        skip_workloads "$PHASE2 $PHASE3 $PHASE4 $PHASE5 $PHASE6 $PHASE7"
+        skip_workloads "$PHASE2 $PHASE3 $PHASE4 $PHASE5 $PHASE6 $PHASE7 $PHASE8"
     elif seed sharing "$DESIGN_DIR/seed_sharing.sql"; then
         SHARED=1
         checksums sharing
@@ -385,7 +391,7 @@ if phase_needed 2; then
         for w in $PHASE2; do run_workload "$w"; done
     else
         echo "  skipped: this implementation doesn't support the sharing API"
-        skip_workloads "$PHASE2 $PHASE3 $PHASE4 $PHASE5 $PHASE6 $PHASE7"
+        skip_workloads "$PHASE2 $PHASE3 $PHASE4 $PHASE5 $PHASE6 $PHASE7 $PHASE8"
     fi
 fi
 
@@ -480,6 +486,26 @@ if [ $SHARED = 1 ] && phase_needed 7; then
     fi
 fi
 
+# ---- 8. rowcheck: one select policy that checks every row (design e only)
+if [ $SHARED = 1 ] && phase_needed 8; then
+    echo
+    if [ ! -f "$DESIGN_DIR/seed_rowcheck.sql" ]; then
+        echo "Rowcheck skipped: no seed_rowcheck.sql for design $DESIGN (not a report row: e only)"
+    elif seed rowcheck "$DESIGN_DIR/seed_rowcheck.sql"; then
+        checksums rowcheck
+        # the same documents as the parents phase, through per-row checks
+        same=$(awk -F'\t' '$1 == "parents" { p[$2] = $3 FS $4 } $1 == "rowcheck" { c[$2] = $3 FS $4 }
+                END { n = 0; bad = 0; for (u in c) { n++; if (!(u in p) || p[u] != c[u]) bad++ }
+                      print (n == 0 ? "no rows" : (bad ? "MISMATCH" : "same")) }' "$WORK/equiv.tsv")
+        echo "  rowcheck vs parents (same run): $same"
+        [ "$same" = same ] || echo "  warning: the per-row policy doesn't see what the parents phase saw" >&2
+        explain_as_user "row_select_page (per-row policy, user 1)"
+        for w in $PHASE8; do run_workload "$w"; done
+    else
+        skip_workloads "$PHASE8"
+    fi
+fi
+
 # ---- equivalence across designs
 mkdir -p "$HERE/results"
 # only complete runs are saved for comparison; --only runs just compare
@@ -487,7 +513,7 @@ EQUIV_FILE="$HERE/results/equivalence-$SCALE-$SHAPE-$DESIGN.tsv"
 [ -n "$ONLY" ] || cp "$WORK/equiv.tsv" "$EQUIV_FILE"
 [ -z "$ONLY" ] || EQUIV_FILE="$WORK/equiv.tsv"
 EQUIV_SUMMARY=""
-for other in a b c d none; do
+for other in a b c d e none; do
     [ "$other" = "$DESIGN" ] && continue
     f="$HERE/results/equivalence-$SCALE-$SHAPE-$other.tsv"
     [ -s "$f" ] || continue
