@@ -24,7 +24,7 @@ const SRC_ROOT = path.resolve(DOCS, '..'); // pg_permissions/ (this site is pg_p
 const OUT_DOCS = path.join(DOCS, 'src', 'content', 'docs');
 const OUT_DATA = path.join(DOCS, 'src', 'data');
 const REPO = process.env.DOCS_REPO_URL ?? 'https://github.com/kiwicopple/pg-extensions';
-const REF = process.env.DOCS_REPO_REF ?? 'pg_permissions';
+const REF = process.env.DOCS_REPO_REF ?? 'main';
 const REPO_PREFIX = 'pg_permissions'; // where SRC_ROOT lives inside the repo
 
 /**
