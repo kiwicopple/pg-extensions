@@ -1,6 +1,6 @@
 # Design E: the Cedar model (`cedar_*`) in PL/pgSQL
 
-> Status: phase 0 of [`plan-cedar.md`](../plan-cedar.md), approved with its deviations (static limits, the `ast` column, errors as SQL null, the verbatim principal type, `resource_attrs` replacing attributes). Phases 2 and 3 are implemented in `pg_permissions--0.1.0.sql`: the core evaluator and the text parser. Section 12 has the phase 2 measurements and decisions, and section 13 the decisions of phase 3. The oracle is vendored in [`test/cedar/`](../../test/cedar/README.md).
+> Status: phase 0 of [`plan-cedar.md`](../plan-cedar.md), approved with its deviations (static limits, the `ast` column, errors as SQL null, the verbatim principal type, `resource_attrs` replacing attributes). Phases 2, 3 and 4c are implemented in `pg_permissions--0.1.0.sql`: the core evaluator, the text parser and templates. Section 12 has the phase 2 measurements and decisions, and section 13 the decisions of phases 3 and 4c. The oracle is vendored in [`test/cedar/`](../../test/cedar/README.md).
 
 The sources for this page are:
 
@@ -182,7 +182,7 @@ The text parser must produce exactly what the CLI produces, so that `jsonb` equa
 - `like` patterns are a list of `"Wildcard"` and `{"Literal":"…"}` items.
 - Annotations go to `annotations`, and `@id("x")` does not set the policy id of a put (section 13.2).
 
-Phase 3 runs the oracle with `generate.py --phase 3`, which includes `--check-est`. It covers 3,359 tests and 26,791 requests, plus one EST assertion for each policy. `--parse-est` checks the parser alone on all 5,708 text policies, including those with extension types (section 13.4).
+Phase 3 runs the oracle with `generate.py --phase 3`, which includes `--check-est`. It covers 3,359 tests and 26,791 requests, plus one EST assertion for each policy. `--parse-est` checks the parser alone on all 5,708 text policies, including those with extension types (section 13.5).
 
 ### 2.3 The compiled form: a second column, `ast`
 
@@ -329,7 +329,7 @@ API and argument errors raise. The `DETAIL` is `cedar:<code>`, followed by conte
 | `cedar:invalid_policy path='<json path>'` | `22023` | the same functions (JSON) | The `policy_json` does not have the shape of the format. Also a slot in a static policy, or no slot in a template. |
 | `cedar:unknown_policy policy_id='…'` | `22023` | `cedar_delete_policy` | No policy has this id. |
 | `cedar:unknown_template template_id='…'` | `22023` | `cedar_link_template`, `cedar_delete_template` | No template has this id. |
-| `cedar:template_in_use template_id='…'` | `2BP01` | `cedar_delete_template` | Links exist. The hint names some of them. |
+| `cedar:template_in_use template_id='…'` | `2BP01` | `cedar_delete_template`, `cedar_put_template` | Links exist. The hint names some of them. A replacement template must keep the slots its links fill. |
 | `cedar:id_in_use id='…'` | `23505` | the put and link functions | The id belongs to the other kind: a static policy, a template or a link. |
 | `cedar:invalid_link slot='…'` | `22023` | `cedar_link_template` | A slot of the template has no value, or a value has no slot. |
 | `cedar:invalid_uid value='…'` | `22023` | every function that takes a UID | The text is not `Type::"id"`. |
@@ -443,7 +443,7 @@ The oracle commands are in [`test/cedar/README.md`](../../test/cedar/README.md).
 | 3 | `--phase 3` (text, with `--check-est`), and `--format text --parse-est` | 3,359 / 26,791, plus 3,367 stored ESTs; the parser on 5,708 policies and 5 policy sets |
 | 4a | `--phase 4a`, both formats | 4,442 / 35,422 |
 | 4b | `--phase 4b`, both formats | 4,231 / 33,761 |
-| 4c | `--phase 4c` (`--templatize`) | 3,360 / 26,793, with 1,276 links |
+| 4c | `--phase 4c` (`--templatize`) | 1,273 / 10,111, with 1,276 links (only the cases that get a link) |
 | 4 done | `--phase all`, both formats and both modes | 5,701 / 45,494 |
 | 5, 6 | The full matrix keeps the phase 4 result on PG 16, 17 and 18. | |
 
@@ -475,6 +475,8 @@ The size of the suite matters. A run with `--phase all` writes 59 files and 76 M
 | A cycle that only the request overlay makes is not rejected: `in` still ends, and treats the entities of the cycle as each other's ancestors | Checking every overlay for cycles would cost every request a walk | None in the corpus |
 | Two concurrent `cedar_put_entities` calls can make a cycle that neither sees (there is no lock); `in` still ends | No global lock (section 12.1) | None |
 | The `_current` helpers fail closed when a `forbid` errors | Plan, decision 1 | In-house specs (phase 5) |
+| `cedar_link_template` with the id of an existing link replaces that link; Cedar's `link` rejects a duplicate id | Every put in this API is an upsert by id | `56_cedar_templates.sql` |
+| Two concurrent puts can give a static policy and a template the same id (the check is not locked) | Ids live in two tables; a lock on every policy put is not worth it | None |
 | No function takes a whole policy set (section 13.3) | Ids by position are unstable under upserts | None: the oracle splits the corpus sets |
 | Error messages differ | Only the policy ids are compared | `cedar_test.authz` compares ids only |
 | The limits of section 6 | The size of the work in PL/pgSQL | None in the corpus |
@@ -547,9 +549,9 @@ The fixed cost is about 50 µs: parsing three uids, one walk query, one entity q
 
 The generated files are not committed. `test/spec/d/.gitignore` ignores `7[0-5]_cedar_oracle*.sql`. Before each run of the extension, `test/run.sh` calls `generate.py suite`, which writes the runs in the `SUITE` list of `generate.py`. That takes about 3 seconds, and the files add about 35 seconds to the run. `--no-cedar-oracle` skips them. `docker/run-matrix.sh test` generates the files on the host, because the client containers have no Python.
 
-## 13. Phase 3 integration
+## 13. Phase 3 integration and phase 4c (templates)
 
-Phase 3 moved the text parser into the Cedar section of `pg_permissions--0.1.0.sql`. The decisions:
+Phase 3 moved the text parser into the Cedar section of `pg_permissions--0.1.0.sql`, and phase 4c added templates and links. The decisions:
 
 ### 13.1 One raise path and one set of limits
 
@@ -559,7 +561,7 @@ The parser's limits now come from `_cedar_limits()` and use its names: `policy_b
 
 ### 13.2 Text puts and `@id`
 
-`cedar_put_policy(policy => text)` parses the text with `_cedar_parse_policy`, which takes exactly one policy. No policy, or a second one, is a `parse_error` at that position, and the hint says to put each policy with its own call. The text is stored as `source`, the parsed EST as `est`, and the annotations come from the EST.
+`cedar_put_policy(policy => text)` parses the text with `_cedar_parse_policy`, which takes exactly one policy. No policy, or a second one, is a `parse_error` at that position, and the hint says to put each policy with its own call. The text is stored as `source`, the parsed EST as `est`, and the annotations come from the EST. `cedar_put_template(template => text)` works the same way.
 
 **The `policy_id` argument names the policy.** An `@id("x")` annotation in the text stays an annotation and does not rename the policy, and a disagreement is not an error. Reasons:
 
@@ -571,13 +573,42 @@ The parser's limits now come from `_cedar_limits()` and use its names: `policy_b
 
 The plan's API has no function that takes a whole policy set, and phase 3 does not add one (`cedar_put_policies(policies text)` was the candidate). The CLI names the policies of a set by position, `policy0`, `policy1` and so on, unless they have `@id`. Cedar loads a set as a whole, so position ids are stable there. This API upserts by id. With an upsert loader, a policy inserted at the top of a file would shift every later id and silently overwrite other policies. A loader that replaced the whole set would delete the links and the policies that other code put. An application can split its file and call `cedar_put_policy` once per policy, with stable ids. `_cedar_parse_policies` stays as an internal function: the parser oracle checks the CLI's ids with it, and a later loader can build on it.
 
-### 13.4 Oracle results
+### 13.4 Templates and links
+
+| Function | What it does |
+| --- | --- |
+| `cedar_put_template(template_id, template text default null, template_json jsonb default null)` | Upsert. Exactly one of the two. A template has `?principal` in its principal scope, `?resource` in its resource scope, or both. A slot anywhere else is `invalid_policy`, and so is a template with no slot. |
+| `cedar_link_template(policy_id, template_id, principal text default null, resource text default null)` | Fills the slots with uids in Cedar text. A value for each slot of the template and nothing else, or `invalid_link slot='?…'` with the slots in the hint. Linking an existing link's id again replaces the link. |
+| `cedar_delete_template(template_id)` | `template_in_use` while links exist; the hint names up to five. |
+| `cedar_templates()` | `table(template_id, source, est, annotations)`, by id. |
+| `cedar_policies()` | Now also returns `template_id` and `slots` (`{"?principal": {"type", "id"}, ...}`); both are null for a static policy. |
+| `cedar_delete_policy(policy_id)` | Deletes a static policy or a link. On a template id, the hint points to `cedar_delete_template`. |
+
+Static policies, links and templates share one set of ids, as in a Cedar policy set. A put may replace an id of its own kind, and an id of another kind raises `id_in_use`.
+
+**Slots are filled at link time.** A link is a row of `cedar_policies`: the template's EST with the slots filled, the template's compiled `ast` (Cedar allows slots only in the scope, so the conditions do not depend on the slot values), the template's annotations, and the scope columns compiled from the filled scope. `cedar_is_authorized` matches and evaluates a link exactly like a static policy, and never sees a slot. Resolving slots at evaluation time would add a lookup of the link's values to every scope match. Link-time filling costs nothing at check time:
+
+| Measurement (PostgreSQL 16.4, Apple silicon, best of 5) | µs |
+| --- | --- |
+| `cedar_is_authorized`, 1,000 users in 50 teams, 1,000 documents in 20 folders: 2 links of `permit (principal in ?principal, action == Action::"view", resource in ?resource) when { principal.level >= 0 }` | 69 |
+| the same with 1 static policy | 67 |
+| the same with 1,001 links, one for each team and folder | 240 |
+| the same with 1,000 static policies | 240 |
+| `cedar_link_template` (one link) | 92 to 99 |
+| `cedar_put_policy` of the same policy as static text | 258 to 277 |
+
+The 1,000-policy rows show the cost of the unindexed scope match over many policies, the same for links and static policies. Phase 5 indexes the scope.
+
+When a template is replaced, its links are filled again from the new template, in the same transaction. The new template must keep the slots that its links fill; otherwise the put raises `template_in_use` and names the links and their slots.
+
+### 13.5 Oracle results
 
 | Run | Assertions | Result |
 | --- | --- | --- |
 | `--phase 3` (text puts, stored entities, `--check-est`) | 26,791 requests and 3,367 stored ESTs | all pass |
 | `--format text --parse-est` (the parser on every text policy of the corpus, and the 5 sets with several policies) | 5,713 | all pass |
+| `--phase 4c` (`--templatize`) | 10,111 requests in the 1,273 cases that get a link, through 1,276 links | all pass |
 
-Both are in `SUITE`, so `test/run.sh` runs them (`71_` and `77_cedar_oracle`). The five `SUITE` runs now write 91 files and 71 MB in about 4 seconds (`test/spec/d/.gitignore` ignores `7[0-7]_cedar_oracle*.sql`). `--parse-est` replaces `wip/check_parser.sh`, the standalone parity check. The text oracle covers only the core features: the parser already handles the extension functions (the parse oracle covers them), but the compiler still refuses them until phases 4a and 4b.
+All three are in `SUITE`, so `test/run.sh` runs them (`71_`, `77_` and `76_cedar_oracle`). The six `SUITE` runs now write 102 files and 77 MB in about 4 seconds, and add about 60 seconds to a run of the suite (`test/spec/d/.gitignore` ignores `7[0-7]_cedar_oracle*.sql`). `--parse-est` replaces `wip/check_parser.sh`, the standalone parity check. The text oracle covers only the core features: the parser already handles the extension functions (the parse oracle covers them), but the compiler still refuses them until phases 4a and 4b.
 
 Parse cost. The largest corpus policy is 37,773 bytes of text after the U+0000 substitution (section 1.3). It parses in 12.2 ms, and `cedar_put_policy` with its text takes 17.6 ms; with its EST as `policy_json`, 5.2 ms.

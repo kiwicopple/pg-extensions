@@ -75,7 +75,7 @@ if [ "$DESIGN" = d ] && [ $CEDAR_ORACLE = 1 ]; then
     want=0
     [ ${#PATTERNS[@]} = 0 ] && want=1
     for p in ${PATTERNS[@]+"${PATTERNS[@]}"}; do
-        case "70_cedar_oracle_00 71_cedar_oracle_text_00 72_cedar_oracle_overlay_00 74_cedar_oracle_reduced_00 77_cedar_oracle_parse_00" in *"$p"*) want=1 ;; esac
+        case "70_cedar_oracle_00 71_cedar_oracle_text_00 72_cedar_oracle_overlay_00 74_cedar_oracle_reduced_00 76_cedar_oracle_templates_00 77_cedar_oracle_parse_00" in *"$p"*) want=1 ;; esac
     done
     if [ $want = 1 ]; then
         if command -v python3 >/dev/null 2>&1; then

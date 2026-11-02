@@ -72,6 +72,9 @@ select permissions.fga_write_tuple('user:deep', 'member', 'team:t30');
 -- Cedar: a policy (for the nearest-id hint) and a hierarchy Group::"a" -> Group::"b"
 select permissions.cedar_put_policy(policy_id => 'view-own', policy_json => '{"effect": "permit", "principal": {"op": "All"}, "action": {"op": "All"}, "resource": {"op": "All"}, "conditions": []}');
 select permissions.cedar_put_entities(entities => '[{"uid": {"type": "Group", "id": "a"}, "parents": [{"type": "Group", "id": "b"}]}, {"uid": {"type": "Group", "id": "b"}}]');
+-- and a template with one link
+select permissions.cedar_put_template(template_id => 'owner', template => 'permit (principal == ?principal, action, resource);');
+select permissions.cedar_link_template(policy_id => 'alice-owner', template_id => 'owner', principal => 'User::"alice"');
 
 
 create temp table sites (n serial, site text, stmt text, st text, detail text, msg text, hint text);
@@ -266,8 +269,26 @@ insert into sites (site, stmt, st, detail, msg, hint) values
  '54000', 'cedar:limit_exceeded limit=''policy_nodes''', '^the policy at line 1, column 1 has \d+ expression nodes, more than the limit of 4096$', '^Split the policy'),
 ('cedar parse: a policy of a set too long', $$ select permissions._cedar_parse_policies('permit (principal, action, resource);' || E'\n' || 'permit (principal, action, resource) when { "' || repeat('a', 70000) || '" };') $$,
  '54000', 'cedar:limit_exceeded limit=''policy_bytes''', '^the policy at line 2, column 1 is more than 65536 bytes long$', '^Split the policy'),
+('cedar id in use', $$ select permissions.cedar_put_template(template_id => 'view-own', template => 'permit (principal == ?principal, action, resource);') $$,
+ '23505', 'cedar:id_in_use id=''view-own''', '^''view-own'' is already a static policy, so it cannot be a template$', 'share one set of ids'),
+('cedar_put_template: null', $$ select permissions.cedar_put_template(template_id => null, template => 'permit (principal == ?principal, action, resource);') $$,
+ '22004', 'cedar:null_argument argument=''template_id''', '^template_id is required to put a template$', '^select permissions\.cedar_put_template\(template_id => '),
+('cedar_put_template: both', $$ select permissions.cedar_put_template(template_id => 't1', template => 'permit (principal == ?principal, action, resource);', template_json => '{}') $$,
+ '22023', 'cedar:invalid_argument argument=''template''', '^template ''t1'' has both template and template_json$', '^Pass exactly one'),
+('cedar_put_template: slots in use', $$ select permissions.cedar_put_template(template_id => 'owner', template => 'permit (principal, action, resource == ?resource);') $$,
+ '2BP01', 'cedar:template_in_use template_id=''owner''', '^template ''owner'' has links that fill other slots than the new template''s \?resource: alice-owner \(\?principal\)$', '^Keep the slots of the template'),
+('cedar_link_template: null', $$ select permissions.cedar_link_template(policy_id => null, template_id => 'owner', principal => 'User::"bob"') $$,
+ '22004', 'cedar:null_argument argument=''policy_id''', '^policy_id is required to link a template$', '^select permissions\.cedar_link_template\(policy_id => '),
+('cedar_link_template: unknown template', $$ select permissions.cedar_link_template(policy_id => 'x', template_id => 'ownr', principal => 'User::"bob"') $$,
+ '22023', 'cedar:unknown_template template_id=''ownr''', '^unknown template ''ownr''$', '^Did you mean ''owner''\? Template ids: owner\.$'),
+('cedar_link_template: slot', $$ select permissions.cedar_link_template(policy_id => 'x', template_id => 'owner') $$,
+ '22023', 'cedar:invalid_link slot=''?principal''', '^template ''owner'' has the slot \?principal, and the link gives it no value$', 'principal => ''User::"alice"'''),
+('cedar_delete_template: in use', $$ select permissions.cedar_delete_template(template_id => 'owner') $$,
+ '2BP01', 'cedar:template_in_use template_id=''owner''', '^template ''owner'' has 1 link$', 'cedar_delete_policy\(policy_id => \.\.\.\) for each: alice-owner\.$'),
+('cedar_delete_template: unknown', $$ select permissions.cedar_delete_template(template_id => 'ownr') $$,
+ '22023', 'cedar:unknown_template template_id=''ownr''', '^unknown template ''ownr''$', '^Did you mean ''owner''\? Template ids: owner\.$'),
 ('cedar_delete_policy: unknown', $$ select permissions.cedar_delete_policy(policy_id => 'view-on') $$,
- '22023', 'cedar:unknown_policy policy_id=''view-on''', '^unknown policy ''view-on''$', '^Did you mean ''view-own''\? Policy ids: view-own\.$'),
+ '22023', 'cedar:unknown_policy policy_id=''view-on''', '^unknown policy ''view-on''$', '^Did you mean ''view-own''\? Policy ids: alice-owner, view-own\.$'),
 ('cedar_put_entities: null', $$ select permissions.cedar_put_entities(entities => null) $$,
  '22004', 'cedar:null_argument argument=''entities''', '^entities is required to put entities$', '^select permissions\.cedar_put_entities\(entities => '),
 ('cedar_put_entities: cycle', $$ select permissions.cedar_put_entities(entities => '[{"uid": {"type": "Group", "id": "b"}, "parents": [{"type": "Group", "id": "a"}]}]') $$,

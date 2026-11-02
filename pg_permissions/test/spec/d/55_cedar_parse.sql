@@ -18,7 +18,7 @@
 -- limit names of _cedar_limits, and U+0000 is 0A000 'cedar:unsupported'.
 \ir ../../fixtures/d/cedar.sql
 
-select tap.plan(90);
+select tap.plan(91);
 
 create function pg_temp.parse_error(src text, single boolean default false)
 returns text
@@ -88,6 +88,8 @@ select tap.ok(strpos((cedar_t.msg($$ select permissions.cedar_put_policy(policy_
                      'put each one with its own call') > 0, 'and the hint says to put each policy with its own call');
 select tap.is(cedar_t.err($$ select permissions.cedar_put_policy(policy_id => 't', policy => 'permit (principal == ?principal, action, resource);') $$),
               '22023 cedar:invalid_policy path=''$.principal''', 'a text with a slot is a template, not a policy');
+select tap.ok(strpos((cedar_t.msg($$ select permissions.cedar_put_policy(policy_id => 't', policy => 'permit (principal == ?principal, action, resource);') $$)).hint,
+                     'cedar_put_template') > 0, 'and the hint names cedar_put_template');
 select permissions.cedar_delete_policy(policy_id => 'owner');
 
 -- ---------------------------------------------------------------------------

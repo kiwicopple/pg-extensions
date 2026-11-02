@@ -41,7 +41,7 @@ begin
     end loop;
 end $$;
 
-select tap.plan(42);
+select tap.plan(46);
 
 select tap.is(
     (select array_agg(name order by name) from api_fn
@@ -71,8 +71,9 @@ select tap.set_eq(
           'fga_check', 'fga_list_objects', 'fga_list_users',
           'fga_check_current', 'fga_list_objects_current', 'fga_list_object_ids_current',
           'cedar_put_policy', 'cedar_delete_policy', 'cedar_policies', 'cedar_put_entities', 'cedar_delete_entities',
-          'cedar_read_entities', 'cedar_is_authorized'],
-    'the public functions are the 33 called below');
+          'cedar_read_entities', 'cedar_is_authorized',
+          'cedar_put_template', 'cedar_link_template', 'cedar_delete_template', 'cedar_templates'],
+    'the public functions are the 37 called below');
 
 -- one call per public function, every argument named
 
@@ -158,7 +159,12 @@ select tap.lives_ok($$ select permissions.cedar_put_policy(policy_id => 'view', 
     'cedar_put_policy(policy_id, policy, policy_json)');
 select tap.lives_ok($$ select permissions.cedar_put_policy(policy_id => 'edit', policy => 'permit (principal, action == Action::"edit", resource);', policy_json => null) $$,
     'cedar_put_policy(policy_id, policy, policy_json) with Cedar text');
-select tap.is((select array_agg(p.policy_id) from permissions.cedar_policies() p), '{edit,view}', 'cedar_policies()');
+select tap.lives_ok($$ select permissions.cedar_put_template(template_id => 'own', template => 'permit (principal == ?principal, action, resource == ?resource);', template_json => null) $$,
+    'cedar_put_template(template_id, template, template_json)');
+select tap.lives_ok($$ select permissions.cedar_link_template(policy_id => 'bob-d1', template_id => 'own', principal => 'User::"bob"', resource => 'Doc::"d1"') $$,
+    'cedar_link_template(policy_id, template_id, principal, resource)');
+select tap.is((select array_agg(t.template_id) from permissions.cedar_templates() t), '{own}', 'cedar_templates()');
+select tap.is((select array_agg(p.policy_id || ':' || coalesce(p.template_id, '')) from permissions.cedar_policies() p), '{bob-d1:own,edit:,view:}', 'cedar_policies()');
 select tap.lives_ok($$ select permissions.cedar_put_entities(entities => '[{"uid": {"type": "User", "id": "bob"}, "attrs": {}, "parents": []}]') $$,
     'cedar_put_entities(entities)');
 select tap.is(permissions.cedar_read_entities(type => 'User', ids => '{bob}') -> 0 -> 'uid', '{"type": "User", "id": "bob"}',
@@ -169,6 +175,8 @@ select tap.is(permissions.cedar_is_authorized(principal => 'User::"bob"', action
 select tap.is(permissions.cedar_delete_entities(uids => '[{"type": "User", "id": "bob"}]'), 1::bigint, 'cedar_delete_entities(uids)');
 select tap.lives_ok($$ select permissions.cedar_delete_policy(policy_id => 'view') $$, 'cedar_delete_policy(policy_id)');
 select permissions.cedar_delete_policy(policy_id => 'edit');
+select permissions.cedar_delete_policy(policy_id => 'bob-d1');
+select tap.lives_ok($$ select permissions.cedar_delete_template(template_id => 'own') $$, 'cedar_delete_template(template_id)');
 
 -- shared cleanup: Bob's assignment in acme and his remaining tuple
 select tap.is(permissions.delete_subject(subject_type => 'user', subject_id => :'bob'), 2::bigint,

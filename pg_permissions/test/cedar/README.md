@@ -18,7 +18,7 @@ The pinned release is Cedar 4.14.0: [cedar-integration-tests](https://github.com
 | `skip.tsv` | Requests that are not run, each with a reason. |
 | `spec/` | The default output of `generate.py`. Git ignores it, and `test/run.sh` does not run it. |
 
-`test/run.sh` runs the oracle: before each run of the extension it calls `generate.py suite`, which writes the runs listed in `SUITE` (in `generate.py`) into `test/spec/d/`. Git ignores those files too (`test/spec/d/.gitignore`). `SUITE` has five runs:
+`test/run.sh` runs the oracle: before each run of the extension it calls `generate.py suite`, which writes the runs listed in `SUITE` (in `generate.py`) into `test/spec/d/`. Git ignores those files too (`test/spec/d/.gitignore`). `SUITE` has six runs:
 
 | Run | Files | Assertions |
 | --- | --- | --- |
@@ -27,6 +27,7 @@ The pinned release is Cedar 4.14.0: [cedar-integration-tests](https://github.com
 | `--phase 2 --reduce-parents` | `74_cedar_oracle_reduced` | 6,424 requests |
 | `--phase 3` | `71_cedar_oracle_text` | 26,791 requests and 3,367 stored ESTs |
 | `--format text --parse-est` | `77_cedar_oracle_parse` | 5,708 policies and 5 policy sets |
+| `--phase 4c` | `76_cedar_oracle_templates` | 10,111 requests, through 1,276 links |
 
 A later phase adds its runs to `SUITE`.
 
@@ -46,6 +47,7 @@ python3 -I test/cedar/generate.py report /tmp/cedar.out --phase 2 --mode overlay
 python3 -I test/cedar/generate.py report /tmp/cedar.out --phase 2 --reduce-parents
 python3 -I test/cedar/generate.py report /tmp/cedar.out --phase 3
 python3 -I test/cedar/generate.py report /tmp/cedar.out --format text --parse-est
+python3 -I test/cedar/generate.py report /tmp/cedar.out --phase 4c
 ```
 
 The `--suite` flag is the only option that writes into `test/spec/d/`. The flag first deletes the files of the same prefix, so a run never leaves stale files behind.
@@ -60,7 +62,7 @@ The `--suite` flag is the only option that writes into `test/spec/d/`. The flag 
 | `--features` | a comma-separated list of `decimal`, `ipaddr`, `datetime`, `duration` and `template`, or `all` | The gated features that a case may use. A case that needs another gated feature is left out. A left-out case is not a skip. |
 | `--check-est` | (flag) | For `--format text` only. Each policy also gets one assertion: the `est` that `cedar_policies()` returns after the text put equals the CLI's translation. It checks the text put end to end, for the policies of the selected cases. |
 | `--parse-est` | (flag) | For `--format text` only, and it replaces the requests. Each text policy of every case, whatever its features, gets one assertion: `_cedar_parse_policy` on its text equals the CLI's translation. Each case with several policies also gets one assertion for the policy set (`_cedar_parse_policies` on the joined text, with the CLI's ids `policy0`, `policy1`, ...). This is the parser oracle of phase 3: 5,708 policies and 5 sets. It calls the parser directly because the extension types cannot be put before phases 4a and 4b. |
-| `--templatize` | (flag) | For `--format json` only. Derives template tests from static policies. See the next table. |
+| `--templatize` | (flag) | For `--format json` only. Derives template tests from static policies, and runs only the cases that get a link. See the next table. |
 | `--reduce-parents` | (flag) | For `--mode stored` only. Keeps only each entity's direct parents (the transitive reduction). Cedar's entity JSON lists every ancestor, so without this flag a broken walk up the hierarchy would still pass. Runs only the cases that lose a parent link. |
 
 | Phase | Format | Gated features allowed | Also | Cases | Requests |
@@ -69,12 +71,12 @@ The `--suite` flag is the only option that writes into `test/spec/d/`. The flag 
 | `3` | text | none | `--check-est` | 3,359 | 26,791 |
 | `4a` | json | decimal, ipaddr | | 4,442 | 35,422 |
 | `4b` | json | datetime, duration | | 4,231 | 33,761 |
-| `4c` | json | template | `--templatize` | 3,360 | 26,793 |
+| `4c` | json | template | `--templatize` | 1,273 | 10,111 |
 | `all` | json | all | | 5,701 | 45,494 |
 
-The corpus has no templates. For phase 4c, `--templatize` derives template tests from the corpus. Each static policy whose principal or resource scope names an entity (`==`, `in`, or `is ... in`) becomes a template with a slot in that place (`<id>_template`). A link fills the slot with the same entity under the original policy id. The answers, reasons and errors are the same, so the expectations still hold. This gives 1,276 links in the phase 4c run. Slot-specific errors, such as a link that fills the wrong slot, still need in-house specs. A phase can combine options, for example `--phase all --format text`, or `--features decimal,ipaddr,datetime,duration` once 4a and 4b are both done.
+The corpus has no templates. For phase 4c, `--templatize` derives template tests from the corpus. Each static policy whose principal or resource scope names an entity (`==`, `in`, or `is ... in`) becomes a template with a slot in that place (`<id>_template`). A link fills the slot with the same entity under the original policy id. The answers, reasons and errors are the same, so the expectations still hold. This gives 1,276 links in the 1,273 phase 4c cases. The other cases would only repeat the phase 2 run, so `--templatize` leaves them out (`no-entity-in-scope`). Slot-specific errors, such as a link that fills the wrong slot, still need in-house specs. A phase can combine options, for example `--phase all --format text`, or `--features decimal,ipaddr,datetime,duration` once 4a and 4b are both done.
 
-Spec file prefixes: `70_cedar_oracle` (json, stored), `71_cedar_oracle_text` (text, stored), `72_cedar_oracle_overlay` (json, overlay), `73_cedar_oracle_text_overlay` (text, overlay), `74_cedar_oracle_reduced` (json, stored, `--reduce-parents`) `75_cedar_oracle_text_reduced` (text, stored, `--reduce-parents`) and `77_cedar_oracle_parse` (`--parse-est`). The assertion labels start with the mode: `stored:`, `overlay:`, `reduced:` or `parse:`. Each file has at most 1,000 assertions and 1.5 MB. A case is never split across files. The output is deterministic.
+Spec file prefixes: `70_cedar_oracle` (json, stored), `71_cedar_oracle_text` (text, stored), `72_cedar_oracle_overlay` (json, overlay), `73_cedar_oracle_text_overlay` (text, overlay), `74_cedar_oracle_reduced` (json, stored, `--reduce-parents`) `75_cedar_oracle_text_reduced` (text, stored, `--reduce-parents`), `76_cedar_oracle_templates` (json, stored, `--templatize`) and `77_cedar_oracle_parse` (`--parse-est`). The assertion labels start with the mode: `stored:`, `overlay:`, `reduced:`, `templates:` or `parse:`. Each file has at most 1,000 assertions and 1.5 MB. A case is never split across files. The output is deterministic.
 
 ### What one generated case does
 

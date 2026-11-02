@@ -45,7 +45,7 @@ A file passes only when each planned assertion ran and passed, and no SQL error 
 
 ### The generated Cedar oracle files
 
-The files `spec/d/7[0-7]_cedar_oracle*_NN.sql` come from Cedar's integration tests (`cedar/`): requests with JSON policies (entities stored, in the overlay, and with direct parents only), and with Cedar text policies, plus the parser on every text policy. They are about 71 MB, so Git ignores them (`spec/d/.gitignore`), and the runner writes them before each run of the extension with `python3 -I test/cedar/generate.py suite`. That takes about 4 seconds, and the files add under a minute to a run. The runner skips the step when its name patterns select none of them, for example `./test/run.sh rbac`.
+The files `spec/d/7[0-7]_cedar_oracle*_NN.sql` come from Cedar's integration tests (`cedar/`): requests with JSON policies (entities stored, in the overlay, and with direct parents only), with Cedar text policies, and through template links, plus the parser on every text policy. They are about 77 MB, so Git ignores them (`spec/d/.gitignore`), and the runner writes them before each run of the extension with `python3 -I test/cedar/generate.py suite`. That takes about 4 seconds, and the files add about 60 seconds to a run. The runner skips the step when its name patterns select none of them, for example `./test/run.sh rbac`.
 
 - `--no-cedar-oracle` runs everything else and skips these files.
 - Without `python3`, the runner uses the files that are already there, and warns if there are none. `docker/run-matrix.sh test` writes them on the host, because its client containers have no Python.
@@ -92,7 +92,7 @@ The scenarios and the work plan are in [`../research/plan.md`](../research/plan.
 | `1x_` | `rbac` preset | `spec/` (shared) and `spec/d/` |
 | `2x_` | RLS | `spec/` (shared) and `spec/d/` |
 | `3x_`, `4x_`, `5x_` | Zanzibar-level API, graduation, v0.0.2 scenarios (see `research/plan.md`) | `spec/<design>/` (per design) |
-| `5x_cedar_` | Cedar: API, errors and limits, hierarchy, evaluator, overlay, text parser (`research/plan-cedar.md`) | `spec/d/` |
+| `5x_cedar_` | Cedar: API, errors and limits, hierarchy, evaluator, overlay, text parser, templates (`research/plan-cedar.md`) | `spec/d/` |
 | `6x_` | OpenFGA oracles (generated, committed) | `spec/d/` |
 | `7x_cedar_oracle` | Cedar oracle (generated before each run, not committed) | `spec/d/` |
 

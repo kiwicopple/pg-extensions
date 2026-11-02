@@ -15,8 +15,9 @@ select tap.plan(56);
 select permissions.cedar_put_policy(policy_id => 'p1', policy_json => cedar_t.policy('permit'));
 select tap.is((select jsonb_agg(to_jsonb(p) order by p.policy_id) from permissions.cedar_policies() p),
               jsonb_build_array(jsonb_build_object('policy_id', 'p1', 'effect', 'permit', 'source', null,
-                                                   'est', cedar_t.policy('permit'), 'annotations', '{}'::jsonb)),
-              'cedar_policies() returns the policy as put: id, effect, no Cedar text, the EST, no annotations');
+                                                   'est', cedar_t.policy('permit'), 'annotations', '{}'::jsonb,
+                                                   'template_id', null, 'slots', null)),
+              'cedar_policies() returns the policy as put: id, effect, no Cedar text, the EST, no annotations, no template');
 select permissions.cedar_put_policy(policy_id => 'p1', policy_json => cedar_t.policy('forbid') || '{"annotations": {"id": "x", "advice": null}}');
 select tap.is((select p.effect || ' ' || p.annotations::text from permissions.cedar_policies() p), 'forbid {"id": "x", "advice": ""}',
               'a put with the same id replaces the policy; a null annotation is ""');

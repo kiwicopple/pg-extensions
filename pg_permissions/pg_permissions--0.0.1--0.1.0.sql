@@ -700,7 +700,8 @@ drop function permissions._fga_cel_du(text);
 -- the EST), checked and compiled once: the EST is kept in `est`, the
 -- conditions as a compact tree in `ast` (e-cedar.md section 2.3) and the
 -- scope in columns, so a request matches the scope in SQL and evaluates only
--- the conditions of the policies whose scope matches.
+-- the conditions of the policies whose scope matches. A template link is a
+-- policy too, with the template's slots filled in when it is linked.
 --
 -- Entities (uid, attrs, parents, tags) are stored as the app syncs them, one
 -- row per entity and one per direct parent. `in` follows the parents
@@ -713,12 +714,14 @@ drop function permissions._fga_cel_du(text);
 -- sorted array without duplicates, a record as an object. Cedar `==` is jsonb
 -- equality. Ids and types are collate "C".
 
--- Policy templates (phase 4c fills and uses this table; a link is a row of
--- cedar_policies that names its template).
+-- Policy templates. A link is a row of cedar_policies that names its
+-- template, with the slots filled in at link time (cedar_link_template).
 create table permissions.cedar_templates (
     template_id text collate "C" primary key,
     source      text,                  -- the Cedar text as written; null when put as JSON
-    est         jsonb not null         -- Cedar's JSON policy format, with slots
+    est         jsonb not null,        -- Cedar's JSON policy format, with slots
+    ast         jsonb,                 -- the conditions, compiled; links copy it
+    annotations jsonb not null default '{}'
 );
 
 create table permissions.cedar_policies (
@@ -738,7 +741,7 @@ create table permissions.cedar_policies (
     resource_type  text collate "C",
     resource_uid   text collate "C",
     template_id    text collate "C" references permissions.cedar_templates (template_id),
-    slots          jsonb               -- a link's slot values (phase 4c)
+    slots          jsonb               -- a link's slot values: {"?principal": {"type", "id"}, ...}
 );
 create index on permissions.cedar_policies (template_id) where template_id is not null;
 
@@ -1343,9 +1346,10 @@ begin
         end if;
         return jsonb_build_object('ast', jsonb_build_object('k', 'var', 'n', a #>> '{}'), 'n', 1);
     elsif op = 'Slot' then
-        -- Templates (phase 4c) fill the slots at link time.
+        -- Cedar allows slots in the scope only (SlotsInConditionClause).
         return jsonb_build_object('code', 'invalid_policy', 'path', p_path,
-                                  'err', format('a static policy has no slots, got %s', a));
+                                  'err', format('a slot (%s) can appear only in the principal or resource scope of a template, not in a condition', a),
+                                  'hint', 'Constrain the slot in the scope (principal == ?principal, resource in ?resource) and compare principal or resource in the condition.');
     elsif op = 'Unknown' then
         return jsonb_build_object('code', 'unsupported', 'path', p_path,
                                   'err', 'Unknown is for partial evaluation, which is not supported');
@@ -1471,8 +1475,11 @@ $$;
 
 -- One scope constraint of the EST ({"op": ...}): {"op", "type", "uid"} for the
 -- scope columns, or {"code", "err", "path"}. p_var is principal, action or
--- resource.
-create function permissions._cedar_compile_scope(s jsonb, p_var text)
+-- resource. For a template (p_template), the principal and resource scopes
+-- may hold their slot instead of an entity: {"op": "==" or "in", "slot":
+-- "?principal"}, or "in": {"slot": ...} under "is". The result then has
+-- "slot" instead of "uid"; a link fills it (_cedar_link).
+create function permissions._cedar_compile_scope(s jsonb, p_var text, p_template boolean default false)
 returns jsonb
 language plpgsql immutable
 as $$
@@ -1492,8 +1499,27 @@ begin
         return jsonb_build_object('code', 'invalid_policy', 'path', path, 'err', format('the %s scope is %s', p_var, form));
     end if;
     if s ? 'slot' or (jsonb_typeof(s -> 'in') = 'object' and s -> 'in' ? 'slot') then
+        e := coalesce(s -> 'slot', s -> 'in' -> 'slot');
+        if not p_template then
+            return jsonb_build_object('code', 'invalid_policy', 'path', path,
+                                      'err', format('a static policy has no slots, and the %s scope has %s', p_var, e),
+                                      'hint', 'A policy with slots is a template: put it with cedar_put_template(template_id => ..., template => ...), then fill the slots with cedar_link_template.');
+        end if;
+        if act or e is distinct from to_jsonb('?' || p_var) then
+            return jsonb_build_object('code', 'invalid_policy', 'path', path,
+                                      'err', format('the %s scope can hold only the slot %s, got %s', p_var,
+                                                    case when act then 'none: templates have the slots ?principal and ?resource' else '?' || p_var end, e),
+                                      'hint', 'A template has at most two slots: ?principal in the principal scope and ?resource in the resource scope.');
+        end if;
+        if op in ('==', 'in') and (select count(*) from jsonb_object_keys(s)) = 2 then
+            return jsonb_build_object('op', op, 'slot', e);
+        elsif op = 'is' and permissions._cedar_is_name(s ->> 'entity_type') and (select count(*) from jsonb_object_keys(s)) = 3
+              and (select count(*) from jsonb_object_keys(s -> 'in')) = 1 then
+            return jsonb_build_object('op', 'is', 'type', s ->> 'entity_type', 'slot', e);
+        end if;
         return jsonb_build_object('code', 'invalid_policy', 'path', path,
-                                  'err', format('a static policy has no slots, and the %s scope has %s', p_var, coalesce(s -> 'slot', s -> 'in' -> 'slot')));
+                                  'err', format('the %s scope is {"op": "==" or "in", "slot": "?%s"} or {"op": "is", "entity_type": "T", "in": {"slot": "?%s"}}; got %s',
+                                                p_var, p_var, p_var, left(s::text, 200)));
     end if;
     if op = 'All' and (select count(*) from jsonb_object_keys(s)) = 1 then
         return jsonb_build_object('op', 'All');
@@ -1538,10 +1564,12 @@ $$;
 -- A policy in the EST: its columns for cedar_policies ({"effect", "ast",
 -- "annotations", "principal", "action", "resource"}, the scopes as
 -- _cedar_compile_scope returns them). Raises cedar:invalid_policy,
--- cedar:unsupported or cedar:limit_exceeded. p_text: the EST came from Cedar
--- text, whose size the parser already checked (policy_bytes limits the text,
--- not the larger EST).
-create function permissions._cedar_compile_policy(p_est jsonb, p_id text, p_text boolean default false)
+-- cedar:unsupported or cedar:limit_exceeded. p_template: a template, which
+-- has a slot in its principal or resource scope or both (a static policy has
+-- none). p_text: the EST came from Cedar text, whose size the parser already
+-- checked (policy_bytes limits the text, not the larger EST).
+create function permissions._cedar_compile_policy(p_est jsonb, p_id text, p_template boolean default false,
+                                                  p_text boolean default false)
 returns jsonb
 language plpgsql immutable
 as $$
@@ -1587,13 +1615,18 @@ begin
                                       'annotations', coalesce((select jsonb_object_agg(a.key, coalesce(a.value #>> '{}', ''))
                                                                from jsonb_each(p_est -> 'annotations') a), '{}'));
             foreach s in array array['principal', 'action', 'resource'] loop
-                x := permissions._cedar_compile_scope(p_est -> s, s);
+                x := permissions._cedar_compile_scope(p_est -> s, s, p_template);
                 if x ? 'code' then
                     r := x;
                     exit;
                 end if;
                 res := res || jsonb_build_object(s, x);
             end loop;
+            if r is null and p_template and not (res -> 'principal' ? 'slot' or res -> 'resource' ? 'slot') then
+                r := jsonb_build_object('code', 'invalid_policy', 'path', '$',
+                                        'err', 'a template has a slot (?principal or ?resource) in its scope, and this one has none',
+                                        'hint', 'Put a policy without slots with cedar_put_policy, or write the template with a slot, for example permit (principal == ?principal, action, resource);');
+            end if;
             if r is null then
                 i := 0;
                 for c in select t from jsonb_array_elements(coalesce(p_est -> 'conditions', '[]')) t loop
@@ -1616,7 +1649,7 @@ begin
     end if;
     if r is not null then
         perform permissions._cedar_error(r ->> 'code',
-            format('invalid policy %L at %s: %s', p_id, r ->> 'path', r ->> 'err'),
+            format('invalid %s %L at %s: %s', case when p_template then 'template' else 'policy' end, p_id, r ->> 'path', r ->> 'err'),
             hint => coalesce(r ->> 'hint', case r ->> 'code'
                 when 'limit_exceeded' then format('Split the policy into smaller policies: a policy holds at most %s bytes, %s expression nodes and %s levels of nesting.',
                                                   lim.policy_bytes, lim.policy_nodes, lim.policy_depth)
@@ -3299,15 +3332,88 @@ $$;
 -- Admin API: policies
 -- ----------------------------------------------------------------------------
 
--- The nearest policy ids (_did_you_mean), for hints.
+-- The nearest policy ids (_did_you_mean), for hints; or that the id is a
+-- template's.
 create function permissions._cedar_policy_hint(p_id text)
 returns text
 language sql stable
 as $$
-    select coalesce(permissions._did_you_mean(coalesce(p_id, ''),
+    select coalesce(case when exists (select 1 from permissions.cedar_templates t where t.template_id = p_id)
+                         then format('%L is a template: delete it with select permissions.cedar_delete_template(template_id => %L).', p_id, p_id) end,
+                    permissions._did_you_mean(coalesce(p_id, ''),
                                               array(select c.policy_id from permissions.cedar_policies c),
                                               'Policy ids'),
                     'No policy exists yet: put one with select permissions.cedar_put_policy(policy_id => ..., policy => ...).')
+$$;
+
+-- The nearest template ids, for hints; or that the id is a policy's.
+create function permissions._cedar_template_hint(p_id text)
+returns text
+language sql stable
+as $$
+    select coalesce(case when exists (select 1 from permissions.cedar_policies c where c.policy_id = p_id)
+                         then format('%L is a policy or a link, not a template: see select * from permissions.cedar_policies().', p_id) end,
+                    permissions._did_you_mean(coalesce(p_id, ''),
+                                              array(select t.template_id from permissions.cedar_templates t),
+                                              'Template ids'),
+                    'No template exists yet: put one with select permissions.cedar_put_template(template_id => ..., template => ...).')
+$$;
+
+-- Static policies, template links and templates share one set of ids, as in
+-- a Cedar policy set. p_kind is what the caller puts: 'policy' (a static
+-- policy), 'link' or 'template'. A put may replace an id of its own kind;
+-- an id of another kind raises cedar:id_in_use.
+create function permissions._cedar_check_id(p_id text, p_kind text)
+returns void
+language plpgsql stable
+as $$
+declare
+    tid text;
+    other text;
+begin
+    if p_kind <> 'template' and exists (select 1 from permissions.cedar_templates t where t.template_id = p_id) then
+        other := 'a template';
+    else
+        select c.template_id into tid from permissions.cedar_policies c
+        where c.policy_id = p_id and (p_kind = 'template' or (p_kind = 'policy') = (c.template_id is not null));
+        if found then
+            other := case when tid is null then 'a static policy' else format('a link of template %L', tid) end;
+        end if;
+    end if;
+    if other is not null then
+        perform permissions._cedar_error('id_in_use',
+            format('%L is already %s, so it cannot be %s', p_id, other,
+                   case p_kind when 'policy' then 'a static policy' when 'link' then 'a template link' else 'a template' end),
+            hint => 'Static policies, template links and templates share one set of ids: choose another id, or first delete the existing one (cedar_delete_policy for a policy or a link, cedar_delete_template for a template).',
+            p_detail => format('id=%L', p_id));
+    end if;
+end;
+$$;
+
+-- Insert or replace one row of cedar_policies: a static policy (p_template_id
+-- null) or a link. c is _cedar_compile_policy's result.
+create function permissions._cedar_store_policy(p_id text, p_source text, p_est jsonb, c jsonb,
+                                                p_template_id text, p_slots jsonb)
+returns void
+language sql
+as $$
+    insert into permissions.cedar_policies as x (policy_id, effect, source, est, ast, annotations,
+                                                 principal_op, principal_type, principal_uid,
+                                                 action_op, action_uids,
+                                                 resource_op, resource_type, resource_uid,
+                                                 template_id, slots)
+    values (p_id, c ->> 'effect', p_source, p_est, nullif(c -> 'ast', 'null'), c -> 'annotations',
+            c -> 'principal' ->> 'op', c -> 'principal' ->> 'type', c -> 'principal' ->> 'uid',
+            c -> 'action' ->> 'op', array(select jsonb_array_elements_text(c -> 'action' -> 'uids')),
+            c -> 'resource' ->> 'op', c -> 'resource' ->> 'type', c -> 'resource' ->> 'uid',
+            p_template_id, p_slots)
+    on conflict on constraint cedar_policies_pkey do update
+        set effect = excluded.effect, source = excluded.source, est = excluded.est, ast = excluded.ast,
+            annotations = excluded.annotations,
+            principal_op = excluded.principal_op, principal_type = excluded.principal_type, principal_uid = excluded.principal_uid,
+            action_op = excluded.action_op, action_uids = excluded.action_uids,
+            resource_op = excluded.resource_op, resource_type = excluded.resource_type, resource_uid = excluded.resource_uid,
+            template_id = excluded.template_id, slots = excluded.slots
 $$;
 
 -- Put (insert or replace) one static policy. Give exactly one of policy
@@ -3338,26 +3444,13 @@ begin
             p_detail => 'argument=''policy''');
     end if;
     est := coalesce(permissions._cedar_parse_policy(cedar_put_policy.policy), policy_json);
-    -- Phase 4c (templates): a template id or a link's id here raises
-    -- cedar:id_in_use.
+    perform permissions._cedar_check_id(policy_id, 'policy');
     c := permissions._cedar_compile_policy(est, policy_id, p_text => cedar_put_policy.policy is not null);
-    insert into permissions.cedar_policies as x (policy_id, effect, source, est, ast, annotations,
-                                                 principal_op, principal_type, principal_uid,
-                                                 action_op, action_uids,
-                                                 resource_op, resource_type, resource_uid)
-    values (cedar_put_policy.policy_id, c ->> 'effect', cedar_put_policy.policy, est, nullif(c -> 'ast', 'null'), c -> 'annotations',
-            c -> 'principal' ->> 'op', c -> 'principal' ->> 'type', c -> 'principal' ->> 'uid',
-            c -> 'action' ->> 'op', array(select jsonb_array_elements_text(c -> 'action' -> 'uids')),
-            c -> 'resource' ->> 'op', c -> 'resource' ->> 'type', c -> 'resource' ->> 'uid')
-    on conflict on constraint cedar_policies_pkey do update
-        set effect = excluded.effect, source = excluded.source, est = excluded.est, ast = excluded.ast,
-            annotations = excluded.annotations,
-            principal_op = excluded.principal_op, principal_type = excluded.principal_type, principal_uid = excluded.principal_uid,
-            action_op = excluded.action_op, action_uids = excluded.action_uids,
-            resource_op = excluded.resource_op, resource_type = excluded.resource_type, resource_uid = excluded.resource_uid;
+    perform permissions._cedar_store_policy(policy_id, cedar_put_policy.policy, est, c, null, null);
 end;
 $$;
 
+-- Delete a static policy or a template link.
 create function permissions.cedar_delete_policy(policy_id text)
 returns void
 language plpgsql security definer
@@ -3374,16 +3467,217 @@ begin
 end;
 $$;
 
--- Every policy: its id, effect, Cedar text (null when put as JSON), EST and
--- annotations, by id.
+-- Every policy, static and linked, by id: its effect, Cedar text (null when
+-- put as JSON, and for a link), EST (a link's has the slots filled in) and
+-- annotations; for a link, its template and slot values
+-- ({"?principal": {"type", "id"}, "?resource": ...}).
 create function permissions.cedar_policies()
-returns table (policy_id text, effect text, source text, est jsonb, annotations jsonb)
+returns table (policy_id text, effect text, source text, est jsonb, annotations jsonb, template_id text, slots jsonb)
 language sql stable security definer
 set search_path = ''
 as $$
-    select c.policy_id, c.effect, c.source, c.est, c.annotations
+    select c.policy_id, c.effect, c.source, c.est, c.annotations, c.template_id, c.slots
     from permissions.cedar_policies c
     order by c.policy_id
+$$;
+
+-- ----------------------------------------------------------------------------
+-- Admin API: templates and links (phase 4c)
+-- ----------------------------------------------------------------------------
+-- A template is a policy with the slot ?principal in its principal scope, the
+-- slot ?resource in its resource scope, or both (Cedar allows slots nowhere
+-- else). A link fills every slot with an entity and becomes a policy of its
+-- own, a row of cedar_policies under its own policy_id. The slots are filled
+-- at link time (_cedar_link): the link stores the filled EST, the template's
+-- compiled conditions and the filled scope columns, so a request treats a
+-- link exactly like a static policy and never sees a slot (e-cedar.md
+-- section 13). Replacing a template re-links its links.
+
+-- The slots of a template's EST: '{?principal}', '{?resource}' or both.
+create function permissions._cedar_template_slots(p_est jsonb)
+returns text[]
+language sql immutable
+as $$
+    select array_remove(array[
+        case when p_est -> 'principal' ? 'slot' or coalesce(p_est #> '{principal,in}' ? 'slot', false) then '?principal' end,
+        case when p_est -> 'resource' ? 'slot' or coalesce(p_est #> '{resource,in}' ? 'slot', false) then '?resource' end], null)
+$$;
+
+-- Store the link p_id of a template: fill the slots of its EST with p_values
+-- ({"?principal": {"type", "id"}, ...}, every slot present), compile the
+-- filled scopes, and reuse the template's compiled conditions (p_ast) and
+-- annotations.
+create function permissions._cedar_link(p_id text, p_template_id text, p_est jsonb, p_ast jsonb, p_annotations jsonb, p_values jsonb)
+returns void
+language plpgsql
+as $$
+declare
+    est jsonb := p_est;
+    s text;
+    sc jsonb;
+begin
+    foreach s in array array['principal', 'resource'] loop
+        sc := est -> s;
+        if sc ? 'slot' then
+            est := jsonb_set(est, array[s], (sc - 'slot') || jsonb_build_object('entity', p_values -> (sc ->> 'slot')));
+        elsif jsonb_typeof(sc -> 'in') = 'object' and sc -> 'in' ? 'slot' then
+            est := jsonb_set(est, array[s, 'in'], jsonb_build_object('entity', p_values -> (sc -> 'in' ->> 'slot')));
+        end if;
+    end loop;
+    perform permissions._cedar_store_policy(p_id, null, est,
+        jsonb_build_object('effect', est ->> 'effect', 'ast', p_ast, 'annotations', p_annotations,
+                           'principal', permissions._cedar_compile_scope(est -> 'principal', 'principal'),
+                           'action', permissions._cedar_compile_scope(est -> 'action', 'action'),
+                           'resource', permissions._cedar_compile_scope(est -> 'resource', 'resource')),
+        p_template_id, p_values);
+end;
+$$;
+
+-- Put (insert or replace) one template. Give exactly one of template (Cedar
+-- text) and template_json (Cedar's JSON policy format, with slots). When the
+-- template exists and has links, each link is filled again from the new
+-- template; the new template must keep the slots its links fill.
+create function permissions.cedar_put_template(template_id text, template text default null, template_json jsonb default null)
+returns void
+language plpgsql security definer
+set search_path = ''
+as $$
+declare
+    est jsonb;
+    c jsonb;
+    want text[];
+    bad text;
+    l record;
+begin
+    if template_id is null or (cedar_put_template.template is null and template_json is null) then
+        perform permissions._cedar_error('null_argument',
+            case when template_id is null then 'template_id is required to put a template'
+                 else format('template %L needs template (Cedar text) or template_json: both are null', template_id) end,
+            hint => 'select permissions.cedar_put_template(template_id => ''owner-access'', template => ''permit (principal == ?principal, action, resource in ?resource);'');',
+            p_detail => format('argument=%L', case when template_id is null then 'template_id' else 'template' end));
+    end if;
+    if cedar_put_template.template is not null and template_json is not null then
+        perform permissions._cedar_error('invalid_argument', format('template %L has both template and template_json', template_id),
+            hint => 'Pass exactly one: template => Cedar text, or template_json => the same template in Cedar''s JSON format.',
+            p_detail => 'argument=''template''');
+    end if;
+    est := coalesce(permissions._cedar_parse_policy(cedar_put_template.template), template_json);
+    perform permissions._cedar_check_id(template_id, 'template');
+    c := permissions._cedar_compile_policy(est, template_id, p_template => true, p_text => cedar_put_template.template is not null);
+    want := permissions._cedar_template_slots(est);
+    select string_agg(format('%s (%s)', x.policy_id, (select string_agg(k, ', ' order by k) from jsonb_object_keys(x.slots) k)), ', ' order by x.policy_id)
+    into bad
+    from permissions.cedar_policies x
+    where x.template_id = cedar_put_template.template_id
+      and array(select k from jsonb_object_keys(x.slots) k order by k) <> want;
+    if bad is not null then
+        perform permissions._cedar_error('template_in_use',
+            format('template %L has links that fill other slots than the new template''s %s: %s', template_id, array_to_string(want, ' and '), bad),
+            hint => 'Keep the slots of the template, or first delete those links with select permissions.cedar_delete_policy(policy_id => ...).',
+            p_detail => format('template_id=%L', template_id));
+    end if;
+    insert into permissions.cedar_templates as x (template_id, source, est, ast, annotations)
+    values (cedar_put_template.template_id, cedar_put_template.template, est, nullif(c -> 'ast', 'null'), c -> 'annotations')
+    on conflict on constraint cedar_templates_pkey do update
+        set source = excluded.source, est = excluded.est, ast = excluded.ast, annotations = excluded.annotations;
+    for l in select x.policy_id, x.slots from permissions.cedar_policies x where x.template_id = cedar_put_template.template_id loop
+        perform permissions._cedar_link(l.policy_id, template_id, est, nullif(c -> 'ast', 'null'), c -> 'annotations', l.slots);
+    end loop;
+end;
+$$;
+
+-- Link a template: the policy policy_id is the template with its slots
+-- filled, ?principal with principal and ?resource with resource (uids in
+-- Cedar text, Type::"id"). Give a value for exactly the template's slots.
+-- Linking an existing link's id again replaces that link.
+create function permissions.cedar_link_template(policy_id text, template_id text, principal text default null, resource text default null)
+returns void
+language plpgsql security definer
+set search_path = ''
+as $$
+declare
+    t record;
+    u record;
+    s text;
+    given text;
+    vals jsonb := '{}';
+    want text[];
+begin
+    if policy_id is null or template_id is null then
+        perform permissions._cedar_error('null_argument',
+            format('%s is required to link a template', case when policy_id is null then 'policy_id' else 'template_id' end),
+            hint => 'select permissions.cedar_link_template(policy_id => ''alice-docs'', template_id => ''owner-access'', principal => ''User::"alice"'', resource => ''Folder::"docs"'');',
+            p_detail => format('argument=%L', case when policy_id is null then 'policy_id' else 'template_id' end));
+    end if;
+    select x.est, x.ast, x.annotations into t from permissions.cedar_templates x where x.template_id = cedar_link_template.template_id;
+    if not found then
+        perform permissions._cedar_error('unknown_template', format('unknown template %L', template_id),
+            hint => permissions._cedar_template_hint(template_id),
+            p_detail => format('template_id=%L', template_id));
+    end if;
+    perform permissions._cedar_check_id(policy_id, 'link');
+    want := permissions._cedar_template_slots(t.est);
+    foreach s in array array['principal', 'resource'] loop
+        given := case s when 'principal' then cedar_link_template.principal else cedar_link_template.resource end;
+        if (('?' || s) = any(want)) <> (given is not null) then
+            perform permissions._cedar_error('invalid_link',
+                case when given is null then format('template %L has the slot ?%s, and the link gives it no value', template_id, s)
+                     else format('template %L has no slot ?%s, and the link gives it %s', template_id, s, given) end,
+                hint => format('Template %L has the slots %s: pass a value for each and nothing else, for example %s.', template_id,
+                               array_to_string(want, ' and '),
+                               (select string_agg(case w when '?principal' then 'principal => ''User::"alice"''' else 'resource => ''Folder::"docs"''' end, ', ')
+                                from unnest(want) w)),
+                p_detail => format('slot=%L', '?' || s));
+        end if;
+        if given is not null then
+            select * into u from permissions._cedar_uid(given, s);
+            vals := vals || jsonb_build_object('?' || s, jsonb_build_object('type', u.type, 'id', u.id));
+        end if;
+    end loop;
+    perform permissions._cedar_link(policy_id, template_id, t.est, t.ast, t.annotations, vals);
+end;
+$$;
+
+-- Delete a template that has no links.
+create function permissions.cedar_delete_template(template_id text)
+returns void
+language plpgsql security definer
+set search_path = ''
+as $$
+declare
+    n bigint;
+    first_links text;
+begin
+    select count(*), string_agg(x.policy_id, ', ' order by x.policy_id) filter (where x.r <= 5)
+    into n, first_links
+    from (select c.policy_id, row_number() over (order by c.policy_id) as r
+          from permissions.cedar_policies c where c.template_id = cedar_delete_template.template_id) x;
+    if n > 0 then
+        perform permissions._cedar_error('template_in_use', format('template %L has %s link%s', template_id, n, case when n = 1 then '' else 's' end),
+            hint => format('Delete its links first, with select permissions.cedar_delete_policy(policy_id => ...) for each: %s%s.',
+                           first_links, case when n > 5 then ', ...' else '' end),
+            p_detail => format('template_id=%L', template_id));
+    end if;
+    delete from permissions.cedar_templates x where x.template_id = cedar_delete_template.template_id;
+    if not found then
+        perform permissions._cedar_error(case when template_id is null then 'null_argument' else 'unknown_template' end,
+            case when template_id is null then 'template_id is required to delete a template' else format('unknown template %L', template_id) end,
+            hint => permissions._cedar_template_hint(template_id),
+            p_detail => case when template_id is null then 'argument=''template_id''' else format('template_id=%L', template_id) end);
+    end if;
+end;
+$$;
+
+-- Every template, by id: its Cedar text (null when put as JSON), EST and
+-- annotations. cedar_policies() lists the links, with their template_id.
+create function permissions.cedar_templates()
+returns table (template_id text, source text, est jsonb, annotations jsonb)
+language sql stable security definer
+set search_path = ''
+as $$
+    select t.template_id, t.source, t.est, t.annotations
+    from permissions.cedar_templates t
+    order by t.template_id
 $$;
 
 -- ----------------------------------------------------------------------------
