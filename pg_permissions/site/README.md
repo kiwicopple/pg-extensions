@@ -46,7 +46,7 @@ Vercel builds the site from source with the Root Directory `pg_permissions` and 
 
 Sync runs before development and build. It adds page metadata, rewrites relative links, exports plain Markdown, copies benchmark data, and extracts workload descriptions. Links to code and other non-page files point to GitHub. Missing targets produce a warning; resolve warnings before publishing.
 
-Set `DOCS_REPO_URL` and `DOCS_REPO_REF` for source and edit links. The defaults are `kiwicopple/pg-extensions` and the `pg_permissions` branch. Set `DOCS_SITE` to the deployment origin and `DOCS_BASE` when hosting below a path, for example `/pg-extensions`. Markdown and index links honor the same base.
+Set `DOCS_REPO_URL` and `DOCS_REPO_REF` for source and edit links. The defaults are `kiwicopple/pg-extensions` and the `main` branch. Set `DOCS_SITE` to the deployment origin and `DOCS_BASE` when hosting below a path, for example `/pg-extensions`. Markdown and index links honor the same base.
 
 The plain Markdown exports preserve the source code fences without tab markup. `llms.txt` lists canonical pages and their descriptions; compatibility pages are exported for old links but omitted from that index. The homepage links to the index. Historical records retain their status notes.
 
