@@ -9,7 +9,7 @@ select permissions.rbac_assign_role(:'alice', 'admin');
 select permissions.cedar_put_policy(policy_id => 'secret',
     policy => format('permit (principal == user::"%s", action == Action::"view", resource == Doc::"secret");', :'alice'));
 
-select tap.plan(28);
+select tap.plan(43);
 
 -- tables
 select tap.is(
@@ -94,36 +94,95 @@ select tap.throws_ok($$ select permissions._cedar_current_filter('user', 'x', 'A
 
 -- The statement filter of cedar_is_authorized_current lives in a
 -- transaction-local setting (research/designs/e-cedar.md section 15.2), which
--- a client that runs SQL can write. CURRENT BEHAVIOUR, for the phase 9
--- review: a forged entry with the right key grants access. The design's
--- argument is that such a client can also set permissions.subject_id and be
--- any subject (docs: Identity); PostgREST clients can set neither. Repeatable
--- read keeps pg_current_snapshot(), part of the key, fixed while other spec
--- files run on the same cluster.
+-- a client that runs SQL can write. The helper trusts only entries it wrote
+-- (MACs under the owner-only permissions._cedar_secret) under the request's
+-- key, so every forgery below is a miss: the answer is the policies'. The
+-- rows: a policy permits Doc with level < 5 for anyone; only alice may view
+-- Doc::"secret" (level 9); bob may edit anything. Repeatable read keeps
+-- pg_current_snapshot(), part of the key, fixed while other spec files run
+-- on the same cluster, so each statement reuses the entry before it.
+reset role;
+select permissions.cedar_put_policy(policy_id => 'low', policy => 'permit (principal, action == Action::"view", resource is Doc) when { resource.level < 5 };');
+select permissions.cedar_put_policy(policy_id => 'bob_edit',
+    policy => format('permit (principal == user::"%s", action == Action::"edit", resource);', :'bob'));
+create view public.cedar_forge_rows as
+    select array_agg(d.id order by d.id) as ids
+    from (values ('secret', 9), ('open', 0), ('x', 1)) d(id, level)
+    where permissions.cedar_is_authorized_current(action => 'Action::"view"', resource => 'Doc::"' || d.id || '"',
+                                                  resource_attrs => jsonb_build_object('level', d.level));
+grant select on public.cedar_forge_rows to authenticated;
+set role authenticated;
+select set_config('permissions.subject_id', :'bob', false);
+select 'permissions.cedar_filter_' || md5('Action::"view"') as g, 'permissions.cedar_filter_' || md5('Action::"edit"') as ge \gset
+select tap.throws_ok($$ select * from permissions._cedar_secret $$, '42501', 'authenticated cannot read the MAC secret');
+select tap.throws_ok($$ select permissions._cedar_changed() $$, '42501', 'authenticated cannot call the generation trigger function');
+
+begin isolation level repeatable read;
+select tap.is((select ids from public.cedar_forge_rows), '{open,x}', 'bob sees open and x, not secret');
+select tap.ok(starts_with(current_setting(:'g'), current_database() || ' ')
+              and strpos(current_setting(:'g'), format(' NULL %L NULL 0 %L', :'bob', 'Action::"view"') || chr(29)) > 0
+              and split_part(current_setting(:'g'), chr(29), 2) ~ '^[0-9a-f]{64}',
+              'the entry: the key (database, snapshot, subject settings, generation 0, action), then mac1');
+-- 1. part 1 replaced by A:* (any resource, no conditions), mac1 kept
+select set_config(:'g', split_part(current_setting(:'g'), chr(29), 1) || chr(29) || left(split_part(current_setting(:'g'), chr(29), 2), 64)
+                        || chr(30) || 'A:*' || chr(30) || chr(28), true) is not null as forged \gset
+select tap.is(permissions.cedar_is_authorized_current(action => 'Action::"view"', resource => 'Doc::"secret"'), false,
+              'cache forgery: an entry with the right key and a forged part 1 (A:*) does not let bob view Doc::"secret"');
+select set_config(:'g', split_part(current_setting(:'g'), chr(29), 1) || chr(29) || repeat('0', 64)
+                        || chr(30) || 'A:*' || chr(30) || chr(28) || repeat('0', 64), true) is not null as forged \gset
+select tap.is((select ids from public.cedar_forge_rows), '{open,x}', 'cache forgery: a forged A:* entry gives the policies'' rows');
+-- 2. truncated
+select set_config(:'g', left(current_setting(:'g'), length(current_setting(:'g')) / 2), true) is not null as truncated \gset
+select tap.is((select ids from public.cedar_forge_rows), '{open,x}', 'cache forgery: a truncated entry is a miss');
+select set_config(:'g', left(current_setting(:'g'), strpos(current_setting(:'g'), chr(29)) + 10), true) is not null as truncated \gset
+select tap.is((select ids from public.cedar_forge_rows), '{open,x}', 'cache forgery: an entry cut inside mac1 is a miss');
+-- 3. part 2 swapped (the permit "low" without its condition), mac1 and
+-- part 1 valid: Doc::"secret" reads part 2
+select tap.ok(split_part(current_setting(:'g'), chr(28), 2) ~ '"t": \{"Doc": \[\{"a": \{', 'the entry has a part 2 with the condition of "low"');
+select set_config(:'g', split_part(current_setting(:'g'), chr(28), 1) || chr(28) || left(split_part(current_setting(:'g'), chr(28), 2), 64)
+                        || jsonb_set(substr(split_part(current_setting(:'g'), chr(28), 2), 65)::jsonb, '{pf,t,Doc,0,a}', 'null')::text, true)
+       is not null as swapped \gset
+select tap.is(permissions.cedar_is_authorized_current(action => 'Action::"view"', resource => 'Doc::"secret"', resource_attrs => '{"level": 9}'), false,
+              'cache forgery: a swapped part 2 with a valid mac1 does not let bob view Doc::"secret"');
+select tap.is((select ids from public.cedar_forge_rows), '{open,x}', 'cache forgery: and the rows stay the policies'' rows');
+-- 4. an entry of another action (edit: bob may edit anything, A:*) under
+-- the view key, and the whole edit entry in the view setting
+select permissions.cedar_is_authorized_current(action => 'Action::"edit"', resource => 'Doc::"secret"') as edit_secret \gset
+select tap.is(:'edit_secret'::boolean, true, 'bob may edit Doc::"secret"');
+select set_config(:'g', split_part(current_setting(:'g'), chr(29), 1) || chr(29)
+                        || substr(current_setting(:'ge'), strpos(current_setting(:'ge'), chr(29)) + 1), true) is not null as copied \gset
+select tap.is((select ids from public.cedar_forge_rows), '{open,x}', 'cache forgery: the edit entry under the view key gives the view rows');
+select set_config(:'g', current_setting(:'ge'), true) is not null as copied \gset
+select tap.is((select ids from public.cedar_forge_rows), '{open,x}', 'cache forgery: the edit entry as it is gives the view rows');
+-- 5. no stored subject at all
+select set_config('permissions.subject_id', 'nobody-at-all', true) is not null as nobody \gset
+select tap.is(permissions.cedar_is_authorized_current(action => 'Action::"view"', resource => 'Doc::"secret"'), false, 'a subject that is not stored');
+select set_config(:'g', split_part(current_setting(:'g'), chr(29), 1) || chr(29) || left(split_part(current_setting(:'g'), chr(29), 2), 64)
+                        || chr(30) || 'A:*' || chr(30) || chr(28), true) is not null as forged \gset
+select tap.is((select ids from public.cedar_forge_rows), '{open,x}', 'cache forgery: a forged entry for a subject that is not stored gives the policies'' rows');
+commit;
+
+-- Replay. A Cedar write in the transaction ends its entries: the key holds
+-- the generation of the transaction's last Cedar write, which only the
+-- owner writes (permissions._cedar_write_gen). An entry read before the
+-- write and written back after it is stale and is a miss.
 select set_config('permissions.subject_id', :'bob', false);
 begin isolation level repeatable read;
 select tap.is(permissions.cedar_is_authorized_current(action => 'Action::"view"', resource => 'Doc::"secret"'), false,
-              'cache forgery: bob may not view Doc::"secret"');
-select set_config('permissions.cedar_filter_' || md5('Action::"view"'),
-                  format('%s %L %L %L %L %L', pg_current_snapshot(), current_setting('request.jwt.claims', true),
-                         current_setting('permissions.subject_id', true), current_setting('permissions.subject_type', true),
-                         coalesce(current_setting('permissions.cedar_generation', true), '') || 'stale', 'Action::"view"')
-                  || chr(29) || chr(30) || 'A:*' || chr(30) || chr(28), true) is not null as forged_stale \gset
-select tap.is(permissions.cedar_is_authorized_current(action => 'Action::"view"', resource => 'Doc::"secret"'), false,
-              'cache forgery: an entry whose key does not match the request (here cedar_generation) is ignored');
-select set_config('permissions.cedar_filter_' || md5('Action::"view"'),
-                  format('%s %L %L %L %L %L', pg_current_snapshot(), current_setting('request.jwt.claims', true),
-                         current_setting('permissions.subject_id', true), current_setting('permissions.subject_type', true),
-                         current_setting('permissions.cedar_generation', true), 'Action::"view"')
-                  || chr(29) || chr(30) || 'A:*' || chr(30) || chr(28), true) is not null as forged \gset
+              'replay: bob may not view Doc::"secret"');
+select current_setting(:'g') as stale \gset
+reset role;
+select permissions.cedar_put_policy(policy_id => 'bob_secret',
+    policy => format('permit (principal == user::"%s", action == Action::"view", resource == Doc::"secret");', :'bob'));
+set local role authenticated;
+select set_config(:'g', :'stale', true) is not null as replayed \gset
 select tap.is(permissions.cedar_is_authorized_current(action => 'Action::"view"', resource => 'Doc::"secret"'), true,
-              'cache forgery, CURRENT BEHAVIOUR: a client that writes an entry with the right key gets access no policy gives it');
+              'replay: after a Cedar write in the same transaction, the entry read before it is a miss, and bob may view Doc::"secret"');
+select tap.ok(current_setting(:'g') !~ (' 0 ''Action::"view"''' || chr(29)), 'replay: the new entry''s key holds a generation');
 commit;
-begin isolation level repeatable read;
-select set_config('permissions.subject_id', :'alice', true);
-select tap.is(permissions.cedar_is_authorized_current(action => 'Action::"view"', resource => 'Doc::"secret"'), true,
-              'the same client can as well set permissions.subject_id and act as alice (the trust argument of e-cedar.md 15.2)');
-commit;
+reset role;
+select permissions.cedar_delete_policy(policy_id => 'bob_secret') is not null as deleted \gset
+drop view public.cedar_forge_rows;
 
 reset role;
 set role anon;

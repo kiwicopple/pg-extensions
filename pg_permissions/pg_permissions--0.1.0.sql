@@ -9238,15 +9238,59 @@ begin
 end;
 $$;
 
--- Own writes end the filters that cedar_is_authorized_current cached in
--- this transaction: the cache key holds this setting. Writes of other
--- transactions change the snapshot, which the key holds too.
+-- The trust of the statement filter (e-cedar.md section 15.2). The filter
+-- lives in a setting, which any client can write, so each entry carries
+-- MACs (_cedar_mac) under this secret: an entry the helper did not write is
+-- ignored. One row, owner only, filled with random bytes when the extension
+-- is installed or upgraded (gen_random_uuid() is pg_strong_random: 3 x 122
+-- bits). A dump of the extension does not hold it; create extension makes a
+-- new one. Without a row no entry verifies and every row is checked from
+-- scratch: slower, never wrong.
+create table permissions._cedar_secret (
+    one    boolean primary key default true check (one),
+    secret bytea not null
+);
+insert into permissions._cedar_secret (secret)
+select decode(replace(gen_random_uuid()::text || gen_random_uuid()::text || gen_random_uuid()::text, '-', ''), 'hex');
+
+-- The MAC of a filter entry: sha256(s || sha256(s || m)), HMAC's nesting, so
+-- sha256's length extension does not apply. m is text as stored (the
+-- database encoding, no conversion: it never raises). Stable, as
+-- getdatabaseencoding() is, so that a call is inlined.
+create function permissions._cedar_mac(s bytea, m text)
+returns text
+language sql stable
+as $$
+    select encode(sha256(s || sha256(s || convert_to(m, getdatabaseencoding()))), 'hex')
+$$;
+
+-- Own writes. A Cedar write ends the filters this transaction cached: the
+-- key holds the generation of the transaction's last Cedar write, from this
+-- table, which only the owner writes (the setting the key used to hold was
+-- a client's to reset). One row per backend, so writers never wait on each
+-- other; a row of an earlier transaction of the backend (another xid) does
+-- not count. The sequence makes each write's generation new, even after a
+-- rolled-back subtransaction reuses the row's old value. Unlogged: a crash
+-- empties it, which ends no live transaction. A read replica never writes
+-- Cedar and cannot read an unlogged table, so the helper reads it only once
+-- the transaction has an xid (pg_current_xact_id_if_assigned()), which a
+-- replica never assigns: generation 0 there.
+create unlogged table permissions._cedar_write_gen (
+    pid int primary key,
+    xid xid8 not null,
+    gen bigint not null
+);
+create sequence permissions._cedar_write_seq;
+
 create function permissions._cedar_changed()
 returns trigger
-language plpgsql
+language plpgsql security definer
+set search_path = ''
 as $$
 begin
-    perform set_config('permissions.cedar_generation', gen_random_uuid()::text, true);
+    insert into permissions._cedar_write_gen as w (pid, xid, gen)
+    values (pg_backend_pid(), pg_current_xact_id(), nextval('permissions._cedar_write_seq'))
+    on conflict (pid) do update set xid = excluded.xid, gen = excluded.gen;
     return null;
 end;
 $$;
@@ -9302,12 +9346,21 @@ $$;
 -- Once per statement (e-cedar.md section 15.2): the principal's and the
 -- action's walks, the candidate policies and the environment
 -- (_cedar_current_filter), kept in a transaction-local setting under a key
--- of the snapshot, the settings the subject comes from, the action and
--- cedar_generation (own writes). Per row: the resource's scope against the
--- candidates; only a resource that a forbid or a permit with conditions can
--- match evaluates anything. The setting is no weaker than the subject: a
--- client that can write it can write request.jwt.claims or
--- permissions.subject_id too, and be anyone (docs: Identity).
+-- of the database (a database made from a template has the same secret),
+-- the snapshot, the settings the subject comes from, the generation of the
+-- transaction's own Cedar writes (_cedar_write_gen) and the action.
+-- Per row: the resource's scope against the candidates; only a resource
+-- that a forbid or a permit with conditions can match evaluates anything.
+--
+-- A client can write the setting, so the helper trusts only what it wrote:
+--   key chr(29) mac1 part1 chr(28) mac2 part2
+-- mac1 = _cedar_mac(secret, octet_length(key) ':' key part1), checked on
+-- every row; mac2 = _cedar_mac(secret, mac1 part2), checked on the rows
+-- that read part 2. An entry with another key, a bad MAC or a bad shape is
+-- a miss: the filter is computed again (bad part 2: the row is checked from
+-- scratch). It never raises. A client can still read its own entries and
+-- write them back, but an entry is valid only under its key, so that
+-- replays the same answer.
 create function permissions.cedar_is_authorized_current(action text, resource text, resource_attrs jsonb default null,
                                                         plan_time_guard boolean default permissions._unfolded_null())
 returns boolean
@@ -9330,27 +9383,53 @@ declare
     cond boolean;
     sep boolean;
     attrs jsonb;
+    sec bytea;
+    gen bigint;
+    mac text;
+    fresh boolean := false;
 begin
     if action is null or resource is null then
         return false;
     end if;
-    -- the statement's filter
+    -- the statement's filter, and what makes it trusted: the secret, and
+    -- the generation of this transaction's own Cedar writes (none without
+    -- an xid; a replica has none)
     g := 'permissions.cedar_filter_' || md5(action);
-    key := format('%s %L %L %L %L %L', pg_current_snapshot(), current_setting('request.jwt.claims', true),
-                  current_setting('permissions.subject_id', true), current_setting('permissions.subject_type', true),
-                  current_setting('permissions.cedar_generation', true), action) || chr(29);
-    f := current_setting(g, true);
-    if f is null or not starts_with(f, key) then
-        select * into a from permissions._cedar_uid(action, 'action');
-        f := key || case when permissions.current_subject_id() is null or not permissions._cedar_is_name(permissions.current_subject_type())
-                         then chr(30) || chr(28)
-                         else permissions._cedar_current_filter(permissions.current_subject_type(), permissions.current_subject_id(), a.type, a.id) end;
-        perform set_config(g, f, true);
+    select s.secret into sec from permissions._cedar_secret s;
+    if pg_current_xact_id_if_assigned() is not null then
+        select w.gen into gen from permissions._cedar_write_gen w where w.pid = pg_backend_pid() and w.xid = pg_current_xact_id();
     end if;
-    f := substr(f, char_length(key) + 1);
-    i := strpos(f, chr(28));
+    key := format('%s %s %L %L %L %s %L', current_database(), pg_current_snapshot(), current_setting('request.jwt.claims', true),
+                  current_setting('permissions.subject_id', true), current_setting('permissions.subject_type', true),
+                  coalesce(gen, 0), action) || chr(29);
+    f := current_setting(g, true);
+    if f is not null and starts_with(f, key) then
+        f := substr(f, char_length(key) + 1);
+        i := strpos(f, chr(28));
+        mac := left(f, 64);
+        if i <= 64 or mac is distinct from permissions._cedar_mac(sec, octet_length(key) || ':' || key || substr(f, 65, i - 65)) then
+            f := null;                      -- not the helper's entry: a miss
+        end if;
+    else
+        f := null;
+    end if;
+    if f is null then
+        select * into a from permissions._cedar_uid(action, 'action');
+        f := case when permissions.current_subject_id() is null or not permissions._cedar_is_name(permissions.current_subject_type())
+                  then chr(30) || chr(28)
+                  else permissions._cedar_current_filter(permissions.current_subject_type(), permissions.current_subject_id(), a.type, a.id) end;
+        i := strpos(f, chr(28));
+        -- without a secret no entry verifies (a dash is never a MAC)
+        mac := coalesce(permissions._cedar_mac(sec, octet_length(key) || ':' || key || left(f, i - 1)), repeat('-', 64));
+        payload := substr(f, i + 1);
+        f := mac || left(f, i - 1) || chr(28) || coalesce(permissions._cedar_mac(sec, mac || payload), repeat('-', 64)) || payload;
+        perform set_config(g, key || f, true);
+        fresh := true;
+        i := i + 64;
+    end if;
+    -- mac1, part 1, chr(28), mac2, part 2
     payload := substr(f, i + 1);
-    f := left(f, i - 1);
+    f := substr(f, 65, i - 65);
     -- the resource uid (_cedar_uid's common case inline: no escapes)
     i := strpos(resource, '::"');
     if i > 0 and right(resource, 1) = '"' and strpos(resource, '\') = 0 and char_length(resource) > i + 2
@@ -9420,7 +9499,13 @@ begin
         return permissions._cedar_current_check(permissions.current_subject_type(), permissions.current_subject_id(),
                                                 a.type, a.id, rt, ri, attrs);
     end if;
-    return permissions._cedar_decide(payload::jsonb, rt, ri, attrs, anc, free);
+    if not fresh and left(payload, 64) is distinct from permissions._cedar_mac(sec, mac || substr(payload, 65)) then
+        -- part 2 is not the helper's: this row from scratch
+        select * into a from permissions._cedar_uid(action, 'action');
+        return permissions._cedar_current_check(permissions.current_subject_type(), permissions.current_subject_id(),
+                                                a.type, a.id, rt, ri, attrs);
+    end if;
+    return permissions._cedar_decide(substr(payload, 65)::jsonb, rt, ri, attrs, anc, free);
 end;
 $$;
 
@@ -10181,7 +10266,7 @@ as $$
     select permissions._cedar_uid_text(cedar_uid.type, cedar_uid.id)
 $$;
 
--- Privileges. Every cedar_* function and table is for the owner and the
+-- Privileges. Every cedar_* function, table and sequence is for the owner and the
 -- trusted roles the app grants (e.g. service_role), never PUBLIC, except the
 -- two current-subject helpers, cedar_is_authorized_current and
 -- cedar_list_resources_current, and cedar_uid, which the Privileges section at the end of
@@ -10198,7 +10283,7 @@ begin
         execute format('revoke all on function %s from public', f);
     end loop;
     for t in select c.oid::regclass from pg_class c
-             where c.relnamespace = 'permissions'::regnamespace and c.relkind = 'r' and c.relname ~ '^cedar_' loop
+             where c.relnamespace = 'permissions'::regnamespace and c.relkind in ('r', 'S') and c.relname ~ '^_?cedar_' loop
         execute format('revoke all on table %s from public', t);
     end loop;
 end;
