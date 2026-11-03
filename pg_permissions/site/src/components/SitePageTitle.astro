@@ -1,0 +1,48 @@
+---
+import PageTitle from '@astrojs/starlight/components/PageTitle.astro';
+import { getEntry } from 'astro:content';
+import { formatDate, readingMinutes, sitePath } from '../lib/blog';
+
+const { id } = Astro.locals.starlightRoute;
+const isBlog = id === 'blog' || id.startsWith('blog/');
+const post = id.startsWith('blog/') ? await getEntry('blog', id.slice('blog/'.length)) : undefined;
+---
+
+{isBlog ? (
+	<header class="blog-heading">
+		<nav aria-label="Blog navigation" data-pagefind-ignore>
+			<a href={sitePath('blog/')}>pg_permissions / Blog</a>
+			<a href={sitePath('overview/')}>Documentation <span aria-hidden="true">↗</span></a>
+		</nav>
+		{post ? (
+			<>
+				<h1 id="_top">{post.data.title}</h1>
+				<p class="description">{post.data.description}</p>
+				<div class="metadata">
+					<span>{post.data.author}</span>
+					<time datetime={post.data.date.toISOString().slice(0, 10)}>{formatDate(post.data.date)}</time>
+					<span>{readingMinutes(post)} min read</span>
+					<a href={sitePath(`blog/${post.id}.md`)} data-pagefind-ignore>Markdown</a>
+				</div>
+			</>
+		) : (
+			<>
+				<h1 id="_top">The pg_permissions blog</h1>
+				<p class="description">Experiments, decisions and release notes from building authorization inside Postgres.</p>
+			</>
+		)}
+	</header>
+) : <PageTitle />}
+
+<style>
+	.blog-heading { padding-block: 1.25rem 0.75rem; }
+	nav { display: flex; justify-content: space-between; gap: 1rem; font-size: 0.8rem; }
+	nav a { color: var(--sl-color-text-accent); text-decoration: none; }
+	nav a:hover { text-decoration: underline; }
+	h1 { max-width: 18ch; margin-top: 2.5rem; font-size: clamp(2.5rem, 6vw, 4.5rem); line-height: 1.08; letter-spacing: -0.045em; font-weight: 650; color: var(--sl-color-white); text-wrap: balance; }
+	.description { max-width: 57ch; font-size: clamp(1.1rem, 2.3vw, 1.3rem); line-height: 1.6; margin-top: 1.5rem; color: var(--sl-color-gray-2); }
+	.metadata { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.3rem; margin-top: 2rem; font-size: 0.8rem; color: var(--sl-color-gray-3); }
+	.metadata span:first-child { color: var(--sl-color-white); }
+	.metadata a { color: inherit; text-underline-offset: 0.2em; }
+	@media (min-width: 50rem) { .blog-heading { padding-block: 2.25rem 1.5rem; } }
+</style>

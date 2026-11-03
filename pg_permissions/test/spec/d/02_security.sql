@@ -50,8 +50,8 @@ select tap.set_eq(
 select tap.is(
     (select array_agg(p.oid::regprocedure::text order by 1) from pg_proc p
      where p.pronamespace = 'permissions'::regnamespace and p.proname ~ '^cedar_'
-       and not (p.prosecdef and 'search_path=""' = any(p.proconfig))),
-    null, 'every public cedar_* function is security definer with search_path ''''');
+       and not (p.prosecdef and 'search_path=pg_catalog, pg_temp' = any(p.proconfig))),
+    null, 'every public cedar_* function is security definer with search_path pg_catalog, pg_temp');
 select tap.is(
     (select array_agg(p.oid::regprocedure::text order by 1) from pg_proc p
      where p.pronamespace = 'permissions'::regnamespace and p.proname ~ '^_?cedar_'

@@ -53,8 +53,10 @@ function checkNavigation(items) {
   for (const item of items) {
     if (item.items) checkNavigation(item.items);
     else {
-      assert.ok(fs.existsSync(path.join(dist, item.slug, 'index.html')) || item.slug === 'index', `Missing sidebar route: ${item.slug}`);
-      assert.ok(!pages.find((p) => p.route === item.slug)?.legacy, `Compatibility route in sidebar: ${item.slug}`);
+      if (item.link && /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(item.link)) continue;
+      const route = item.slug ?? item.link.replace(/^\/|\/$/g, '');
+      assert.ok(fs.existsSync(path.join(dist, route, 'index.html')) || route === 'index', `Missing sidebar route: ${route}`);
+      assert.ok(!pages.find((p) => p.route === route)?.legacy, `Compatibility route in sidebar: ${route}`);
     }
   }
 }

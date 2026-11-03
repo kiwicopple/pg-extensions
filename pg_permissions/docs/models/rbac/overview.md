@@ -2,6 +2,8 @@
 
 Use RBAC when access follows a role, such as viewer, editor, or administrator. Assign roles across the application or within a scope such as an organization. Roles can inherit permissions from other roles.
 
+Store the assignments here and check permissions from your backend using SQL or JavaScript. RLS is optional; the guides show direct checks first and table-policy examples afterward.
+
 This walkthrough starts in a fresh database with the extension installed. Create the roles here, then continue with [app-wide roles](app-wide.md) and [tenant-scoped roles](tenants.md). Read [identity](../../integrations/identity.md) and [privileges](../../integrations/privileges.md) before integrating the examples into a request handler.
 
 ## Use from JavaScript
@@ -56,7 +58,9 @@ In your application, these are arguments. The extension accepts any text as an I
 
 Statements that change roles run as the extension owner. This page calls that role the admin. Examples that start with `set local role authenticated` show what a client sees.
 
-The examples use the Supabase role names `anon`, `authenticated` and `service_role`. Supabase has these roles. Plain Postgres does not have them, so create them to run the examples. The extension does not need them.
+### Database roles for the optional RLS examples
+
+The later RLS examples use the Supabase database role names `anon`, `authenticated` and `service_role`. Supabase has these roles. On plain Postgres, create them if you want to run those sections. The extension and the direct permission checks do not need them.
 
 ```sql
 create role anon nologin;
@@ -164,7 +168,7 @@ const forDave = await permissions.rbac.admin.userPermissions({
 - **A mistake in a permission name denies access without an error.** Unknown names give false in RBAC. Keep the permission names in one place in your code. The OpenFGA functions work the other way: an unknown type or relation raises an error. See [Errors and limits](../../reference/errors.md).
 - **Superusers and table owners skip RLS.** Test policies as the role that your clients use, for example `set role authenticated`, and not as `postgres`.
 - **Set the subject for each transaction.** Use `set_config(..., true)`. Never use a session-level value behind a pooler.
-- **Scoped and app-wide roles are separate.** A policy for a tenant table does not see app-wide roles. See [Rules](tenants.md#rules).
+- **Scoped and app-wide roles are separate.** A check for one scope does not include app-wide roles. See [Rules](tenants.md#rules).
 
 ## Next step
 

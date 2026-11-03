@@ -94,7 +94,7 @@ The scenarios and the work plan are in [`../research/plan.md`](../research/plan.
 
 | Prefix | Area | Where |
 | --- | --- | --- |
-| `0x_` | Identity, security, install, names of the API (`d/04`), upgrade from 0.0.1 (`d/05`) | `spec/` (shared) and `spec/d/` |
+| `0x_` | Identity, security, install, names of the API (`d/04`), upgrade from 0.0.1 (`d/05`), security invariants of every function and table (`d/06`) | `spec/` (shared) and `spec/d/` |
 | `1x_` | `rbac` preset | `spec/` (shared) and `spec/d/` |
 | `2x_` | RLS | `spec/` (shared) and `spec/d/` |
 | `3x_`, `4x_`, `5x_` | Zanzibar-level API, graduation, v0.0.2 scenarios (see `research/plan.md`) | `spec/<design>/` (per design) |

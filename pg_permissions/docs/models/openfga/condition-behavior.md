@@ -1,4 +1,4 @@
-# Condition evaluation and RLS
+# Condition evaluation and context
 
 Condition errors, model changes, and the source of context affect whether a relationship grants access.
 
@@ -22,9 +22,11 @@ A tuple can become stale when you write a new model. The tuple is stale in these
 - Its context has a key that is not a parameter now.
 - A value of its context does not convert to the type of the parameter now.
 
-Every API ignores a stale tuple. This is true for Check, ListObjects, ListUsers and the functions for RLS. The OpenFGA lists fail with an error in the last two cases. This extension keeps the lists consistent with Check. `fga_read` still returns a stale tuple, and you can delete it.
+Every API ignores a stale tuple. This is true for Check, ListObjects, ListUsers and the current-subject functions. The OpenFGA lists fail with an error in the last two cases. This extension keeps the lists consistent with Check. `fga_read` still returns a stale tuple, and you can delete it.
 
-## Conditions in RLS helpers
+<span id="conditions-in-rls-helpers"></span>
+
+## Conditions in current-subject functions
 
 The functions `fga_check_current`, `fga_list_objects_current` and `fga_list_object_ids_current` take no `context` and no contextual tuples. A client could claim any time or any address. Their behavior is:
 
@@ -96,7 +98,7 @@ const { data: fayCan } = await asFay.fga.check({
 // true: the tuple holds every parameter
 ```
 
-To use a value that the server can trust, such as the time, write a function of your own. The function calls `fga_check` and passes the value. `fga_check` is for admins only, so make the function `security definer`. See [RLS integration](../../rls/policies.md).
+To pass trusted request values such as the current time, your backend can call `fga_check` with admin privileges and supply the context. If you need the same behavior in RLS, a carefully scoped `security definer` wrapper can supply those values. See [Application checks](../../integrations/checks.md#trusted-request-context-and-resource-attributes) and [RLS integration](../../rls/policies.md).
 
 ## More expressions
 

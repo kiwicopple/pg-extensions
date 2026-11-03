@@ -39,6 +39,8 @@ The Cedar functions follow the same rule as the others: compute a list once for 
 
 The tables below record phase 5 measurements from [the design record](../../research/designs/e-cedar.md#152-cedar_is_authorized_current-the-statement-level-work-in-a-setting) and [the benchmark page](../../research/benchmarks/cedar.md). They predate the statement-cache security fixes. The later [phase 9 runs](../../research/benchmarks/cedar.md#phase-9) cover small and medium datasets: list and single-row workloads remained within measurement noise, while the per-row page improved from 39.9 to 35.2 ms at small scale and from 107.8 to 97.5 ms at medium scale (p50). Large scale was not rerun in phase 9.
 
+A performance pass on 2026-11-03 made the per-row check faster. The figures in this section were measured before it, so a per-row page now costs less than they show. On Postgres 16.4 (local, 4 clients, p50), `row_select_page` went from 35.5 to 27.5 ms at small scale (p95 45.7 to 39.4 ms) and from 89.4 to 70.3 ms at medium scale (p95 122.7 to 96.8 ms), about 21% less. On Postgres 18 in Docker, the small-scale page went from 34 to 25 ms in the server. Cedar still costs about 40 µs for each row. The condition environment (`jsonb`) is about 21% of this, and the SPI queries, mostly the walk of the ancestors, are about 16%. The list and one-row workloads did not change by more than the noise. See [the benchmark page](../../research/benchmarks/cedar.md#performance-pass).
+
 These measurements describe the workloads and machines below. Measure your own policies before choosing a query shape.
 
 Per row, in microseconds (Postgres 16.4 on a laptop with Apple silicon, 1,000 rows, best of 5 runs):
@@ -68,7 +70,7 @@ The benchmark of the harness (Postgres 18.6 in Docker, 4 clients, 10 s for each 
 | `nest_check`: one check of one row | 0.34 / 0.58 | 0.40 / 0.63 |
 | `row_select_page`: a check on every row, until 50 rows are visible | 39.9 / 59.6 | 225.5 / 312.5 |
 
-The page that checks each row reads about 500 rows at small scale, and about 2,600 rows at large scale, because a user sees 2% of the documents there. This is about 80 µs for each row in this setup. The list and the one-row check are close to the cost of the OpenFGA functions in the same harness. The [benchmark page](../../research/benchmarks/cedar.md) compares both models workload by workload.
+The page that checks each row reads about 500 rows at small scale, and about 2,600 rows at large scale, because a user sees 2% of the documents there. This was about 80 µs for each row in this setup, before the performance pass above. The list and the one-row check are close to the cost of the OpenFGA functions in the same harness. The [benchmark page](../../research/benchmarks/cedar.md) compares both models workload by workload.
 
 ### Rules
 

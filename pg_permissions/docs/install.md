@@ -124,6 +124,10 @@ If the first query fails with `schema "permissions" does not exist`, the file di
 
 A database that has 0.0.1 upgrades with the script [`pg_permissions--0.0.1--0.1.0.sql`](../pg_permissions--0.0.1--0.1.0.sql). The script keeps your roles, models and tuples. Run it once, as the role that owns the schema `permissions`.
 
+> **Security: upgrade each 0.0.1 install to 0.1.0.** Version 0.0.1 has a privilege-escalation flaw. Its functions set `search_path` to an empty value. Postgres then searches the temporary schema of the caller first for type names. A role that can run SQL and has the default `TEMP` privilege, such as `anon` or `authenticated`, can create a temporary type with the name `text`, `jsonb` or `bytea`. The type has a check that calls a function of the role. That function runs as the owner of the extension when a function of the extension runs. On an install that a superuser owns, this gave the role superuser rights. Version 0.1.0 sets `search_path` to `pg_catalog, pg_temp` in each function. The upgrade script changes the 0.0.1 functions in place.
+
+Upgrade each 0.0.1 install, also if you do not use Cedar. Version 0.1.0 also fixes a slow "did you mean" hint, a client setting that broke a function, and an install that accepted a schema `permissions` that another role owns. See [Security properties](integrations/privileges.md#security-properties).
+
 For a plain install, run the script with `psql` in one transaction:
 
 ```bash
@@ -151,6 +155,14 @@ select pgtle.set_default_version(
 `set_default_version` makes a later `create extension pg_permissions` without a version, for example in a restore, install 0.1.0 instead of 0.0.1. The update itself does not need it.
 
 The test suite installs 0.0.1, runs the script, and compares every function, table and index with a fresh 0.1.0 install. `./test/run.sh --upgrade-from 0.0.1` runs the whole suite against an upgraded install. On Postgres 16, 17 and 18, the suite checks the pg_tle update path, as a superuser and as a non-superuser with `pgtle_admin`, and `set_default_version`.
+
+## Back up and restore
+
+A plain `psql` install creates ordinary objects. `pg_dump` dumps the schema `permissions` with its data, as it does for any other schema.
+
+An install through `create extension` (pg_tle or database.dev) is different. No table of the extension is marked with `pg_extension_config_dump`, so `pg_dump` writes `create extension` and no table data. A restore then gives empty tables. You lose all roles, assignments, models, tuples, Cedar policies and entities. The loss is safe: with no data, each check returns false or an empty result, so nobody gets access. Your application stops working until you load the data again.
+
+To keep the data of such an install, use a physical backup. You can also export the tables of the schema `permissions` with `copy`, and load them after the restore. Test a restore before you rely on it.
 
 ## Install with database.dev
 
@@ -199,4 +211,4 @@ The first published version is 0.1.0, so a database.dev install has no earlier v
 
 ## Next steps
 
-[Protect a table](get-started/quickstart.md) to verify access as two different users. Then [choose a permission model](get-started/choose-a-model.md) and [connect your application](integrations/identity.md).
+[Check permissions](get-started/quickstart.md) for two users, then [use the checks in your backend](integrations/checks.md). [Choose a permission model](get-started/choose-a-model.md) for your access rules. The quickstart also includes optional RLS enforcement on a table.

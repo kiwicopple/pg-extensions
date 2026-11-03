@@ -144,3 +144,25 @@ to service_role;
 Grant only the functions that the backend uses. The Cedar tables have no client privileges. The functions run with the rights of the owner, so a client reads and writes no table directly.
 
 The current-subject helpers read the subject from the same settings as the other models. See [Identity and request context](identity.md). A role that can run `set_config` can choose its subject. Do not give such a role to a client that is not trusted.
+
+## Security properties
+
+The extension keeps these properties for each function and table it creates. The spec `test/spec/d/06_security_invariants.sql` checks them in the catalog, so a new function or grant that breaks one fails the tests.
+
+- Clients can execute only the client functions in the table above. They have no privilege on a table or sequence of the extension.
+- Each `security definer` function sets `search_path` to `pg_catalog, pg_temp` and `standard_conforming_strings` to `on`. A temporary type or a session setting of the caller does not change what the function does.
+- The functions do not build or run dynamic SQL. Names, ids, policies and JSON are data.
+- A missing subject, a null argument or a malformed value gives false or an empty result, or raises an error. It never gives access. An OpenFGA check with an unknown relation raises an error.
+- The install stops if the schema `permissions` already exists and a role other than the installer, or a superuser, owns it or can create objects in it.
+
+These limits apply:
+
+- A role that can run SQL can call `set_config` and choose its subject. In a transaction where `cedar_is_authorized_current` ran, it can also read the cached Cedar filter with `current_setting`. The filter holds the conditions of the policies that apply to the subject, and the attributes of the subject and the action. Give such a role only to trusted code. PostgREST clients cannot run `set_config` or `current_setting`.
+- If `request.jwt.claims` has no `sub` claim, the extension uses `permissions.subject_id`. Set that value with `set_config(..., true)`, so that it ends with the transaction.
+- A function that you add to the schema `permissions` gets the default privileges of Postgres: `PUBLIC` can execute it. Revoke this privilege after you create the function:
+
+```sql
+revoke all on function permissions.my_function(text) from public;
+```
+
+In your own `security definer` functions, set `search_path = pg_catalog, pg_temp` and qualify each name with its schema. Do not set `search_path` to an empty value: Postgres then searches the temporary schema of the caller first for types and tables.

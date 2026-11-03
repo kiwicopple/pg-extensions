@@ -38,7 +38,7 @@ Set `permissions.subject_id` with `set_config(..., true)` in a transaction, so t
 permissions.current_subject_type() returns text
 ```
 
-Returns the type of the current subject. The value is `user`, unless the setting `permissions.subject_type` has another value. The RBAC functions use the type `user` only. The OpenFGA functions for RLS use `type:id`, from this function and `current_subject_id`.
+Returns the type of the current subject. The value is `user`, unless the setting `permissions.subject_type` has another value. The RBAC functions use the type `user` only. The OpenFGA current-subject functions use `type:id`, from this function and `current_subject_id`.
 
 Errors: none.
 

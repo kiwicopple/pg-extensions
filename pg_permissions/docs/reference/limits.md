@@ -1,6 +1,6 @@
 # Limits
 
-API limits and RLS helper limits differ. In particular, the OpenFGA API list functions cap their results, while RLS list helpers return every accessible result. The Cedar functions have size limits on policies and entities, and no cap on results.
+Explicit-subject and current-subject API limits differ. In particular, the OpenFGA admin list functions cap their results, while the current-subject list functions return every accessible result, whether called from application code or RLS. The Cedar functions have size limits on policies and entities, and no cap on results.
 
 The batching examples are fragments for a database with the `document#viewer` model from [the error examples](errors.md).
 
@@ -24,7 +24,7 @@ The limits of the API functions are the default limits of OpenFGA. You cannot ch
 | Length of the name of a condition or a parameter | 50 characters | Error `openfga:2000`. |
 | Cost of the evaluation of a condition | 100 steps | Error `openfga:2000` when the extension evaluates the condition. |
 
-The RLS helpers `fga_list_objects_current` and `fga_list_object_ids_current` have no cap on the number of results. A cap there would hide rows and give no sign of it. `fga_check_current` has the same depth limit as `fga_check`. The `rbac_*` functions have no limits.
+The current-subject functions `fga_list_objects_current` and `fga_list_object_ids_current` have no cap on the number of results. A cap there would hide rows and give no sign of it. `fga_check_current` has the same depth limit as `fga_check`. The `rbac_*` functions have no limits.
 
 The extension has no built-in time limit on API calls. OpenFGA stops a list after 3 seconds and can return partial results. To bound execution in Postgres, set `statement_timeout`; exceeding it raises an error instead of returning a partial list.
 

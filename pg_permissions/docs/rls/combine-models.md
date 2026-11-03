@@ -2,6 +2,8 @@
 
 Keep organization roles and add individual shares on the same table. Separate permissive policies grant access through either model. A restrictive policy can deny access across both.
 
+This guide covers the optional RLS integration. To combine model results in a backend without table policies, see [Combine model decisions](../integrations/checks.md#combine-model-decisions).
+
 First complete [Read and write policies](policies.md), including its setup. Continue in the same psql session as the extension owner. This page defines the model, document data, and policies used by the next two pages.
 
 ## Write the models

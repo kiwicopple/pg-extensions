@@ -1,6 +1,6 @@
 # `pg_permissions`
 
-`pg_permissions` is an authorization extension for Postgres. It has one schema, `permissions`, with three permission models. You can use the models in row level security (RLS) policies.
+`pg_permissions` is an authorization store and check engine for Postgres. Store permission data in the `permissions` schema, manage it through SQL or JavaScript, and check access from your backend. It is an alternative to running a separate authorization service for applications using Postgres. Row level security (RLS) is an optional way to enforce the same checks on tables.
 
 - **RBAC** (`rbac_*` functions): roles that grant permissions. A user holds a role app-wide or in one tenant.
 - **Relationships** (`fga_*` functions): an [OpenFGA](https://openfga.dev)-compatible engine. It has authorization models, tuples, Check, ListObjects, ListUsers and Read, with the error codes of OpenFGA.
@@ -16,10 +16,10 @@ The extension is pure SQL. It needs no other extension and no C code. It runs on
 - Roles with inheritance. Assign a role app-wide or in a scope, such as a tenant.
 - Access to single objects, nested teams and folders, with the OpenFGA model language (schema 1.1).
 - Conditions in [CEL](https://github.com/google/cel-spec) on tuples, for example access that expires.
-- Cedar policies with `permit` and `forbid`, conditions on attributes, templates, and the extension types `ipaddr`, `decimal`, `datetime` and `duration`. Admin checks also accept trusted request context. A `forbid` overrides Cedar permits; restrictive RLS policies enforce denies across models.
-- Functions for RLS policies that answer for the current user, with a fast path for tenant tables.
+- Cedar policies with `permit` and `forbid`, conditions on attributes, templates, and the extension types `ipaddr`, `decimal`, `datetime` and `duration`. Admin checks also accept trusted request context. Cedar policies work without RLS.
+- Check and list functions for the current user, usable from your application or inside database policies.
 - Support for Supabase and PostgREST (the JWT `sub` claim). Plain Postgres uses a value that is local to the transaction.
-- Denies across the models, with restrictive policies.
+- Combine model decisions in your backend, or enforce grants and denies across models with RLS policies.
 - Tests that include the OpenFGA test suites and Cedar's integration tests.
 
 ## Quick start
@@ -31,7 +31,9 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
   -f pg_permissions--0.1.0.sql
 ```
 
-Then follow [Protect a table](docs/get-started/quickstart.md). It creates a role, grants Alice access to one organization, and verifies that Bob sees no rows. The walkthrough includes request identity and tests queries as an application database role.
+Then follow [Check permissions](docs/get-started/quickstart.md). It assigns Alice a role in one organization and checks that Alice is allowed while Bob is denied. It needs no application table or RLS policy. An optional section adds enforcement on table queries.
+
+[Check access in your application](docs/integrations/checks.md) shows how a backend uses these results. If you are replacing another authorization tool, review the model compatibility notes and map your integration to the extension's SQL or JavaScript API.
 
 Already running 0.0.1? Use the [upgrade script](docs/install.md#upgrade-from-001) to add Cedar while keeping your existing permission data.
 
@@ -43,13 +45,14 @@ Start with the [documentation map](docs/README.md) or [choose a permission model
 
 | Task | Guide |
 | --- | --- |
+| Use the extension as your application's authorization store and check engine | [Application checks](docs/integrations/checks.md) |
 | Set request identity | [Identity and request context](docs/integrations/identity.md) |
 | Assign roles and permissions | [RBAC](docs/models/rbac/overview.md) |
 | Share objects through relationships | [OpenFGA](docs/models/openfga/overview.md) |
 | Add expiry or attribute conditions | [Conditions](docs/models/openfga/conditions.md) |
 | Write policies with conditions and denies | [Cedar](docs/models/cedar/overview.md) |
 | Enforce access on a table | [RLS policies](docs/rls/policies.md) |
-| Combine roles, shares, policies and denies | [Combine models](docs/rls/combine-models.md) |
+| Combine roles, shares, policies and denies | [Backend decisions](docs/integrations/checks.md#combine-model-decisions) or [RLS policies](docs/rls/combine-models.md) |
 | Look up a function | [Shared](docs/reference/shared.md), [RBAC](docs/reference/rbac.md), [OpenFGA](docs/reference/openfga.md), [Cedar](docs/reference/cedar.md) |
 | Connect from JavaScript | [Setup](docs/integrations/javascript.md) and [reference](docs/reference/javascript.md) |
 

@@ -1,6 +1,6 @@
 # Identity and request context
 
-Identify the subject before a permission check or a query protected by RLS. Both permission models use the same identity functions.
+Identify the subject before a permission check or a query protected by RLS. All three permission models use the same identity functions. Identity works independently of RLS; it tells the check whose access to evaluate.
 
 The SQL examples use psql variables `alice` and `bob` for user IDs. Set them before running the examples:
 
@@ -68,7 +68,7 @@ const client = await pool.connect();
 try {
   await client.query('begin');
   await client.query('set local role app_user');
-  // a role without BYPASSRLS, so policies apply
+  // use the database privileges chosen for this request
   await client.query(
     "select set_config('permissions.subject_id', $1, true)",
     [userId]
@@ -85,7 +85,7 @@ try {
 
 The JavaScript client does these steps for you. The call `as({ id })` sets `permissions.subject_id` in a transaction for each call. See [Check as a subject](javascript.md#check-as-a-subject).
 
-Use `set_config` with a bound argument. The statement `SET LOCAL permissions.subject_id = ...` cannot take arguments. The `set local role` line is necessary. A superuser, or the owner of a table, bypasses row level security, and then no policy runs. See [Warnings and limits](../models/rbac/overview.md#warnings-and-limits).
+Use `set_config` with a bound argument. The statement `SET LOCAL permissions.subject_id = ...` cannot take arguments. `set local role` selects the database privileges for the request; it is independent of the application subject. If you use RLS, run table queries as a role that is subject to the policies: superusers and table owners normally bypass them. Direct permission checks still evaluate the supplied subject. See [Warnings and limits](../models/rbac/overview.md#warnings-and-limits).
 
 ### Supabase and PostgREST
 

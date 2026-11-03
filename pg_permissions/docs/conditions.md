@@ -48,7 +48,7 @@ See [Stale context](models/openfga/condition-behavior.md#stale-context).
 
 ## Conditions in RLS helpers
 
-See [Conditions in RLS helpers](models/openfga/condition-behavior.md#conditions-in-rls-helpers).
+See [Conditions in current-subject functions](models/openfga/condition-behavior.md#conditions-in-current-subject-functions).
 
 ## More expressions
 

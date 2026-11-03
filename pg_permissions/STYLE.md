@@ -10,6 +10,7 @@ The build journal in `research/journal.md` is a raw historical record. Do not ed
 - Keep a complete scenario together. If it continues another page, link to that page and name the data or variables it needs.
 - Distinguish runnable examples, fragments, and statements that intentionally raise errors.
 - Give each concept one canonical explanation. Keep short reminders beside examples where a mistake could change access or performance.
+- Introduce the extension as an authorization store and check engine. Show direct application checks first; RLS is an optional enforcement integration. Distinguish Cedar policies from Postgres RLS policies.
 - Keep current behavior in the guides and reference. Label historical designs and superseded decisions in Research.
 - Put future models in the architecture discussion until they are implemented. A future model gets its own guide and reference without changing the shared identity or RLS sections.
 
@@ -35,7 +36,7 @@ Do not turn historical measurements into performance guarantees. Keep the enviro
 8. Break long shell commands with a trailing `\` and put flag groups on separate lines.
 9. In JavaScript, construct complex values in named constants before passing them to a method.
 10. Show equivalent SQL and JavaScript in adjacent fences, separated only by blank lines. Use `tab="SQL"` and `tab="JavaScript"`, in that order. GitHub shows both; the site renders synchronized language tabs.
-11. Keep database policy definitions in SQL. A client permission check does not replace RLS enforcement.
+11. Keep database policy definitions in SQL. Explain who enforces a check's result: a trusted backend, database function, or optional RLS policy. A browser check alone does not enforce access.
 12. Use transaction-local subject settings in application examples. State the setup when a standalone diagnostic uses session state.
 
 ## Reference entries

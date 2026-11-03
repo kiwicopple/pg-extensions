@@ -13,12 +13,17 @@ export const pages = [
   {
     "src": "docs/get-started/quickstart.md",
     "route": "get-started/quickstart",
-    "label": "Quickstart: protect a table"
+    "label": "Quickstart: check permissions"
   },
   {
     "src": "docs/get-started/choose-a-model.md",
     "route": "get-started/choose-a-model",
     "label": "Choose a permission model"
+  },
+  {
+    "src": "docs/integrations/checks.md",
+    "route": "integrations/checks",
+    "label": "Check access in your application"
   },
   {
     "src": "docs/integrations/identity.md",
@@ -93,7 +98,7 @@ export const pages = [
   {
     "src": "docs/models/openfga/condition-behavior.md",
     "route": "models/openfga/condition-behavior",
-    "label": "Condition evaluation and RLS"
+    "label": "Condition evaluation and context"
   },
   {
     "src": "docs/models/openfga/update-models.md",
@@ -199,6 +204,11 @@ export const pages = [
     "src": "docs/reference/cel.md",
     "route": "reference/cel",
     "label": "CEL support"
+  },
+  {
+    "src": "docs/benchmarks.md",
+    "route": "benchmarks",
+    "label": "Benchmarks"
   },
   {
     "src": "research/README.md",
@@ -388,19 +398,27 @@ export const sidebar = [
         "slug": "install"
       },
       {
-        "label": "Quickstart: protect a table",
+        "label": "Quickstart: check permissions",
         "slug": "get-started/quickstart"
       },
       {
         "label": "Choose a permission model",
         "slug": "get-started/choose-a-model"
-      }
+      },
+      {
+        "label": "Benchmarks",
+        "slug": "benchmarks"
+      },
     ]
   },
   {
     "label": "Connect your application",
     "collapsed": true,
     "items": [
+      {
+        "label": "Check access in your application",
+        "slug": "integrations/checks"
+      },
       {
         "label": "Identity and request context",
         "slug": "integrations/identity"
@@ -474,7 +492,7 @@ export const sidebar = [
             "slug": "models/openfga/condition-examples"
           },
           {
-            "label": "Condition evaluation and RLS",
+            "label": "Condition evaluation and context",
             "slug": "models/openfga/condition-behavior"
           },
           {
@@ -524,7 +542,7 @@ export const sidebar = [
     ]
   },
   {
-    "label": "Enforce access with RLS",
+    "label": "Optional: enforce access with RLS",
     "collapsed": true,
     "items": [
       {

@@ -4,6 +4,8 @@
 
 The client has no runtime dependency. It works in Node, in browsers, in Deno and in Bun.
 
+Use it as your backend's authorization API without enabling RLS: manage permission data, check access, and allow or reject the operation using the result. Browser checks can guide a UI; enforcement belongs in a trusted backend or database policy. See [Check access in your application](../docs/integrations/checks.md). RLS is an optional integration for table reads and writes.
+
 ## Install
 
 ```bash

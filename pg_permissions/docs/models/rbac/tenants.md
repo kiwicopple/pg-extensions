@@ -2,7 +2,7 @@
 
 Give a user different permissions in different organizations. A scope is a text ID chosen by your application.
 
-This continues [app-wide roles](app-wide.md), using the same roles, IDs, and assignments. Complete that page first. Keeping the app-wide assignments lets the examples demonstrate that scoped policies do not include them.
+First complete the [RBAC setup](overview.md), using the same roles, IDs and app-wide assignments. The checks below need no application table. Keeping the app-wide assignments lets the examples demonstrate that scoped checks do not include them.
 
 ## Scenario 2: roles scoped to a tenant
 
@@ -44,64 +44,7 @@ await permissions.rbac.admin.assignRole({
 })
 ```
 
-Then create a table that has an `org_id` column, and the policies that use it:
-
-```sql
-create table public.org_documents (
-  id uuid primary key default gen_random_uuid(),
-  org_id uuid not null,
-  title text not null
-);
-create index on public.org_documents (org_id);
-insert into public.org_documents (org_id, title)
-values
-  (:'acme', 'acme plan'),
-  (:'acme', 'acme readme'),
-  (:'globex', 'globex notes');
-
-alter table public.org_documents enable row level security;
-grant select, insert, update on public.org_documents to authenticated;
-
-create policy org_documents_select
-  on public.org_documents
-  for select
-  to authenticated
-  using (
-    org_id = any (
-      array(
-        select unnest(
-          permissions.rbac_scopes_with_permission(
-            permission => 'documents.read'
-          )
-        )::uuid
-      )
-    )
-  );
-create policy org_documents_update
-  on public.org_documents
-  for update
-  to authenticated
-  using (
-    permissions.rbac_has_permission(
-      permission => 'documents.edit',
-      scope => org_id::text
-    )
-  );
-create policy org_documents_insert
-  on public.org_documents
-  for insert
-  to authenticated
-  with check (
-    permissions.rbac_has_permission(
-      permission => 'documents.edit',
-      scope => org_id::text
-    )
-  );
-```
-
-The SELECT policy uses the fast path. It lists the scopes of the user once for each query. The UPDATE and INSERT policies check the one row that the statement writes. [RLS policies](../../rls/policies.md) explains the two forms.
-
-A scope is any ID that you choose. Normally it is the ID of an organization row. Scopes are text, so cast a `uuid` column with `org_id::text`.
+## Check scoped permissions
 
 Ask the questions of the scenario as Bob. Run each statement in a transaction that sets the subject:
 
@@ -192,32 +135,6 @@ const admins = await permissions.rbac.admin.usersWithRole({
 // Who are the admins of acme?
 ```
 
-Now use the policies. As Bob:
-
-```sql
-begin;
-set local role authenticated;
-select set_config('permissions.subject_id', :'bob', true);
-select count(*) from public.org_documents;
--- 3: acme and globex
-update public.org_documents set title = upper(title);
--- UPDATE 2: only acme
-insert into public.org_documents (org_id, title)
-values (:'acme', 'budget');
--- INSERT 0 1
-commit;
-
-begin;
-set local role authenticated;
-select set_config('permissions.subject_id', :'bob', true);
-insert into public.org_documents (org_id, title)
-values (:'globex', 'nope');
--- ERROR:  new row violates row-level security policy for table "org_documents"
-commit;
-```
-
-Alice is an admin of `acme`, and also an app-wide admin from scenario 1. She sees the 3 documents of `acme` and none of `globex`. Carol is an app-wide viewer. She sees none, because a scoped policy never looks at app-wide roles.
-
 ## Rules
 
 - **Scopes are separate.** `rbac_has_permission(permission => p)` looks only at app-wide roles. With a `scope` argument, it looks only at that scope. No inheritance links them. To let app-wide roles work in a scope, write both checks. See [App-wide or scoped checks](../../rls/policies.md#app-wide-or-scoped-checks).
@@ -297,6 +214,92 @@ const { data: bobAdmin } = await asBob.rbac.hasRole({
 // false
 ```
 
+## Optional: enforce access with RLS
+
+To apply these permissions to table queries, create a table with an `org_id` column and the policies below:
+
+```sql
+create table public.org_documents (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null,
+  title text not null
+);
+create index on public.org_documents (org_id);
+insert into public.org_documents (org_id, title)
+values
+  (:'acme', 'acme plan'),
+  (:'acme', 'acme readme'),
+  (:'globex', 'globex notes');
+
+alter table public.org_documents enable row level security;
+grant select, insert, update on public.org_documents to authenticated;
+
+create policy org_documents_select
+  on public.org_documents
+  for select
+  to authenticated
+  using (
+    org_id = any (
+      array(
+        select unnest(
+          permissions.rbac_scopes_with_permission(
+            permission => 'documents.read'
+          )
+        )::uuid
+      )
+    )
+  );
+create policy org_documents_update
+  on public.org_documents
+  for update
+  to authenticated
+  using (
+    permissions.rbac_has_permission(
+      permission => 'documents.edit',
+      scope => org_id::text
+    )
+  );
+create policy org_documents_insert
+  on public.org_documents
+  for insert
+  to authenticated
+  with check (
+    permissions.rbac_has_permission(
+      permission => 'documents.edit',
+      scope => org_id::text
+    )
+  );
+```
+
+The SELECT policy uses the fast path. It lists the scopes of the user once for each query. The UPDATE and INSERT policies check the one row that the statement writes. [RLS policies](../../rls/policies.md) explains the two forms.
+
+A scope is any ID that you choose. Normally it is the ID of an organization row. Scopes are text, so cast a `uuid` column with `org_id::text`.
+
+Now use the policies. As Bob:
+
+```sql
+begin;
+set local role authenticated;
+select set_config('permissions.subject_id', :'bob', true);
+select count(*) from public.org_documents;
+-- 3: acme and globex
+update public.org_documents set title = upper(title);
+-- UPDATE 2: only acme
+insert into public.org_documents (org_id, title)
+values (:'acme', 'budget');
+-- INSERT 0 1
+commit;
+
+begin;
+set local role authenticated;
+select set_config('permissions.subject_id', :'bob', true);
+insert into public.org_documents (org_id, title)
+values (:'globex', 'nope');
+-- ERROR:  new row violates row-level security policy for table "org_documents"
+commit;
+```
+
+Alice is an admin of `acme`, and also an app-wide admin from scenario 1. She sees the 3 documents of `acme` and none of `globex`. Carol is an app-wide viewer. She sees none, because a scoped policy never looks at app-wide roles.
 
 ## Next step
 

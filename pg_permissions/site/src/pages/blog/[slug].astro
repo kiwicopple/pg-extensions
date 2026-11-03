@@ -1,0 +1,33 @@
+---
+import { render } from 'astro:content';
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { publishedPosts, sitePath, type BlogPost } from '../../lib/blog';
+import '../../styles/blog.css';
+
+export async function getStaticPaths() {
+	return (await publishedPosts()).map((post) => ({ params: { slug: post.id }, props: { post } }));
+}
+
+interface Props { post: BlogPost }
+const { post } = Astro.props;
+const { Content, headings } = await render(post);
+---
+
+<StarlightPage hasSidebar={false} headings={headings} frontmatter={{
+	title: post.data.title, description: post.data.description,
+	tableOfContents: false, prev: false, next: false, editUrl: false, lastUpdated: false,
+	head: [
+		{ tag: 'meta', attrs: { property: 'og:type', content: 'article' } },
+		{ tag: 'meta', attrs: { property: 'article:published_time', content: post.data.date.toISOString() } },
+		{ tag: 'meta', attrs: { name: 'author', content: post.data.author } },
+		{ tag: 'link', attrs: { rel: 'alternate', type: 'application/rss+xml', title: 'pg_permissions blog', href: sitePath('blog/rss.xml') } },
+	],
+}}>
+	<div class="blog-shell">
+		<article><Content /></article>
+		<footer class="blog-end" data-pagefind-ignore>
+			<a href={sitePath('blog/')}>← All posts</a>
+			<a href={sitePath('blog/rss.xml')}>Subscribe with RSS</a>
+		</footer>
+	</div>
+</StarlightPage>

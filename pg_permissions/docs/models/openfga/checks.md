@@ -2,7 +2,7 @@
 
 Check access to one object, list accessible objects, or inspect stored tuples.
 
-First complete [Share objects and manage tuples](tuples.md). The examples use that model and those tuples. Most calls here are admin-only because they accept an explicit subject. [Functions for RLS](#functions-for-rls) and the JavaScript client methods answer for the current subject.
+First complete [Share objects and manage tuples](tuples.md). The examples use that model and those tuples. Most calls here are admin-only because they accept an explicit subject. [Current-subject functions](#check-for-the-current-subject) and the JavaScript client methods answer for the current subject. All of these checks work without RLS.
 
 ## Check
 
@@ -171,7 +171,7 @@ const { data: anneFolders } = await permissions.fga.admin.listObjects({
 // ['folder:projects', 'folder:roadmaps']
 ```
 
-The function returns at most 1,000 objects, as OpenFGA does. Additional objects are silently omitted. For RLS, use `fga_list_object_ids_current`. It has no cap. See [Functions for RLS](#functions-for-rls).
+The function returns at most 1,000 objects, as OpenFGA does. Additional objects are silently omitted. The [current-subject list functions](#check-for-the-current-subject) have no cap. Use those when you need all accessible objects, including when filtering table queries with RLS.
 
 An unknown type is error `openfga:2021`. An unknown relation is error `openfga:2022`.
 
@@ -411,9 +411,11 @@ const { data: plain } = await permissions.fga.admin.check({
 // false: nothing was written
 ```
 
-Use contextual tuples for facts that your application knows at the time of the request. An example is a group membership from the identity provider. Do not store these facts as tuples. The functions for RLS do not take contextual tuples, because a client could vouch for itself.
+Use contextual tuples for facts that your application knows at the time of the request. An example is a group membership from the identity provider. Do not store these facts as tuples. Current-subject functions do not take contextual tuples, because an untrusted client could vouch for itself. A trusted backend can use the explicit-subject admin check.
 
-## Functions for RLS
+<span id="functions-for-rls"></span>
+
+## Check for the current subject
 
 Clients cannot call the functions above, because those functions take the subject as an argument (see [Privileges](../../integrations/privileges.md#openfga-functions)). Clients call three functions that answer for the current subject:
 
@@ -423,7 +425,7 @@ Clients cannot call the functions above, because those functions take the subjec
 | `fga_list_objects_current(type, relation)` | The objects as `type:id` strings |
 | `fga_list_object_ids_current(type, relation)` | The ids of the objects, without the type |
 
-In JavaScript, `fga.check` calls `fga_check_current`. The method `fga.listObjects` calls `fga_list_objects_current`, and `idsOnly: true` calls `fga_list_object_ids_current`.
+In JavaScript, `fga.check` calls `fga_check_current`. The method `fga.listObjects` calls `fga_list_objects_current`, and `idsOnly: true` calls `fga_list_object_ids_current`. Use the answers in your backend, or call the SQL functions from RLS policies if you want database enforcement.
 
 The current subject is `current_subject_type()` and `current_subject_id()`, joined as `type:id`. The default type is `user`. [Function reference](../../reference/shared.md#shared-functions) shows how the extension finds the current subject. This example sets the subject for the session:
 
@@ -482,7 +484,9 @@ const { data: nobody } = await permissions.fga.check({
 
 In three cases these functions return `false` or no rows. They raise no error. The cases are: there is no subject, there is no model, or the model does not define the subject type. An unknown object type or an unknown relation is still an error, as in OpenFGA.
 
-The functions have no cap on the number of results. They take no contextual tuples and no `context`. [OpenFGA conditions](condition-behavior.md#conditions-in-rls-helpers) explains how they treat conditioned tuples.
+The functions have no cap on the number of results. They take no contextual tuples and no `context`. [OpenFGA conditions](condition-behavior.md#conditions-in-current-subject-functions) explains how they treat conditioned tuples.
+
+### Optional: use a check in RLS
 
 This policy is a fragment. It assumes a table `public.documents` with a text column `id`:
 

@@ -1,14 +1,14 @@
 # pg_permissions documentation
 
-Use `pg_permissions` to manage application permissions in Postgres and enforce them through row level security (RLS). The extension is pure SQL and runs on Postgres 16, 17, and 18.
+Use `pg_permissions` as your application's authorization store and check engine in Postgres. Manage roles, relationships and policies through SQL or JavaScript, then check access from your backend. Row level security (RLS) is an optional integration for enforcing access on tables. The extension is pure SQL and runs on Postgres 16, 17, and 18.
 
-New to the project? Read the [overview](overview.md) for its purpose, goals, and how it fits into an application. Then [install the extension](install.md) and [protect a table](get-started/quickstart.md). The quickstart creates roles, grants access, and checks what two users can see.
+New to the project? Read the [overview](overview.md), [install the extension](install.md), and [run your first permission check](get-started/quickstart.md). The quickstart assigns a role and compares two users' access before showing an optional RLS example.
 
 <span id="which-model-do-i-use"></span>
 
 ## Choose a model
 
-[RBAC](models/rbac/overview.md) grants permissions through roles, either app-wide or within a tenant. [OpenFGA](models/openfga/overview.md) grants access through relationships to individual objects. [Cedar](models/cedar/overview.md) grants or denies access with policies on attributes, groups and the request. All three live in the `permissions` schema, and an application can use them on the same table.
+[RBAC](models/rbac/overview.md) grants permissions through roles, either app-wide or within a tenant. [OpenFGA](models/openfga/overview.md) grants access through relationships to individual objects. [Cedar](models/cedar/overview.md) grants or denies access with policies on attributes, groups and the request. All three live in the `permissions` schema and work without RLS.
 
 Use the [model chooser](get-started/choose-a-model.md) to find the right starting point. Adding object sharing to an RBAC application does not require migrating its role assignments.
 
@@ -18,6 +18,7 @@ Use the [model chooser](get-started/choose-a-model.md) to find the right startin
 
 | Task | Read |
 | --- | --- |
+| Use the extension as your backend's authorization store and check engine | [Check access in your application](integrations/checks.md) |
 | Identify the user making a request | [Identity and request context](integrations/identity.md) |
 | Connect from Node or a browser | [JavaScript setup](integrations/javascript.md) |
 | Give a backend access to admin functions | [Client and admin privileges](integrations/privileges.md) |
@@ -28,12 +29,15 @@ Use the [model chooser](get-started/choose-a-model.md) to find the right startin
 | Write policies with conditions and denies | [Write policies](models/cedar/policies.md) |
 | Link one policy shape to many users | [Use policy templates](models/cedar/templates.md) |
 | Protect a table with a Cedar policy | [Policies for Cedar](rls/policies.md#policies-for-cedar) |
-| Enforce roles and shares on one table | [Combine permission models](rls/combine-models.md) |
+| Combine checks from different models in your backend | [Combine model decisions](integrations/checks.md#combine-model-decisions) |
+| Optionally enforce roles and shares on one table | [Combine models with RLS](rls/combine-models.md) |
 | Remove permissions when a user is deleted | [Delete users and clean up permissions](integrations/cleanup.md) |
 
 ## Reference and research
 
 Look up [shared SQL functions](reference/shared.md), [RBAC functions](reference/rbac.md), [OpenFGA functions](reference/openfga.md), [Cedar functions](reference/cedar.md), or [JavaScript methods](reference/javascript.md). [Errors](reference/errors.md), [limits](reference/limits.md), and [CEL support](reference/cel.md) have their own reference pages.
+
+[Benchmarks](benchmarks.md) has the current latency numbers for each model at 10 thousand, 100 thousand and 1 million documents.
 
 [Research and design](../research/README.md) explains the architecture and preserves the earlier prototypes, measurements, and decisions. Those prototypes are historical implementations, not installation choices.
 

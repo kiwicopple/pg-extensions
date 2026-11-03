@@ -4,7 +4,7 @@ Each entry gives the SQL signature, defaults, return type, privileges, subject b
 
 Examples are fragments: they show a call on data that exists, and are not a script to run in order. For runnable setup, follow the [Cedar walkthrough](../models/cedar/overview.md). Management and explicit-principal functions require [admin privileges](../integrations/privileges.md#cedar-functions). The functions `cedar_is_authorized_current`, `cedar_list_resources_current` and `cedar_uid` are granted to `PUBLIC`.
 
-A uid argument is Cedar text, `Type::"id"`. An id in a uid can hold any character if you escape `"` and `\`. Use [`cedar_uid`](#cedar_uid) to build the text. All `cedar_*` functions run with the rights of the extension owner, and they set `search_path` to an empty value.
+A uid argument is Cedar text, `Type::"id"`. An id in a uid can hold any character if you escape `"` and `\`. Use [`cedar_uid`](#cedar_uid) to build the text. All `cedar_*` functions run with the rights of the extension owner, and they set `search_path` to `pg_catalog, pg_temp`.
 
 ## Policies
 
@@ -306,9 +306,11 @@ select permissions.cedar_is_authorized(
 -- {"errors": [], "reasons": ["eng-view-reports"], "decision": "allow"}
 ```
 
-## Functions for RLS
+<span id="functions-for-rls"></span>
 
-These functions are granted to `PUBLIC`. They answer for the current subject, as `current_subject_type()::"current_subject_id()"`. They take no context and no request entities. They fail closed. See [Check access](../models/cedar/checks.md#check-for-the-current-subject).
+## Current-subject functions
+
+These functions are granted to `PUBLIC`. They answer for the current subject, as `current_subject_type()::"current_subject_id()"`, and can be used by application code or RLS policies. They take no context and no request entities. They fail closed. See [Check access](../models/cedar/checks.md#check-for-the-current-subject).
 
 ### `cedar_is_authorized_current`
 
@@ -323,7 +325,7 @@ permissions.cedar_is_authorized_current(
 
 Returns `true` when the decision for the current subject is `allow` and no relevant `forbid` fails to evaluate. It returns `false` when there is no subject or when `action` or `resource` is `null`. The optional `resource_attrs` defaults to `null`, which uses stored attributes. When supplied as a JSON object, it replaces the resource's attributes for this check; parents and tags still come from storage. A stored resource entity is not required. Do not pass `plan_time_guard`.
 
-When the check evaluates supplied attributes, invalid Cedar values deny access. An unconditional permit with no relevant forbid can allow access without evaluating attributes. In an RLS policy, build `resource_attrs` from the row being protected. Caller-supplied attributes in a standalone check do not establish access to a database row.
+When the check evaluates supplied attributes, invalid Cedar values deny access. An unconditional permit with no relevant forbid can allow access without evaluating attributes. For backend enforcement, build `resource_attrs` from trusted application data; for RLS, build it from the row being protected. Unverified attributes supplied by a browser do not establish access to a backend operation.
 
 The function computes the work for the principal and the action once for each statement, and it then answers each row from that work. A resource text of the form `Type::"..."` that is not a valid Cedar string denies that row. Build the text with `cedar_uid`.
 

@@ -184,7 +184,7 @@ The message starts with a code, then a colon and a detail. The codes follow the 
 
 The text of the message is not stable. Match on the code at the start. The policy ids in `errors` are the stable part.
 
-A failed `forbid` does not block access: Cedar skips it, so another matching permit can still allow the request. Inspect `errors` as well as `decision` in a backend check. The RLS helpers deny access when a relevant `forbid` fails to evaluate. See [Check for the current subject](#check-for-the-current-subject).
+A failed `forbid` does not block access: Cedar skips it, so another matching permit can still allow the request. Inspect `errors` as well as `decision` in a backend check. The current-subject functions deny access when a relevant `forbid` fails to evaluate, in application calls as well as RLS. See [Check for the current subject](#check-for-the-current-subject).
 
 To avoid a missing-attribute error, check before reading: `context has mfa && context.mfa`. The operator `&&` skips its right side when the left side is false. The value must still have the expected type. In a `forbid`, this guard makes the condition false when `mfa` is missing; if missing MFA should deny access, write that case into the condition too.
 
@@ -334,10 +334,10 @@ These functions fail closed:
 
 These helpers accept neither request context nor a request entity overlay. Policies that require a context value, such as `context.mfa`, cannot obtain it through these calls. A failing permit grants no access; another matching permit can still allow access unless a forbid blocks it.
 
-The optional `resource_attrs` argument of `cedar_is_authorized_current` replaces the resource's attributes for that check. Parents and tags still come from storage, and the resource itself need not be stored. In RLS, supply the attributes from the actual row. Attributes supplied by an application client are useful for a UI check but are not trusted evidence of row access. See [Cedar in RLS](../../rls/policies.md#policies-for-cedar).
+The optional `resource_attrs` argument of `cedar_is_authorized_current` replaces the resource's attributes for that check. Parents and tags still come from storage, and the resource itself need not be stored. For backend enforcement, supply attributes from trusted application data. Browser-supplied attributes can guide a UI but must not establish access to a backend operation. If you use RLS, supply attributes from the actual row. See [Application checks](../../integrations/checks.md) and [Cedar in RLS](../../rls/policies.md#policies-for-cedar).
 
 `cedar_list_resources_current` returns stored entities only, with no result cap. A resource mentioned in a policy but absent from the entity store will not appear in the list. A direct check can still allow that resource if the policies permit it.
 
 ## Next step
 
-Continue with [Extension types](extensions.md), or go to [Cedar in RLS](../../rls/policies.md#policies-for-cedar).
+Use the results in [your backend](../../integrations/checks.md), continue with [Extension types](extensions.md), or optionally enforce them with [Cedar in RLS](../../rls/policies.md#policies-for-cedar).

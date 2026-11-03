@@ -4,6 +4,8 @@ Use relationships to share individual documents, nest teams, and inherit access 
 
 Start with [Define an authorization model](models.md), then [write tuples](tuples.md) and [check access](checks.md). The walkthrough uses one database and builds its data in that order. Models and tuples are managed by an admin; current-subject methods are available to application clients.
 
+You can use this as your backend's relationship store and authorization API without RLS. Your backend enforces the returned decision. RLS policies are an optional integration for table queries.
+
 ## Use from JavaScript
 
 An example that has a JavaScript equivalent shows it next to the SQL. The JavaScript examples use [the JavaScript client](../../integrations/javascript.md). Install the client first.

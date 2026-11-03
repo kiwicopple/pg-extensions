@@ -1,0 +1,42 @@
+---
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { publishedPosts, formatDate, readingMinutes, sitePath } from '../../lib/blog';
+import '../../styles/blog.css';
+
+const posts = await publishedPosts();
+---
+
+<StarlightPage hasSidebar={false} frontmatter={{
+	title: 'Blog', description: 'Experiments, decisions and release notes from building authorization inside Postgres.',
+	tableOfContents: false, prev: false, next: false, editUrl: false, lastUpdated: false,
+	head: [{ tag: 'link', attrs: { rel: 'alternate', type: 'application/rss+xml', title: 'pg_permissions blog', href: sitePath('blog/rss.xml') } }],
+}}>
+	<div class="blog-shell">
+		<div class="posts">
+			{posts.map((post) => (
+				<article class="post-preview">
+					<div class="post-meta"><time datetime={post.data.date.toISOString().slice(0, 10)}>{formatDate(post.data.date)}</time><span>{readingMinutes(post)} min read</span></div>
+					<h2><a href={sitePath(`blog/${post.id}/`)}>{post.data.title}</a></h2>
+					<p>{post.data.description}</p>
+					<a class="read-post" href={sitePath(`blog/${post.id}/`)}>Read the post <span aria-hidden="true">→</span></a>
+				</article>
+			))}
+			{posts.length === 0 && <p>Our first post is on its way.</p>}
+		</div>
+		<footer class="blog-end" data-pagefind-ignore>
+			<a href={sitePath('blog/rss.xml')}>Subscribe with RSS</a>
+			<a href={sitePath('overview/')}>Explore the documentation →</a>
+		</footer>
+	</div>
+</StarlightPage>
+
+<style>
+	.post-preview { padding: 1.5rem 0 2rem; }
+	.post-preview + .post-preview { border-top: 1px solid var(--sl-color-hairline); padding-top: 2.5rem; }
+	.post-meta { display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.8rem; color: var(--sl-color-gray-3); }
+	.post-preview h2 { margin-top: 1rem; font-size: clamp(1.7rem, 4vw, 2.5rem); line-height: 1.2; letter-spacing: -0.03em; }
+	.post-preview h2 a { color: var(--sl-color-white); text-decoration: none; }
+	.post-preview h2 a:hover { color: var(--sl-color-text-accent); }
+	.post-preview p { color: var(--sl-color-gray-2); max-width: 62ch; }
+	.read-post { display: inline-block; margin-top: 1.25rem; font-size: 0.9rem; }
+</style>

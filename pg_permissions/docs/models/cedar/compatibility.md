@@ -61,7 +61,7 @@ The comparison covers the decision and the ids of the policies. It does not comp
 
 - **Schema validation.** The extension does not check policies against a schema. A policy with a type error is stored, and gives an evaluation error when a request reaches it.
 - **Partial evaluation.** A request cannot have unknown values. The extension also does not compile policies to SQL predicates.
-- **Request context from clients in the RLS functions.** `cedar_is_authorized_current` has no `context`, because a client could write it. A server can pass any context to `cedar_is_authorized`.
+- **Request context in current-subject functions.** `cedar_is_authorized_current` has no `context`, because a client could write it. A server can pass any context to `cedar_is_authorized`.
 - **Cedar tools.** The extension does not format or analyze policies. Use the Cedar CLI for this.
 
 Cedar releases after 4.14 can add language features. The extension supports only the release in the table above.
