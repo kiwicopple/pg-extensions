@@ -29,7 +29,9 @@
  *     null, which a CHECK constraint accepts.
  *   - Embedded code lists (ISO 3166, ISO 4217, ISO 639, the IBAN registry)
  *     are snapshots; docs/reference/international.md and financial.md name
- *     the snapshot. Changing a list is a new extension version.
+ *     the snapshot, and data/README.md records the sources. data/refresh.py
+ *     compares the lists with their sources. Changing a list is a new
+ *     extension version.
  *
  *   ./test/run.sh
  */
@@ -824,7 +826,9 @@ $$;
 
 -- ISO 3166-1 alpha-2, the 249 officially assigned codes, uppercase.
 -- User-assigned (XK and others), exceptionally reserved (UK, EU) and
--- withdrawn codes are rejected.
+-- withdrawn codes are rejected. Snapshot: Debian iso-codes iso_3166-1.json,
+-- retrieved 2026-11-03, cross-checked with Wikipedia's officially assigned
+-- table (data/README.md).
 create function validate.country_code(value text)
 returns boolean
 language sql immutable strict parallel safe
@@ -848,7 +852,8 @@ as $$
              ' ' || value || ' ') > 0
 $$;
 
--- ISO 3166-1 alpha-3, the 249 officially assigned codes, uppercase.
+-- ISO 3166-1 alpha-3, the 249 officially assigned codes, uppercase. Same
+-- snapshot as country_code.
 create function validate.country_code_alpha3(value text)
 returns boolean
 language sql immutable strict parallel safe
@@ -874,7 +879,9 @@ $$;
 
 -- ISO 4217 alphabetic code from List One (current currencies and funds,
 -- including the X codes for precious metals, XTS for testing and XXX for no
--- currency), uppercase. Historic codes (List Three) are rejected.
+-- currency), uppercase. Historic codes (List Three) are rejected. Snapshot:
+-- the 178 codes of List One as published by SIX on 2026-09-17, retrieved
+-- 2026-11-03 (data/README.md).
 create function validate.currency_code(value text)
 returns boolean
 language sql immutable strict parallel safe
@@ -888,14 +895,16 @@ as $$
              ' KES KGS KHR KMF KPW KRW KWD KYD KZT LAK LBP LKR LRD LSL LYD MAD MDL MGA MKD MMK MNT MOP MRU'
              ' MUR MVR MWK MXN MXV MYR MZN NAD NGN NIO NOK NPR NZD OMR PAB PEN PGK PHP PKR PLN PYG QAR'
              ' RON RSD RUB RWF SAR SBD SCR SDG SEK SGD SHP SLE SOS SRD SSP STN SVC SYP SZL THB TJS TMT TND'
-             ' TOP TRY TTD TWD TZS UAH UGX USD USN UYI UYU UYW UZS VED VES VND VUV WST XAF XAG XAU XBA XBB'
-             ' XBC XBD XCD XCG XDR XOF XPD XPF XPT XSU XTS XUA XXX YER ZAR ZMW ZWG ',
+             ' TOP TRY TTD TWD TZS UAH UGX USD USN UYI UYU UYW UZS VED VES VND VUV WST XAD XAF XAG XAU XBA'
+             ' XBB XBC XBD XCD XCG XDR XOF XPD XPF XPT XSU XTS XUA XXX YER ZAR ZMW ZWG ',
              ' ' || value || ' ') > 0
 $$;
 
 -- ISO 639-1 two-letter language code, the 183 current codes, lowercase
 -- (bh, deprecated in 2021, is rejected). Not BCP 47 language tags (en-US):
--- see docs/roadmap.md.
+-- see docs/roadmap.md. Snapshot: the alpha_2 codes of Debian iso-codes
+-- iso_639-2.json, retrieved 2026-11-03, cross-checked with Wikipedia's list
+-- of ISO 639 codes (data/README.md).
 create function validate.language_code(value text)
 returns boolean
 language sql immutable strict parallel safe
@@ -1150,7 +1159,11 @@ $$;
 -- code from the SWIFT IBAN registry, the length that registry gives for the
 -- country, check digits 02 to 98, an alphanumeric BBAN, and the ISO 7064
 -- MOD 97-10 check (remainder 1). The national BBAN structure and national
--- check digits are not checked.
+-- check digits are not checked. Snapshot: the 89 countries of the SWIFT IBAN
+-- Registry (TXT) as updated on 2026-09-17, retrieved 2026-11-03
+-- (data/README.md). Territories that the registry lists under another
+-- prefix (GF, RE and the other French territories under FR; IM, JE, GG
+-- under GB; AX under FI) use that prefix and are rejected as prefixes.
 create function validate.iban(value text)
 returns boolean
 language plpgsql immutable strict parallel safe

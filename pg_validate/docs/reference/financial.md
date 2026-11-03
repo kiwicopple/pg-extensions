@@ -22,15 +22,21 @@ validate.iban(value text) returns boolean
 Accepts an IBAN in electronic format:
 
 1. Uppercase letters and digits only, no spaces.
-2. A country code from the SWIFT IBAN registry (89 countries and territories in this release's snapshot, including `XK` and `YE`), and exactly the length the registry gives for that country (from 15 for Norway to 33 for Russia).
+2. An IBAN prefix from the SWIFT IBAN Registry (the 89 countries and territories of this release's snapshot, including `XK` for Kosovo and `YE`), and exactly the length the registry gives for that country (from 15 for Norway to 33 for Russia). Territories that the registry lists under another country use that country's prefix, so their own codes are rejected as prefixes: `GF`, `GP`, `MQ`, `RE`, `PF`, `TF`, `YT`, `NC`, `BL`, `MF`, `PM` and `WF` use `FR`; `IM`, `JE` and `GG` use `GB`; `AX` uses `FI`.
 3. Check digits `02` to `98` (ISO 13616: `00`, `01` and `99` are never issued, although some pass the arithmetic).
 4. The ISO 7064 MOD 97-10 check: move the first four characters to the end, replace letters with 10 to 35, and the number modulo 97 is 1.
 
-The test suite uses examples from the IBAN registry.
+The test suite checks the registry's example IBAN for each of the 89 countries.
+
+| Source | Snapshot |
+| --- | --- |
+| SWIFT [IBAN Registry](https://www.swift.com/standards/data-standards/iban-international-bank-account-number) (TXT), the ISO 13616 registration authority | Updated by SWIFT on 2026-09-17, retrieved 2026-11-03 |
+
+Every country in the registry is included. Countries with experimental or proposed IBANs that are not in the registry (the lists that some banks publish, with Algeria `DZ`, Angola `AO`, Iran `IR`, Senegal `SN` and others) are rejected. [`data/README.md`](../../data/README.md) records the source and its checksum. SWIFT updates the registry several times a year; before each release, and at least every three months, run `data/refresh.py` to compare the embedded lengths with the latest registry.
 
 **Guarantees:** the value has a registered country, the right length and valid check digits, so it was not mistyped in any way MOD 97 detects (all single-character errors and most transpositions).
 
-**Does not guarantee:** that the account exists or is open. The BBAN's national structure (bank code, branch code, the positions of letters and digits) and national check digits are not checked. Countries with experimental IBANs outside the SWIFT registry are rejected. A country added to the registry after the snapshot fails until you upgrade the extension.
+**Does not guarantee:** that the account exists or is open. The BBAN's national structure (bank code, branch code, the positions of letters and digits) and national check digits are not checked. A country added to the registry after the snapshot fails until you upgrade the extension.
 
 ```sql
 select validate.iban(value => 'GB82WEST12345698765432');

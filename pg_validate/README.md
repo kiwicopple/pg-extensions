@@ -95,4 +95,4 @@ Create the Vercel project with the Root Directory `pg_validate`. The install com
 
 ## Contributing
 
-To run the tests, see [`test/README.md`](test/README.md). To run Postgres 16, 17 and 18 with pg_tle, see [`docker/README.md`](docker/README.md). Write documentation as described in [`STYLE.md`](STYLE.md). The documentation site (Astro + Starlight) is in [`site/`](site/README.md).
+To run the tests, see [`test/README.md`](test/README.md). To run Postgres 16, 17 and 18 with pg_tle, see [`docker/README.md`](docker/README.md). Write documentation as described in [`STYLE.md`](STYLE.md). The documentation site (Astro + Starlight) is in [`site/`](site/README.md). The sources of the embedded code lists (ISO 3166-1, ISO 4217, ISO 639-1 and the IBAN registry), and the script that compares them with the extension, are in [`data/`](data/README.md).
