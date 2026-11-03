@@ -1,0 +1,8 @@
+Repository: https://github.com/json-schema-org/JSON-Schema-Test-Suite
+Commit:     3f05891cac5d51ffa068d7076d1372130e00c829
+Directory:  tests/draft2020-12
+License:    MIT (upstream/LICENSE). Copyright (c) 2012 Julian Berman.
+Vendored:   2026-11-02 by test/json_schema/vendor.sh
+
+The files are verbatim. generate.py turns them into test/spec/4[0-2]_json_schema_suite*.sql;
+expectations are never modified. Cases that are not run are listed in skip.tsv with the reason.

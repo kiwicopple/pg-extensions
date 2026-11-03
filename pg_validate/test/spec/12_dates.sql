@@ -1,0 +1,163 @@
+-- Goal: date validators check real calendar dates (leap years, month
+-- lengths, ISO week-numbering years, leap seconds at 23:59 UTC) by
+-- arithmetic, independent of TimeZone and DateStyle: rfc3339 (§5.8 examples
+-- and the JSON Schema test suite), rfc3339_date, rfc3339_time, iso8601,
+-- duration.
+\ir ../fixtures/cases.sql
+
+insert into cases (fn, input, want, note) values
+    -- RFC 3339 §5.8 examples
+    ('rfc3339', '1985-04-12T23:20:50.52Z', true, 'RFC 3339 §5.8'),
+    ('rfc3339', '1996-12-19T16:39:57-08:00', true, 'RFC 3339 §5.8'),
+    ('rfc3339', '1990-12-31T23:59:60Z', true, 'RFC 3339 §5.8 leap second'),
+    ('rfc3339', '1990-12-31T15:59:60-08:00', true, 'RFC 3339 §5.8 leap second'),
+    ('rfc3339', '1937-01-01T12:00:27.87+00:20', true, 'RFC 3339 §5.8'),
+    ('rfc3339', '1985-04-12t23:20:50.52z', true, 'lowercase t and z (§5.6 note)'),
+    ('rfc3339', '2020-02-29T00:00:00Z', true, 'leap day'),
+    ('rfc3339', '2000-02-29T00:00:00Z', true, 'leap day, year divisible by 400'),
+    ('rfc3339', '1998-12-31T15:59:60.123-08:00', true, 'leap second with offset'),
+    ('rfc3339', '2026-11-02T10:00:00-00:00', true, 'unknown local offset (§4.3)'),
+    ('rfc3339', '0000-01-01T00:00:00Z', true, null),
+    ('rfc3339', '2019-02-29T00:00:00Z', false, 'not a leap year'),
+    ('rfc3339', '1900-02-29T00:00:00Z', false, 'century, not a leap year'),
+    ('rfc3339', '2026-04-31T00:00:00Z', false, 'April has 30 days'),
+    ('rfc3339', '2026-13-01T00:00:00Z', false, 'month 13'),
+    ('rfc3339', '2026-00-01T00:00:00Z', false, 'month 0'),
+    ('rfc3339', '2026-01-00T00:00:00Z', false, 'day 0'),
+    ('rfc3339', '1998-12-31T23:59:61Z', false, 'second 61'),
+    ('rfc3339', '1998-12-31T23:58:60Z', false, 'leap second on the wrong minute'),
+    ('rfc3339', '1998-12-31T22:59:60Z', false, 'leap second on the wrong hour'),
+    ('rfc3339', '2026-11-02T24:00:00Z', false, 'hour 24'),
+    ('rfc3339', '2026-11-02T10:00:00', false, 'no offset'),
+    ('rfc3339', '2026-11-02 10:00:00Z', false, 'space separator'),
+    ('rfc3339', '2026-11-02T10:00Z', false, 'no seconds'),
+    ('rfc3339', '2026-11-02T10:00:00+0100', false, 'offset without colon'),
+    ('rfc3339', '2026-11-02T10:00:00+24:00', false, 'offset hour 24'),
+    ('rfc3339', '2026-11-02T10:00:00.Z', false, 'empty fraction'),
+    ('rfc3339', '2026-11-02T10:00:00,5Z', false, 'comma fraction'),
+    ('rfc3339', '26-11-02T10:00:00Z', false, 'two-digit year'),
+    ('rfc3339', '2026-11-02T10:00:00Z ', false, 'trailing space'),
+
+    ('rfc3339_date', '1985-04-12', true, null),
+    ('rfc3339_date', '2024-02-29', true, null),
+    ('rfc3339_date', '2023-02-29', false, null),
+    ('rfc3339_date', '2024-2-29', false, null),
+    ('rfc3339_date', '20240229', false, 'basic format'),
+    ('rfc3339_date', '2024-02-29T00:00:00Z', false, 'date-time'),
+
+    -- JSON Schema test suite (format "time")
+    ('rfc3339_time', '23:20:50.52Z', true, null),
+    ('rfc3339_time', '08:30:06+05:30', true, null),
+    ('rfc3339_time', '23:59:60Z', true, 'leap second, UTC'),
+    ('rfc3339_time', '01:29:60+01:30', true, 'leap second, positive offset'),
+    ('rfc3339_time', '15:59:60-08:00', true, 'leap second, negative offset'),
+    ('rfc3339_time', '23:29:60+23:30', true, 'leap second, large positive offset'),
+    ('rfc3339_time', '22:59:60Z', false, 'leap second on the wrong hour'),
+    ('rfc3339_time', '23:59:60+01:00', false, 'leap second on the wrong hour after the offset'),
+    ('rfc3339_time', '08:30:06', false, 'no offset'),
+    ('rfc3339_time', '24:00:00Z', false, null),
+    ('rfc3339_time', '8:30:06Z', false, null),
+
+    -- ISO 8601-1 profile
+    ('iso8601', '2026-11-02', true, 'calendar, extended'),
+    ('iso8601', '20261102', true, 'calendar, basic'),
+    ('iso8601', '2026-11', true, 'reduced: month'),
+    ('iso8601', '2026', true, 'reduced: year'),
+    ('iso8601', '2026-306', true, 'ordinal, extended'),
+    ('iso8601', '2026306', true, 'ordinal, basic'),
+    ('iso8601', '2020-366', true, 'ordinal day 366 in a leap year'),
+    ('iso8601', '2026-W45-1', true, 'week, extended'),
+    ('iso8601', '2026W451', true, 'week, basic'),
+    ('iso8601', '2026-W45', true, 'reduced week, extended'),
+    ('iso8601', '2026W45', true, 'reduced week, basic'),
+    ('iso8601', '2020-W53-7', true, '2020 has 53 weeks (leap, starts on Wednesday)'),
+    ('iso8601', '2015-W53-1', true, '2015 has 53 weeks (starts on Thursday)'),
+    ('iso8601', '2026-W53-4', true, '2026 has 53 weeks'),
+    ('iso8601', '2026-11-02T10:00:00Z', true, null),
+    ('iso8601', '2026-11-02T10:00', true, 'minute precision, local time'),
+    ('iso8601', '2026-11-02T10', true, 'hour precision'),
+    ('iso8601', '2026-11-02T10:00:00.123+05:30', true, null),
+    ('iso8601', '2026-11-02T10:00:00,5-03', true, 'comma fraction, hour offset'),
+    ('iso8601', '2026-11-02T10:30.5', true, 'fraction of a minute'),
+    ('iso8601', '20261102T100000Z', true, 'basic date and time'),
+    ('iso8601', '20261102T1000+0530', true, 'basic offset'),
+    ('iso8601', '2026-11-02T24:00:00Z', true, 'end of day'),
+    ('iso8601', '2026-11-02T24:00', true, 'end of day'),
+    ('iso8601', '2026-306T12:00Z', true, 'ordinal date and time'),
+    ('iso8601', '2026-W45-1T12:00:00Z', true, 'week date and time'),
+    ('iso8601', '1998-12-31T23:59:60Z', true, 'leap second'),
+    ('iso8601', '2026-02-29', false, 'not a leap year'),
+    ('iso8601', '2026-366', false, 'day 366 in a common year'),
+    ('iso8601', '2026-000', false, 'day 0'),
+    ('iso8601', '2021-W53-1', false, '2021 has 52 weeks'),
+    ('iso8601', '2027-W53-1', false, '2027 has 52 weeks'),
+    ('iso8601', '2026-W00-1', false, 'week 0'),
+    ('iso8601', '2026-W45-8', false, 'weekday 8'),
+    ('iso8601', '2026-W451', false, 'mixed basic and extended'),
+    ('iso8601', '2026W45-1', false, 'mixed basic and extended'),
+    ('iso8601', '202611', false, 'YYYYMM is not ISO 8601'),
+    ('iso8601', '2026-13', false, 'month 13'),
+    ('iso8601', '2026-11-02T', false, 'T without a time'),
+    ('iso8601', '2026-11T10:00', false, 'reduced date with a time'),
+    ('iso8601', '2026-W45T10:00', false, 'reduced week date with a time'),
+    ('iso8601', '20261102T10:00:00', false, 'basic date, extended time'),
+    ('iso8601', '2026-11-02T100000', false, 'extended date, basic time'),
+    ('iso8601', '2026-11-02T10:00:00+0530', false, 'extended time, basic offset'),
+    ('iso8601', '2026-11-02T24:00:01Z', false, 'past the end of day'),
+    ('iso8601', '2026-11-02T24:30', false, null),
+    ('iso8601', '2026-11-02T24:00:00.5', false, null),
+    ('iso8601', '2026-11-02T10:60', false, 'minute 60'),
+    ('iso8601', '2026-11-02T25', false, 'hour 25'),
+    ('iso8601', '2026-11-02t10:00Z', false, 'lowercase t'),
+    ('iso8601', '2026-11-02 10:00', false, 'space separator'),
+    ('iso8601', '10:00:00', false, 'time without a date'),
+    ('iso8601', '+12026-11-02', false, 'expanded year'),
+    ('iso8601', '2026-11-02T10:00:00Z+01', false, null),
+    ('iso8601', '2026-11-02T10.5:00', false, 'fraction not on the last component'),
+    ('iso8601', '', false, null),
+
+    -- ISO 8601 durations; the JSON Schema test suite's "duration" cases
+    ('duration', 'P4Y', true, null),
+    ('duration', 'P1Y2M3DT4H5M6S', true, null),
+    ('duration', 'PT0S', true, null),
+    ('duration', 'P0D', true, null),
+    ('duration', 'P1M', true, 'one month'),
+    ('duration', 'PT1M', true, 'one minute'),
+    ('duration', 'PT36H', true, null),
+    ('duration', 'P1DT12H', true, null),
+    ('duration', 'P2W', true, null),
+    ('duration', 'P1Y2D', true, 'not in RFC 3339 Appendix A, valid ISO 8601'),
+    ('duration', 'PT0.5S', true, 'fraction'),
+    ('duration', 'P0,5Y', true, 'comma fraction'),
+    ('duration', 'PT1H30.25M', true, 'fraction on the last component'),
+    ('duration', 'P', false, 'no elements'),
+    ('duration', 'PT', false, 'no time elements'),
+    ('duration', 'P1YT', false, 'T without time elements'),
+    ('duration', 'P1Y2W', false, 'weeks combined with other units'),
+    ('duration', 'P1', false, 'no unit'),
+    ('duration', 'PT1D', false, 'day in the time part'),
+    ('duration', 'P2D1Y', false, 'out of order'),
+    ('duration', 'P1D2H', false, 'missing T'),
+    ('duration', 'P2S', false, 'second in the date part'),
+    ('duration', '1Y', false, 'no P'),
+    ('duration', 'p1y', false, 'lowercase'),
+    ('duration', 'P1.5Y2M', false, 'fraction not on the last component'),
+    ('duration', 'PT1.5H2.5M', false, 'two fractions'),
+    ('duration', 'P-1Y', false, 'negative'),
+    ('duration', 'P1.Y', false, 'empty fraction'),
+    ('duration', 'P২Y', false, 'non-ASCII digit');
+
+select tap.plan((select count(*)::int from cases) + 4);
+\ir ../fixtures/run_cases.sql
+
+-- No dependency on session settings
+set timezone = 'Pacific/Chatham';
+set datestyle = 'SQL, DMY';
+select tap.is(validate.rfc3339(value => '1990-12-31T15:59:60-08:00'), true, 'rfc3339 ignores TimeZone and DateStyle');
+select tap.is(validate.iso8601(value => '2020-W53-7T24:00Z'), true, 'iso8601 ignores TimeZone and DateStyle');
+select tap.is(validate.rfc3339(value => '2019-02-29T00:00:00Z'), false, 'still rejects a non-leap day under other settings');
+reset timezone;
+reset datestyle;
+select tap.is(validate.rfc3339(null), null, 'null in, null out');
+
+select * from tap.finish();

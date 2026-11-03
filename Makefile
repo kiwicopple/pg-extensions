@@ -12,6 +12,9 @@ help:
 	@echo "make docs  				# build the documentation site (pg_permissions/site/dist)"
 	@echo "make docs.dev  				# run the documentation site locally with hot reload"
 	@echo "make docs.sync  			# re-sync pg_permissions markdown and benchmark data into pg_permissions/site/"
+	@echo "make test.pg_validate  			# run the pg_validate test suite on a local throwaway Postgres"
+	@echo "make test.pg_validate.docker  		# run the pg_validate test suite on Postgres 16, 17 and 18 (Docker)"
+	@echo "make docs.pg_validate  			# build the pg_validate documentation site (pg_validate/site/dist)"
 
 reset:
 	supabase db reset
@@ -20,7 +23,8 @@ reset:
 tle.install: \
 	tle.install.pg_idkit \
 	tle.install.is_even \
-	tle.install.pg_permissions
+	tle.install.pg_permissions \
+	tle.install.pg_validate
 	@echo "\n\nDone!"
 
 tle.install.%:
@@ -60,3 +64,23 @@ docs.dev: $(SITE)/node_modules
 
 docs.sync: $(SITE)/node_modules
 	npm --prefix pg_permissions run docs:sync
+
+# pg_validate: test suite and documentation site (see pg_validate/test/README.md and
+# pg_validate/site/README.md)
+PG_VALIDATE_SITE := $(REPO_DIR)/pg_validate/site
+
+.PHONY: test.pg_validate test.pg_validate.docker docs.pg_validate docs.pg_validate.dev
+test.pg_validate:
+	cd $(REPO_DIR)/pg_validate && ./test/run.sh
+
+test.pg_validate.docker:
+	cd $(REPO_DIR)/pg_validate && ./docker/run-matrix.sh
+
+$(PG_VALIDATE_SITE)/node_modules: $(PG_VALIDATE_SITE)/package-lock.json
+	npm --prefix pg_validate run docs:install
+
+docs.pg_validate: $(PG_VALIDATE_SITE)/node_modules
+	npm --prefix pg_validate run docs:build
+
+docs.pg_validate.dev: $(PG_VALIDATE_SITE)/node_modules
+	npm --prefix pg_validate run docs:dev

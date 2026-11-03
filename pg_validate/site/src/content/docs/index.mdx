@@ -1,0 +1,43 @@
+---
+title: pg_validate
+description: Boolean validators for common string formats in Postgres, for CHECK constraints, with a registry of named formats.
+template: splash
+hero:
+  tagline: Email addresses, URLs, UUIDs, dates, ISO codes and IBANs, checked against their specifications, in a CHECK constraint.
+  actions:
+    - text: Validate your first table
+      link: ./get-started/quickstart/
+      icon: right-arrow
+    - text: Install
+      link: ./install/
+      variant: minimal
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+`pg_validate` is a pure SQL extension for Postgres 16, 17 and 18. Each validator takes a `text` value and returns a boolean, so it works in `CHECK` constraints, domains and queries. Built-in validators are `IMMUTABLE STRICT PARALLEL SAFE`, and the markings are true.
+
+Read the [overview](./overview/) for what the extension checks, and what no validator can check: a valid email address can still be undeliverable.
+
+## Find a validator
+
+<CardGrid>
+  <LinkCard title="Identifiers" description="uuid, ulid, nanoid, slug, semver, git_sha" href="./reference/identifiers/" />
+  <LinkCard title="Internet" description="email, url, uri, hostname, domain, ipv4, ipv6, mac, port" href="./reference/internet/" />
+  <LinkCard title="Dates and times" description="rfc3339, iso8601 and duration, with real calendar checks" href="./reference/dates/" />
+  <LinkCard title="International" description="e164, ISO 3166 country, ISO 4217 currency and ISO 639 language codes" href="./reference/international/" />
+  <LinkCard title="Developer formats" description="base64, base64url, hex, json_pointer, cron" href="./reference/developer/" />
+  <LinkCard title="Financial" description="iban, isbn, card_number, luhn" href="./reference/financial/" />
+</CardGrid>
+
+## Register your own formats
+
+The [format registry](./guides/custom-formats/) names every validator, so `validate.format('email', value)` works, and lets trusted roles add their own. Custom validators run with the caller's privileges.
+
+## Validate JSON documents
+
+[`validate.json_schema(doc, schema)`](./reference/json-schema/) checks `jsonb` against JSON Schema Draft 2020-12 in PL/pgSQL, with `format` asserted through the registry, so your custom formats work in schemas too. It passes the official JSON Schema Test Suite apart from documented exceptions.
+
+The [roadmap](./plans/roadmap/) lists candidate formats.
+
+For agents and other tools, the [Markdown index](./llms.txt) links to plain-text versions of every page.
