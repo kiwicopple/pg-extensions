@@ -271,4 +271,4 @@ A datetime has a year from 0000 to 9999. It has no leap seconds. The method `off
 
 ## Next step
 
-Continue with [Cedar in RLS](../../rls/policies.md#policies-for-cedar), or read [Compatibility](compatibility.md).
+Use the checks in [your application](../../integrations/checks.md), optionally add [Cedar in RLS](../../rls/policies.md#policies-for-cedar), or read [Compatibility](compatibility.md).

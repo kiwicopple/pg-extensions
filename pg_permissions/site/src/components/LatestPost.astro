@@ -1,0 +1,20 @@
+---
+import { publishedPosts, sitePath } from '../lib/blog';
+const [post] = await publishedPosts();
+---
+
+{post && <aside aria-label="Latest blog post" class="latest-post">
+	<p class="label">From the blog</p>
+	<h2><a href={sitePath(`blog/${post.id}/`)}>{post.data.title}</a></h2>
+	<p>{post.data.description}</p>
+	<a href={sitePath(`blog/${post.id}/`)}>Read the story →</a>
+</aside>}
+
+<style>
+	.latest-post { border-block: 1px solid var(--sl-color-hairline); padding-block: 1.75rem; margin-block: 3rem; }
+	.label { font-size: 0.8rem; color: var(--sl-color-gray-3); }
+	h2 { margin-top: 0.5rem; }
+	h2 a { color: var(--sl-color-white); text-decoration: none; }
+	h2 a:hover { color: var(--sl-color-text-accent); }
+	p:not(.label) { max-width: 65ch; }
+</style>

@@ -40,7 +40,7 @@ See [Contextual tuples](models/openfga/checks.md#contextual-tuples).
 
 ## Functions for RLS
 
-See [Functions for RLS](models/openfga/checks.md#functions-for-rls).
+See [Check for the current subject](models/openfga/checks.md#check-for-the-current-subject). These functions work in application code and RLS.
 
 ## Change the model
 

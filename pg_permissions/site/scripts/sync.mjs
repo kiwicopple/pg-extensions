@@ -240,6 +240,8 @@ function escapeMdx(body) {
 				return line;
 			}
 			if (fence || /^\s*<\/?(Tabs|TabItem)\b/.test(line)) return line;
+			// Keep explicit compatibility anchors when a page becomes MDX for code tabs.
+			if (/^\s*<span id="[a-z0-9-]+"><\/span>\s*$/.test(line)) return line;
 			return line
 				.split(/(`+[^`]*`+)/)
 				.map((part, i) => (i % 2 ? part : part.replace(/[{}<]/g, (c) => '\\' + c)))
@@ -328,7 +330,7 @@ function syncPlainMarkdown() {
 	const site = (process.env.DOCS_SITE ?? '').replace(/\/$/, '');
 	const index = [
 		'# pg_permissions', '',
-		'> Authorization in Postgres: RBAC, OpenFGA relationships and Cedar policies, enforced through RLS.', '',
+		'> Authorization store and check engine in Postgres: RBAC, OpenFGA relationships and Cedar policies. Call from your backend or optionally enforce access with RLS.', '',
 		'Use current guides and reference for implementation. Research records include historical designs and superseded plans.',
 		'The extension has three models: RBAC, OpenFGA and Cedar. SQL and JavaScript examples are both included in Markdown.', '',
 		'## Guides and reference', '',
@@ -346,7 +348,9 @@ function syncPlainMarkdown() {
 		const group = page.route.startsWith('research/') ? 'research' : page.route.startsWith('contributing/') ? 'contributing' : 'current';
 		groups[group].push(`- [${title}](${site}${base}/markdown/${page.route}.md): ${description}`);
 	}
-	index.push(...groups.current, '', '## Research and design records', '', ...groups.research, '', '## Contributing', '', ...groups.contributing);
+	index.push(...groups.current, '', '## Blog', '',
+		`- [Blog](${site}${base}/blog/): Release stories and design essays. Each post links to a plain Markdown version.`,
+		'', '## Research and design records', '', ...groups.research, '', '## Contributing', '', ...groups.contributing);
 	fs.writeFileSync(path.join(publicDir, 'llms.txt'), index.join('\n') + '\n');
 	console.log(`sync: ${AVAILABLE.length} plain Markdown exports and llms.txt`);
 }

@@ -1073,3 +1073,57 @@ Orchestrator choices: fixed constant caps (OpenFGA makes them configurable; here
 ### Angle for the post
 
 - "No weaker than X" is a claim to test, not to accept. The agent that wrote the cache reasoned about trust in one paragraph; the reviewer broke it with eight lines of SQL. The fix cost 3 µs per row.
+
+## Session 11 (2026-11-03): a security pass and a performance pass
+
+Two passes over the finished Cedar build, both landed in the working tree uncommitted. The security pass came first, then the performance pass on top of it.
+
+### 1. The security pass: five fixes
+
+- **Critical: `search_path = ''` is not safe in a definer function.** Every function pinned `set search_path = ''`, which looks like the careful choice, and the Cedar review in session 10 even wrote a spec to check for it. But when `pg_temp` is not in the `search_path`, Postgres searches it *first* for type and relation names. Any role with the default TEMP privilege (`anon`, `authenticated`) can `create domain pg_temp.text` (or `jsonb`, or `bytea`) with a CHECK constraint that calls the attacker's function. The next time one of our functions casts to `text`, the check runs, as the extension owner. 39 of the 42 functions that pin a search path are `security definer`. We reproduced `alter role mallory superuser` on a superuser-owned install. The fix is `set search_path = pg_catalog, pg_temp` everywhere, and the upgrade script ALTERs the 0.0.1 functions. The released 0.0.1 is vulnerable, so the docs now say to upgrade.
+- **Medium: a DoS through the hint.** `_did_you_mean` (the "did you mean ...?" text on an unknown-relation error) was quadratic in the input, and a client reaches it through `fga_check_current` or `fga_list_object*_current` by passing a bad relation. 20,000 characters took 3 to 6 s, 100,000 took minutes. The fix skips candidates whose length differs from the input by more than the distance threshold. Same results, linear in practice.
+- **Low: `standard_conforming_strings`.** A client that ran `set standard_conforming_strings = off` changed how a definer body parsed, and `cedar_is_authorized_current` failed to compile. Definers now pin `standard_conforming_strings = on`.
+- **Low: `create schema if not exists`.** An install into a pre-existing `permissions` schema, owned or writable by another role, was accepted. Whoever owns the schema can replace the functions and so decide every check. The install now raises 42501.
+- **Low: our docs taught the bug.** The user docs showed `search_path = ''` in user-written definer functions (cleanup trigger, `fga_check_now`). Fixed, and `privileges.md` has a "Security properties" section.
+- **Known limits, documented and not fixed:** a client with direct SQL can set its own subject with `set_config` and read the cached Cedar filter (PostgREST clients cannot call either); a JWT without `sub` falls back to the `permissions.subject_id` setting; functions a user adds to the schema later get PUBLIC EXECUTE by default.
+- **Not fixed, found while writing this up:** no table is marked `pg_extension_config_dump`. `pg_dump` and restore of a `create extension` install (pg_tle, database.dev) loses every role, tuple, policy and entity. It fails closed, which is the only good thing about it. Plain-psql installs dump normally. Added to `docs/install.md`.
+
+### 2. The regression guard
+
+- New spec `test/spec/d/06_security_invariants.sql`, 49 assertions. It builds its object list from the catalogs, so a new function is covered without anyone adding it. It checks: definer settings pinned; PUBLIC, `anon` and `authenticated` EXECUTE limited to an allowlist; no client table privileges; no dynamic SQL; no unqualified names; client write attempts refused; NULL and malformed input denies; a Cedar forbid beats a permit; injection payloads inert.
+- **Against the pre-fix code, 13 of the 49 fail.** That is the useful number: the guard would have caught the critical bug, and the old `02_security.sql` could not, because it asserted the buggy value.
+- Cost of the hardening: about 0.1 to 0.2 µs per call, inside the noise.
+
+### 3. The performance pass (PG 16.4 local, 4 clients, p50 ms, baseline to final)
+
+- **Cedar `row_select_page` (per-row RLS):** small 35.5 to 27.5 (p95 45.7 to 39.4); medium 89.4 to 70.3 (p95 122.7 to 96.8). About -21%. On the PG 18 Docker setup, 34 to 25 ms in the server.
+- **In the server, per transaction, PG 16:** `rbac_has_permission` 21.8 to 12.1 µs; FGA `list_objects` 125 to 90 µs (-28%); Cedar statement-level check with a conditional policy 272 to 218 µs.
+- **pgbench, design d small:** `share_select_page` 0.47 to 0.39, `parents_proj_select_count` 0.50 to 0.40, `parents_select_page` 0.46 to 0.38, `block_list_objects` 0.39 to 0.34.
+- **The main insight (we had seen it before and forgot it).** A SQL-language function that has a `SET search_path` clause, or an `exists` subquery, cannot be inlined, and before PG 18 Postgres plans it again on every call. `current_subject_id` alone was 9.3 µs of a 28 µs `rbac_has_permission`. This is the same trap as session 2's "SQL functions re-planned on every call", in the toolkit this time, in the function every policy calls. Moving `current_subject_id`, `current_subject_type`, `_fga_path_exists`, `_cedar_current_env` and `_cedar_attrs_plain` to PL/pgSQL (cached plans) fixed it. PG 18 caches SQL-function plans, so the gain there is smaller: `rbac_has_permission` 12.5 to 10.9 µs, FGA list flat.
+- **Cedar per-row work:** `_cedar_decide` dropped its per-row SPI subqueries (index loops plus a `jsonb[]` FOREACH); the env is built in one `||`; the ancestor `bool_or` query became a loop; `_cedar_current_filter` folded four passes into one.
+- **The wrong turn.** The first attempt at folding the filter flags made the per-row cost 2.3x *slower* (92 to 215 µs). Postgres flattened the subquery into the outer query and ran `jsonb_build_object` about ten times per row. `offset 0` (an optimization fence) fixed it, final 84 µs. The same fold in `cedar_list_resources_current` gave no gain and was reverted. Removing the per-row secret read was worth about 1 µs a row and was not pursued.
+- **Where Cedar stands:** still about 40 µs a row, 21% of it building the jsonb env and 16% SPI (mostly the ancestors walk). A future evaluator refactor could take the resource bindings separately from the env.
+
+### 4. Verification
+
+- Full suite on PG 16, 17 and 18, on a fresh install and on an install upgraded from 0.0.1: 263 of 263 files and 169,987 assertions each (session 10 ended at 262 files and 169,938; the new spec is the extra file).
+- `bench --check` small: design d met 14 of 14 budgets. Design e misses only `write_nest_team` p95, the documented row-lock contention between four writers on one entity. It missed in the baseline too.
+
+### Possible angles for the blog post (session 11 additions)
+
+- **"The safe-looking default was the bug."** `search_path = ''` is what most guides tell you to use. In a definer function it hands the first lookup to the caller's temp schema. We had written a test that asserted the wrong value.
+- **"Test the invariant, not the instance."** A spec that builds its object list from the catalogs found 13 problems in the old code and covers every function we add later.
+- **"Review the fix's own advice."** The docs were teaching the vulnerable pattern to users. The library bug was also a documentation bug.
+- **"An optimization that made it 2.3x slower."** Folding four passes into one looked free. The planner flattened it. `offset 0` is still the tool for this.
+- **"The slowest part of a permission check was finding out who is asking."** 9.3 of 28 µs was the subject lookup.
+- **"A hint that was a denial of service."** Friendly error messages are attack surface: 20,000 characters, 3 to 6 s, reachable by any client.
+
+### Numbers worth quoting (session 11)
+
+- 42 functions pin a search path, 39 of them `security definer`; 1 critical, 1 medium, 3 low findings.
+- 49 invariant assertions, 13 failing on the pre-fix code.
+- `_did_you_mean`: 20k characters 3 to 6 s, 100k minutes, now linear in practice.
+- Hardening cost 0.1 to 0.2 µs per call; per-row Cedar page -21% (p50 small 35.5 to 27.5 ms, medium 89.4 to 70.3 ms).
+- `rbac_has_permission` 21.8 to 12.1 µs (PG 16); 9.3 µs of the old 28 µs was `current_subject_id`.
+- Filter fold: 92 to 215 µs (wrong) to 84 µs (`offset 0`).
+- 263 files, 169,987 assertions, on PG 16, 17 and 18, fresh and upgraded.

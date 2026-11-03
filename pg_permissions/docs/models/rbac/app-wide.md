@@ -1,12 +1,42 @@
 # App-wide roles
 
-Protect a table with permissions that apply across your application.
+Check permissions that apply across your application. You can use the result in a backend request handler, or optionally enforce the permission on a table with RLS.
 
-First run the [RBAC setup](overview.md), including the role definitions and assignments. Use the same psql session or JavaScript variables. SQL examples that switch to `authenticated` test the policies as an application client.
+First run the [RBAC setup](overview.md), including the role definitions and assignments. Use the same psql session or JavaScript variables. The initial checks need no application table. Later SQL examples switch to `authenticated` to test the optional RLS policies.
 
 ## Scenario 1: app-wide roles
 
-Alice is an `admin`, Bob is an `editor` and Carol is a `viewer`, all app-wide. The rule is: SELECT needs `documents.read`, UPDATE needs `documents.edit`, and DELETE needs `documents.delete`.
+Alice is an `admin`, Bob is an `editor` and Carol is a `viewer`, all app-wide. Carol can read documents but cannot edit them:
+
+```sql tab="SQL"
+begin;
+select set_config('permissions.subject_id', :'carol', true);
+select permissions.rbac_has_permission(permission => 'documents.read');
+-- true
+select permissions.rbac_has_permission(permission => 'documents.edit');
+-- false
+commit;
+```
+
+```ts tab="JavaScript"
+const asCarol = permissions.as({ id: carol })
+const { data: canRead, error: readError } = await asCarol.rbac.hasPermission({
+  permission: 'documents.read',
+})
+if (readError) throw readError
+// canRead: true
+const { data: canEdit, error: editError } = await asCarol.rbac.hasPermission({
+  permission: 'documents.edit',
+})
+if (editError) throw editError
+// canEdit: false
+```
+
+Your backend can use these answers before carrying out an operation. See [Check access in your application](../../integrations/checks.md) for the request-handler flow, or continue with [tenant-scoped roles](tenants.md).
+
+## Optional: enforce access with RLS
+
+To enforce the same permissions on table queries, create policies where SELECT needs `documents.read`, UPDATE needs `documents.edit`, and DELETE needs `documents.delete`.
 
 ```sql
 create table public.documents (

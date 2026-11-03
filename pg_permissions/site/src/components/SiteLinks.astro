@@ -1,0 +1,19 @@
+---
+import SocialIcons from '@astrojs/starlight/components/SocialIcons.astro';
+import { sitePath } from '../lib/blog';
+
+const isBlog = Astro.url.pathname.startsWith(sitePath('blog/'));
+---
+
+<nav aria-label="Site sections">
+	<a href={sitePath('overview/')} aria-current={!isBlog ? 'location' : undefined}>Docs</a>
+	<a href={sitePath('blog/')} aria-current={isBlog ? 'location' : undefined}>Blog</a>
+</nav>
+<SocialIcons />
+
+<style>
+	nav { display: flex; align-items: center; gap: 1.25rem; font-size: 0.875rem; }
+	a { color: var(--sl-color-gray-2); text-decoration: none; }
+	a:hover, a[aria-current] { color: var(--sl-color-white); }
+	a[aria-current] { text-decoration: underline; text-underline-offset: 0.4em; }
+</style>

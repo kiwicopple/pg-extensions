@@ -2,7 +2,7 @@
 
 Use the `permissions` package to call the extension from Node, browsers, Deno, or Bun. A server connects over SQL; a browser or edge function uses PostgREST.
 
-Install `pg_permissions` in the database first. Model guides show SQL and JavaScript together. See the [client reference](../reference/javascript.md) for methods, return values, and errors.
+Install `pg_permissions` in the database first. You can use the client as your backend's authorization API without creating RLS policies. [Check access in your application](checks.md) shows how to enforce the returned decision. Model guides show SQL and JavaScript together. See the [client reference](../reference/javascript.md) for methods, return values, and errors.
 
 ## Install
 

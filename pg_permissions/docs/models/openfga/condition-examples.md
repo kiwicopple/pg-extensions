@@ -441,4 +441,4 @@ commit;
 
 ## Next step
 
-Continue with [Condition evaluation and RLS](condition-behavior.md).
+Continue with [Condition evaluation and context](condition-behavior.md).

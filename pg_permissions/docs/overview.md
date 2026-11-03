@@ -1,8 +1,10 @@
 # Overview
 
-`pg_permissions` is an authorization extension for Postgres. It stores application roles, sharing relationships and policies in your database, and gives you functions to use in row level security (RLS) policies. Your application manages who has access; Postgres enforces that access when it reads or writes rows.
+`pg_permissions` is an authorization store and check engine for Postgres. It stores application roles, sharing relationships and policies, with SQL functions and a JavaScript client to manage them and ask who can do what. Your backend can use those answers to authorize requests, without enabling row level security (RLS).
 
-For example, a document app might let editors change any document in their organization, let a guest read one shared document, and block a suspended user from both. The extension provides the permission models for those rules, while RLS brings them together on the documents table.
+If you already use Postgres, it is an alternative to running a separate authorization service. A document app can store its roles and shares here, check whether a user can edit a document, and allow or reject the operation in its backend. You can also call the functions from RLS policies if you want Postgres to enforce access on tables.
+
+The models follow familiar authorization approaches, with documented [OpenFGA](models/openfga/compatibility.md) and [Cedar](models/cedar/compatibility.md) compatibility. Moving from another tool means mapping your model and integration to these APIs; the extension does not expose that tool's HTTP service.
 
 ## Why we built it
 
@@ -10,13 +12,13 @@ For example, a document app might let editors change any document in their organ
 
 Authorization usually depends on the data being accessed: who owns a document, which organization it belongs to, or whether it has been shared with a team. We believe the best place to evaluate those rules is alongside that data.
 
-With authorization inside Postgres, a query can enforce access and return the permitted rows without a separate round trip to an authorization service. Running the checks adds database work, and evaluating a rule in SQL may cost more than evaluating it in a dedicated engine. Our premise is that avoiding network round trips and moving data between services can more than offset that cost. What matters is the time and total cost of serving an authorized request, including access to the data itself.
+With authorization inside Postgres, permission changes and application data can share a transaction. Checks can run from your backend or inside a database query, without a separate authorization service. Running the checks adds database work, and evaluating a rule in SQL may cost more than evaluating it in a dedicated engine. Our premise is that avoiding network round trips and moving data between services can more than offset that cost. What matters is the time and total cost of serving an authorized request, including access to the data itself.
 
 ### Give Postgres more ways to express access
 
-RLS provides the enforcement point. Established authorization models provide ways to describe the rules. Combining them lets an application use roles for organization-wide access, relationships for individual shares, and row attributes for rules such as hiding drafts.
+Established authorization models let an application use roles for organization-wide access, relationships for individual shares, and Cedar policies for attribute rules. Your backend can evaluate these rules through the extension's functions and decide whether to carry out an operation.
 
-An app can start with roles and add sharing later, without replacing its existing permissions. Each model keeps its own semantics, while RLS policies combine their decisions on the same table. This makes Postgres useful for a wider range of authorization requirements.
+An app can start with roles and add sharing later, without replacing its existing permissions. Each model keeps its own semantics. When you want enforcement on database rows, the same functions can be used in RLS policies. The choice of permission model and the choice of where to enforce it are separate.
 
 ### Build on models people and LLMs already know
 
@@ -34,28 +36,30 @@ The extension has three permission models in the `permissions` schema:
 | Relationships (OpenFGA) | Individual shares, nested teams, and access inherited from folders | Bob can read a document because it is shared with his team. |
 | Policies (Cedar) | Reviewed policy text, rules on attributes, and explicit denies | Owners edit their own documents. A confidentiality rule can override that access. |
 
-OpenFGA relationships can also have CEL conditions, such as an expiry time. The models can work together: one RLS policy grants access through a role, another grants it through a share or a Cedar policy, and a restrictive policy can deny access across all of them.
+OpenFGA relationships can also have CEL conditions, such as an expiry time. Your backend can combine model checks, for example allowing access through either a role or a share while rejecting suspended users. RLS policies provide another way to enforce that combination on a table.
 
-Cedar's admin API also accepts trusted request context, such as an MFA result or a client address. Its RLS helpers use stored entities and, for row checks, attributes passed from the row. They do not accept request context. A Cedar `forbid` overrides Cedar permits; [a restrictive RLS policy](rls/combine-models.md#add-cedar-as-a-third-model) extends that deny across the other models.
+Cedar's admin API also accepts trusted request context, such as an MFA result or a client address. Its current-subject functions use stored entities and can receive resource attributes supplied by your backend or an RLS policy. They do not accept request context. A Cedar `forbid` overrides Cedar permits; it does not automatically override another model's answer. Your backend must apply any deny across models, or you can use [a restrictive RLS policy](rls/combine-models.md#add-cedar-as-a-third-model).
+
+A **Cedar policy** defines an authorization rule. A **Postgres RLS policy** enforces an expression on table reads or writes. You can use Cedar policies without creating any RLS policies.
 
 [Choose a permission model](get-started/choose-a-model.md) walks through the options. Each model has its own guide, its own functions and its own data. The structure leaves room for other models alongside them.
 
 ## Goals that shape the extension
 
-- Keep authorization close to the data. Permission changes and application queries use Postgres, and RLS enforces access on the rows involved.
-- Make read policies practical on large tables. Helpers list accessible scopes or object IDs so a query can compute them once and use an index. [Policy shape matters](rls/performance.md); a per-row check is not always the right choice.
+- Keep authorization close to the data. Store permission data and evaluate access in Postgres, with enforcement in your backend, database functions, or optional RLS policies.
+- Provide useful checks and lists. Ask whether an operation is allowed, list accessible scopes or object IDs, and use those answers in application code or queries. For RLS on large tables, [policy shape matters](rls/performance.md); a per-row check is not always the right choice.
 - Work with an application's existing identity system. The extension reads a subject from JWT claims or transaction-local settings. It does not store users or require a Supabase `auth` schema.
 - Keep installation portable. The implementation is SQL and PL/pgSQL, supports Postgres 16, 17, and 18, and can be installed without superuser rights. There is no C module or separate authorization service to run.
 - Make behavior inspectable. The project uses executable examples, pinned OpenFGA and Cedar test suites, and benchmarks to check its rules and performance. Compatibility differences ([OpenFGA](models/openfga/compatibility.md), [Cedar](models/cedar/compatibility.md)) and [limits](reference/limits.md) are documented explicitly.
 
 ## Where it fits in your application
 
-Your authentication system establishes who is making a request. A trusted backend assigns roles, writes sharing relationships, or manages Cedar policies and entities, using SQL or the JavaScript client. Application clients can check their own permissions, and RLS policies control which rows their queries can read or change.
+Your authentication system establishes who is making a request. A trusted backend assigns roles, writes sharing relationships, or manages Cedar policies and entities, using SQL or the JavaScript client. It checks access before returning data or carrying out an operation, and handles a denied result or an error.
 
-A permission check does not read your application tables. If a policy adds a rule such as “only editors can see drafts,” an application check alone does not include that rule. Use checks to guide the interface and let RLS make the final decision about row access.
+A permission check returns a decision; it does not block a later query by itself. Browser checks can guide the interface, but a trusted backend or database policy must enforce access. If you choose RLS, Postgres applies the policies to table queries. A standalone check does not include extra rules you put only in RLS. See [Check access in your application](integrations/checks.md).
 
 ## Start here
 
-[Install the extension](install.md), then follow the [quickstart](get-started/quickstart.md) to protect a table and compare what two users can see. For an existing application, read [identity and request context](integrations/identity.md) and choose the model that matches your access rules.
+[Install the extension](install.md), then follow the [quickstart](get-started/quickstart.md) to assign a role and check access for two users. Connect those checks to your backend with [Check access in your application](integrations/checks.md). If you want table-level enforcement, continue with the optional RLS example.
 
 The [documentation map](README.md) links to individual tasks. The [research section](../research/README.md) preserves the design experiments and measurements behind the implementation.

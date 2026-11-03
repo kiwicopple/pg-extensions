@@ -31,29 +31,68 @@
 
 create schema if not exists permissions;
 
+-- A schema that already exists must be the installer's. Its owner, and any
+-- role with CREATE on it, could drop or replace the functions below and so
+-- decide every check. A superuser's schema is trusted.
+do $$
+declare
+    s record;
+begin
+    select n.nspowner, n.nspacl, r.rolname, r.rolsuper into s
+    from pg_catalog.pg_namespace n join pg_catalog.pg_roles r on r.oid = n.nspowner
+    where n.nspname = 'permissions';
+    if s.rolname <> current_user and not s.rolsuper then
+        raise exception 'schema permissions is owned by role %, not by the installing role %', s.rolname, current_user
+            using errcode = '42501',
+                  hint = 'Drop the schema, or install as its owner. Another owner could replace the permission checks.';
+    end if;
+    if exists (select 1 from pg_catalog.aclexplode(s.nspacl) a
+               where a.privilege_type = 'CREATE' and a.grantee <> s.nspowner) then
+        raise exception 'another role has CREATE on schema permissions'
+            using errcode = '42501',
+                  hint = 'Revoke CREATE on schema permissions from every role but its owner, then install again.';
+    end if;
+end;
+$$;
+
+-- Every function that sets search_path sets pg_catalog, pg_temp. Postgres
+-- searches pg_temp first for type and table names when search_path does not
+-- name it, so with search_path '' a caller's temporary domain named text or
+-- jsonb ran its check as the owner. Security definer functions also set
+-- standard_conforming_strings, so a caller's setting cannot change how
+-- their string literals parse.
+
 -- ============================================================================
 -- Toolkit: identity and the plan-time guard (shared by every model)
 -- ============================================================================
 
 -- JWT `sub` (PostgREST / Supabase) wins; the session setting is the fallback
--- for plain Postgres, tests and server-side jobs.
+-- for plain Postgres, tests and server-side jobs. PL/pgSQL, not SQL: the
+-- search_path setting keeps a SQL function from being inlined, and Postgres
+-- before 18 then plans its body again in every statement (about 9 us of a
+-- 28 us rbac_has_permission); PL/pgSQL caches the plan, and per row it is
+-- faster too.
 create function permissions.current_subject_id()
 returns text
-language sql stable
-set search_path = ''
+language plpgsql stable
+set search_path = pg_catalog, pg_temp
 as $$
-    select coalesce(
+begin
+    return coalesce(
         nullif(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub', ''),
         nullif(current_setting('permissions.subject_id', true), '')
-    )
+    );
+end;
 $$;
 
 create function permissions.current_subject_type()
 returns text
-language sql stable
-set search_path = ''
+language plpgsql stable
+set search_path = pg_catalog, pg_temp
 as $$
-    select coalesce(nullif(current_setting('permissions.subject_type', true), ''), 'user')
+begin
+    return coalesce(nullif(current_setting('permissions.subject_type', true), ''), 'user');
+end;
 $$;
 
 -- Default of the ignored trailing argument of functions that RLS policies
@@ -103,14 +142,19 @@ $$;
 
 -- '<what>: a, b, c.' (sorted, at most 20 names), preceded by 'Did you mean
 -- ''x''? ' when a name is within a third of the input's length (1 to 3 edits,
--- case-insensitive). Null when there are no names.
+-- case-insensitive). Null when there are no names. The edit distance is at
+-- least the difference in length, so a name of another length is skipped
+-- before _edit_distance runs: its time grows with the square of the input's
+-- length, and a client's input can be long (fga_check_current raises with
+-- this hint).
 create function permissions._did_you_mean(p_input text, p_names text[], p_what text)
 returns text
 language sql immutable
 as $$
     select concat(
         (select format('Did you mean ''%s''? ', n) from unnest(p_names) n
-         where permissions._edit_distance(lower(p_input), lower(n)) <= greatest(1, least(3, char_length(p_input) / 3))
+         where case when abs(char_length(lower(p_input)) - char_length(lower(n))) <= greatest(1, least(3, char_length(p_input) / 3))
+                    then permissions._edit_distance(lower(p_input), lower(n)) <= greatest(1, least(3, char_length(p_input) / 3)) end
          order by permissions._edit_distance(lower(p_input), lower(n)), n limit 1),
         p_what, ': ',
         (select string_agg(n, ', ' order by n) from (select n from unnest(p_names) n order by n limit 20) l),
@@ -280,7 +324,8 @@ $$;
 create function permissions.rbac_create_role(role text, permissions text[], inherits text[] default '{}')
 returns void
 language plpgsql security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 declare
     x text;
@@ -340,7 +385,8 @@ $$;
 create function permissions.rbac_drop_role(role text)
 returns void
 language plpgsql security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 declare
     heirs text[];
@@ -366,7 +412,8 @@ $$;
 create function permissions.rbac_assign_role(user_id text, role text, scope text default null)
 returns void
 language plpgsql security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 begin
     if not exists (select 1 from permissions.rbac_roles r where r.role = rbac_assign_role.role) then
@@ -388,7 +435,8 @@ $$;
 create function permissions.rbac_unassign_role(user_id text, role text, scope text default null)
 returns void
 language plpgsql security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 begin
     if rbac_unassign_role.user_id is null then
@@ -418,7 +466,8 @@ $$;
 create function permissions.rbac_has_permission(permission text, scope text default null)
 returns boolean
 language plpgsql stable security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 declare
     uid text := permissions.current_subject_id();
@@ -446,7 +495,8 @@ $$;
 create function permissions.rbac_has_role(role text, scope text default null)
 returns boolean
 language plpgsql stable security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 declare
     uid text := permissions.current_subject_id();
@@ -477,7 +527,8 @@ create function permissions.rbac_scopes_with_permission(permission text,
                                                         plan_time_guard boolean default permissions._unfolded_null())
 returns text[]
 language plpgsql stable security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 declare
     uid text := permissions.current_subject_id();
@@ -498,7 +549,8 @@ $$;
 create function permissions.rbac_user_permissions(user_id text, scope text default null)
 returns text[]
 language sql stable security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
     select coalesce(array_agg(distinct p.permission order by p.permission), '{}')
     from permissions.rbac_assignments a
@@ -510,7 +562,8 @@ $$;
 create function permissions.rbac_users_with_role(role text, scope text default null)
 returns setof text
 language sql stable security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
     select distinct a.user_id
     from permissions.rbac_role_closure c
@@ -2937,7 +2990,8 @@ $$;
 create function permissions.fga_write_authorization_model(model jsonb)
 returns text
 language plpgsql security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 declare
     m text;
@@ -3595,7 +3649,8 @@ $$;
 create function permissions.fga_read_authorization_model(model_id text default null)
 returns jsonb
 language plpgsql stable security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 declare
     m text := permissions._fga_model_id(fga_read_authorization_model.model_id);
@@ -3607,7 +3662,8 @@ $$;
 create function permissions.fga_read_authorization_models()
 returns table (id text, created_at timestamptz)
 language sql stable security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
     select m.id, m.created_at from permissions.fga_models m order by m.seq desc
 $$;
@@ -3616,7 +3672,8 @@ $$;
 create function permissions.fga_delete_store()
 returns void
 language plpgsql security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 begin
     delete from permissions.fga_tuples;
@@ -3646,7 +3703,8 @@ create function permissions.fga_write(writes jsonb default null, deletes jsonb d
                                       model_id text default null)
 returns void
 language plpgsql security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 declare
     m text;
@@ -3795,7 +3853,8 @@ $$;
 create function permissions.fga_write_tuple(subject text, relation text, object text)
 returns void
 language plpgsql security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 declare
     m text;
@@ -3828,7 +3887,8 @@ $$;
 create function permissions.fga_delete_tuple(subject text, relation text, object text)
 returns void
 language plpgsql security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 declare
     t permissions.fga_tuple := permissions._fga_typed_key(subject, relation, object);
@@ -3864,7 +3924,8 @@ create function permissions.fga_read(object text default null, relation text def
                                      page_size int default null,
                                      out tuples jsonb, inout continuation_token text default null)
 language plpgsql stable security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 declare
     l record;
@@ -4991,15 +5052,19 @@ begin
 end;
 $$;
 
+-- PL/pgSQL so the plan is cached: as a SQL function (not inlined, for its
+-- subquery) it was planned on every call, about 20 us.
 create function permissions._fga_path_exists(p_m text, p_type text, p_rel text, p_ut text, p_urel text)
 returns boolean
-language sql stable
+language plpgsql stable
 as $$
-    select exists (
+begin
+    return exists (
         select 1 from permissions.fga_paths p
         where p.model_id = p_m and p.type = p_type and p.relation = p_rel
           and p.user_type = p_ut and p.user_relation = p_urel
-          and (p_urel = '' or not p.wildcard))
+          and (p_urel = '' or not p.wildcard));
+end;
 $$;
 
 -- General evaluation, after OpenFGA's LocalChecker.ResolveCheck: depth limit,
@@ -5584,8 +5649,9 @@ create function permissions.fga_check(subject text, relation text, object text,
                                       context jsonb default null)
 returns boolean
 language plpgsql stable security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 set plan_cache_mode = force_generic_plan
+set standard_conforming_strings = on
 as $$
 declare
     req jsonb := permissions._fga_req_context(context);
@@ -5614,8 +5680,9 @@ create function permissions.fga_list_objects(subject text, type text, relation t
                                              context jsonb default null)
 returns setof text
 language plpgsql stable security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 set plan_cache_mode = force_generic_plan
+set standard_conforming_strings = on
 rows 100
 as $$
 declare
@@ -5655,7 +5722,7 @@ create function permissions._fga_list_users(object text, relation text, user_fil
                                             context jsonb default null)
 returns setof text
 language plpgsql stable
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 set plan_cache_mode = force_generic_plan
 rows 100
 as $$
@@ -5772,7 +5839,8 @@ create function permissions.fga_list_users(object text, relation text, user_filt
                                            context jsonb default null)
 returns setof text
 language sql stable security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 rows 100
 as $$
     select u from permissions._fga_list_users($1, $2, $3, $4, $5, $6) u
@@ -5809,8 +5877,9 @@ $$;
 create function permissions.fga_check_current(relation text, object text)
 returns boolean
 language plpgsql stable security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 set plan_cache_mode = force_generic_plan
+set standard_conforming_strings = on
 as $$
 declare
     s record;
@@ -5829,8 +5898,9 @@ $$;
 create function permissions.fga_list_objects_current(type text, relation text)
 returns setof text
 language plpgsql stable security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 set plan_cache_mode = force_generic_plan
+set standard_conforming_strings = on
 rows 100
 as $$
 declare
@@ -5854,8 +5924,9 @@ $$;
 create function permissions.fga_list_object_ids_current(type text, relation text)
 returns setof text
 language plpgsql stable security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 set plan_cache_mode = force_generic_plan
+set standard_conforming_strings = on
 rows 100
 as $$
 declare
@@ -9006,8 +9077,9 @@ create function permissions.cedar_is_authorized(principal text, action text, res
                                                  context jsonb default null, entities jsonb default null)
 returns jsonb
 language plpgsql stable security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 set plan_cache_mode = force_generic_plan
+set standard_conforming_strings = on
 as $$
 declare
     p record;
@@ -9111,20 +9183,28 @@ $$;
 
 -- The environment of a current-subject request without its resource: the
 -- principal and the action, their ancestors (pk and ak: _cedar_keys'
--- arrays), their stored data, and an empty context.
+-- arrays), their stored data, and an empty context. PL/pgSQL, so the plan
+-- of the query is cached: as a SQL function (not inlined, for its
+-- subquery) it was planned on every call, most of its cost.
 create function permissions._cedar_current_env(p_pt text, p_pi text, p_at text, p_ai text, pk text[], ak text[])
 returns jsonb
-language sql stable
+language plpgsql stable
 as $$
-    select jsonb_build_object(
+declare
+    ent jsonb;
+begin
+    select jsonb_object_agg(permissions._cedar_key(v.t, v.i),
+                            case when e.type is not null then jsonb_build_object('attrs', e.attrs, 'tags', e.tags) else 'null' end)
+    into ent
+    from (values (p_pt, p_pi), (p_at, p_ai)) v(t, i)
+    left join permissions.cedar_entities e on e.type = v.t and e.id = v.i;
+    return jsonb_build_object(
         'principal', jsonb_build_object('__entity', jsonb_build_object('type', p_pt, 'id', p_pi)),
         'action', jsonb_build_object('__entity', jsonb_build_object('type', p_at, 'id', p_ai)),
         'context', '{}'::jsonb,
         'anc', jsonb_build_object(pk[1], to_jsonb(pk[2:]), ak[1], to_jsonb(ak[2:])),
-        'ent', (select jsonb_object_agg(permissions._cedar_key(v.t, v.i),
-                                        case when e.type is not null then jsonb_build_object('attrs', e.attrs, 'tags', e.tags) else 'null' end)
-                from (values (p_pt, p_pi), (p_at, p_ai)) v(t, i)
-                left join permissions.cedar_entities e on e.type = v.t and e.id = v.i))
+        'ent', ent);
+end;
 $$;
 
 -- One request of cedar_is_authorized_current from scratch: the walks, the
@@ -9201,27 +9281,38 @@ declare
     cs jsonb;
     f text;
     payload text;
+    sep boolean;
+    forbid boolean;
+    part1 text;
+    cond boolean;
 begin
     select * into k from permissions._cedar_keys(p_pt, p_pi, p_at, p_ai, null, null);
-    select coalesce(jsonb_agg(jsonb_build_object(
-               'f', x.effect = 'forbid', 'a', x.ast,
-               'k', case x.resource_op when '==' then 'e' when 'in' then 'i' when 'All' then 'a'
-                                       else case when x.resource_uid is null then 't' else 'i' end end,
-               'v', case x.resource_op when 'All' then '*' when 'is' then coalesce(x.resource_uid, x.resource_type) else x.resource_uid end,
-               't', case when x.resource_op = 'is' and x.resource_uid is not null then x.resource_type end,
-               'free', x.effect = 'permit' and x.ast is null and not (x.resource_op = 'is' and x.resource_uid is not null))), '[]')
-    into cs
-    from permissions._cedar_principal_candidates(k.pk, k.ak, p_pt) x;
-    if exists (select 1 from jsonb_array_elements(cs) c where strpos(c ->> 'v', chr(28)) > 0 or strpos(c ->> 'v', chr(30)) > 0) then
+    -- the candidates and what part 1 needs from them, in one pass (a query
+    -- for each flag cost more than the candidates)
+    select coalesce(jsonb_agg(y.c), '[]'),
+           coalesce(bool_or(strpos(y.c ->> 'v', chr(28)) > 0 or strpos(y.c ->> 'v', chr(30)) > 0), false),
+           coalesce(bool_or((y.c ->> 'f')::boolean), false),
+           coalesce(string_agg(case when (y.c ->> 'free')::boolean then upper(y.c ->> 'k') else y.c ->> 'k' end
+                                   || ':' || (y.c ->> 'v') || chr(30), '') filter (where not (y.c ->> 'f')::boolean), ''),
+           coalesce(bool_or(not (y.c ->> 'free')::boolean), false)
+    into cs, sep, forbid, part1, cond
+    from (select jsonb_build_object(
+                     'f', x.effect = 'forbid', 'a', x.ast,
+                     'k', case x.resource_op when '==' then 'e' when 'in' then 'i' when 'All' then 'a'
+                                             else case when x.resource_uid is null then 't' else 'i' end end,
+                     'v', case x.resource_op when 'All' then '*' when 'is' then coalesce(x.resource_uid, x.resource_type) else x.resource_uid end,
+                     't', case when x.resource_op = 'is' and x.resource_uid is not null then x.resource_type end,
+                     'free', x.effect = 'permit' and x.ast is null and not (x.resource_op = 'is' and x.resource_uid is not null)) as c
+          -- offset 0: built once per row (flattened, every y.c below
+          -- built it again)
+          from permissions._cedar_principal_candidates(k.pk, k.ak, p_pt) x offset 0) y;
+    if sep then
         -- a resource scope holds a separator of this layout: every row that
         -- a permit can match is checked from scratch (flag X, entry a:*)
         return 'X' || chr(30) || 'a:*' || chr(30) || chr(28);
     end if;
-    f := case when exists (select 1 from jsonb_array_elements(cs) c where (c ->> 'f')::boolean) then 'F' else '' end || chr(30)
-         || coalesce((select string_agg(case when (c ->> 'free')::boolean then upper(c ->> 'k') else c ->> 'k' end
-                                        || ':' || (c ->> 'v') || chr(30), '')
-                      from jsonb_array_elements(cs) c where not (c ->> 'f')::boolean), '');
-    if exists (select 1 from jsonb_array_elements(cs) c where not (c ->> 'free')::boolean) then
+    f := case when forbid then 'F' else '' end || chr(30) || part1;
+    if cond then
         with p as (select c ->> 'k' as k, c ->> 'v' as v, jsonb_build_object('f', c -> 'f', 'a', c -> 'a', 't', c -> 't') as p
                    from jsonb_array_elements(cs) c where not (c ->> 'free')::boolean)
         select jsonb_build_object(
@@ -9256,32 +9347,50 @@ declare
     rk text := permissions._cedar_key(p_rt, p_ri);
     pf jsonb := x -> 'pf';
     anc jsonb := p_anc;
-    m jsonb;
+    m jsonb[] := '{}';
+    g jsonb;
+    tg jsonb;
     e jsonb;
     p jsonb;
     v jsonb;
+    n int;
 begin
-    m := coalesce(pf -> 'e' -> rk, '[]') || coalesce(pf -> 't' -> p_rt, '[]') || coalesce(pf -> 'a', '[]');
+    -- the matching policies, in the order e, t, a, then i by key (the
+    -- resource's ancestors, then the resource). Index loops over jsonb and
+    -- an array variable: no query per row (a query costs more than the
+    -- rest of a row's decision)
+    foreach g in array array[pf -> 'e' -> rk, pf -> 't' -> p_rt, pf -> 'a'] loop
+        for j in 0 .. coalesce(jsonb_array_length(g), 0) - 1 loop
+            m := m || (g -> j);
+        end loop;
+    end loop;
     if pf -> 'i' <> '{}' then
         anc := coalesce(anc, permissions._cedar_ancestors(p_rt, p_ri, null));
-        m := m || coalesce((select jsonb_agg(q) from jsonb_array_elements_text(anc || to_jsonb(rk)) a(k)
-                            cross join lateral jsonb_array_elements(pf -> 'i' -> a.k) q
-                            where q ->> 't' is null or q ->> 't' = p_rt), '[]');
+        n := jsonb_array_length(anc);
+        for i in 0 .. n loop
+            g := pf -> 'i' -> case when i < n then anc ->> i else rk end;
+            for j in 0 .. coalesce(jsonb_array_length(g), 0) - 1 loop
+                if g -> j ->> 't' is null or g -> j ->> 't' = p_rt then
+                    m := m || (g -> j);
+                end if;
+            end loop;
+        end loop;
     end if;
-    if m = '[]' then
+    if cardinality(m) = 0 then
         return p_free;
     end if;
-    e := (x -> 'env') || jsonb_build_object('resource', jsonb_build_object('__entity', jsonb_build_object('type', p_rt, 'id', p_ri)));
-    if anc is not null then
-        e := jsonb_set(e, '{anc}', (e -> 'anc') || jsonb_build_object(rk, anc));
+    -- the environment with the resource, built once (jsonb_set per key
+    -- copied all of it each time)
+    if p_attrs is not null and (x ->> 'tags')::boolean then
+        select t.tags into tg from permissions.cedar_entities t where t.type = p_rt and t.id = p_ri;
     end if;
-    if p_attrs is not null then
-        e := jsonb_set(e, '{ent}', (e -> 'ent') || jsonb_build_object(rk, jsonb_build_object('attrs', p_attrs,
-            'tags', case when (x ->> 'tags')::boolean
-                         then coalesce((select t.tags from permissions.cedar_entities t where t.type = p_rt and t.id = p_ri), '{}')
-                         else '{}' end)));
-    end if;
-    for p in select q from jsonb_array_elements(m) q where (q ->> 'f')::boolean loop
+    e := (x -> 'env') || jsonb_build_object(
+        'resource', jsonb_build_object('__entity', jsonb_build_object('type', p_rt, 'id', p_ri)),
+        'anc', case when anc is null then x -> 'env' -> 'anc' else (x -> 'env' -> 'anc') || jsonb_build_object(rk, anc) end,
+        'ent', case when p_attrs is null then x -> 'env' -> 'ent'
+                    else (x -> 'env' -> 'ent') || jsonb_build_object(rk, jsonb_build_object('attrs', p_attrs, 'tags', coalesce(tg, '{}'))) end);
+    foreach p in array m loop
+        continue when (p ->> 'f')::boolean is not true;
         v := case when p -> 'a' = 'null' then 'true' else permissions._cedar_eval(p -> 'a', e, false) end;
         if v is distinct from 'false' then
             return false;                   -- a forbid holds, or errs: fail closed
@@ -9290,7 +9399,8 @@ begin
     if p_free then
         return true;
     end if;
-    for p in select q from jsonb_array_elements(m) q where not (q ->> 'f')::boolean loop
+    foreach p in array m loop
+        continue when (p ->> 'f')::boolean is not false;
         if p -> 'a' = 'null' or permissions._cedar_eval(p -> 'a', e, false) = 'true' then
             return true;                    -- a permit that errs is skipped
         end if;
@@ -9346,7 +9456,8 @@ create sequence permissions._cedar_write_seq;
 create function permissions._cedar_changed()
 returns trigger
 language plpgsql security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 begin
     insert into permissions._cedar_write_gen as w (pid, xid, gen)
@@ -9370,21 +9481,37 @@ create trigger cedar_changed after insert or update or delete or truncate on per
 -- extension values) goes through _cedar_value_in.
 create function permissions._cedar_attrs_plain(v jsonb)
 returns boolean
-language sql immutable
+language plpgsql immutable
 as $$
-    select not exists (
-        select 1 from jsonb_each(v) e
-        where not case jsonb_typeof(e.value)
-            when 'string' then true
-            when 'boolean' then true
-            when 'number' then scale(e.value::text::numeric) = 0
-                               and e.value::text::numeric between -9223372036854775808 and 9223372036854775807
-            when 'object' then e.value - '__entity' = '{}' and jsonb_typeof(e.value -> '__entity') = 'object'
-                               and (e.value -> '__entity') - 'type' - 'id' = '{}'
-                               and jsonb_typeof(e.value -> '__entity' -> 'id') = 'string'
-                               and jsonb_typeof(e.value -> '__entity' -> 'type') = 'string'
-                               and permissions._cedar_is_name(e.value -> '__entity' ->> 'type')
-            else false end)
+declare
+    vals jsonb;
+    e jsonb;
+begin
+    if jsonb_typeof(v) is distinct from 'object' then
+        -- callers pass records; the query keeps jsonb_each's answer for the rest
+        return not exists (select 1 from jsonb_each(v));
+    end if;
+    -- the values without a query (jsonb_each would be one per row of a
+    -- policy): a value fails only if the test is false, not null
+    vals := jsonb_path_query_array(v, '$.*');
+    for i in 0 .. jsonb_array_length(vals) - 1 loop
+        e := vals -> i;
+        if (case jsonb_typeof(e)
+                when 'string' then true
+                when 'boolean' then true
+                when 'number' then scale(e::text::numeric) = 0
+                                   and e::text::numeric between -9223372036854775808 and 9223372036854775807
+                when 'object' then e - '__entity' = '{}' and jsonb_typeof(e -> '__entity') = 'object'
+                                   and (e -> '__entity') - 'type' - 'id' = '{}'
+                                   and jsonb_typeof(e -> '__entity' -> 'id') = 'string'
+                                   and jsonb_typeof(e -> '__entity' -> 'type') = 'string'
+                                   and permissions._cedar_is_name(e -> '__entity' ->> 'type')
+                else false end) is false then
+            return false;
+        end if;
+    end loop;
+    return true;
+end;
 $$;
 
 -- Per-row checks in RLS:
@@ -9426,7 +9553,8 @@ create function permissions.cedar_is_authorized_current(action text, resource te
                                                         plan_time_guard boolean default permissions._unfolded_null())
 returns boolean
 language plpgsql stable security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 declare
     g text;
@@ -9448,6 +9576,8 @@ declare
     gen bigint;
     mac text;
     fresh boolean := false;
+    n int;
+    ak text;
 begin
     if action is null or resource is null then
         return false;
@@ -9524,11 +9654,15 @@ begin
     sep := strpos(rk, chr(30)) > 0;
     if (not free and strpos(f, chr(30) || 'I:') > 0) or (not cond and strpos(f, chr(30) || 'i:') > 0) then
         anc := permissions._cedar_ancestors(rt, ri, null);
-        select free or coalesce(bool_or(strpos(f, chr(30) || 'I:' || k.k || chr(30)) > 0), false),
-               cond or coalesce(bool_or(strpos(f, chr(30) || 'i:' || k.k || chr(30)) > 0), false),
-               sep or coalesce(bool_or(strpos(k.k, chr(30)) > 0), false)
-        into free, cond, sep
-        from jsonb_array_elements_text(anc || to_jsonb(rk)) k(k);
+        -- the ancestors' keys, then the resource's: an index loop, not a
+        -- query per row
+        n := jsonb_array_length(anc);
+        for j in 0 .. n loop
+            ak := case when j < n then anc ->> j else rk end;
+            free := free or coalesce(strpos(f, chr(30) || 'I:' || ak || chr(30)) > 0, false);
+            cond := cond or coalesce(strpos(f, chr(30) || 'i:' || ak || chr(30)) > 0, false);
+            sep := sep or coalesce(strpos(ak, chr(30)) > 0, false);
+        end loop;
     end if;
     if sep then
         -- the resource's key or an ancestor's holds chr(30), the separator
@@ -9681,9 +9815,10 @@ $$;
 create function permissions.cedar_list_resources_current(action text, resource_type text)
 returns setof text
 language plpgsql stable security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 set plan_cache_mode = force_generic_plan
 set jit = off
+set standard_conforming_strings = on
 rows 100
 as $$
 declare
@@ -9843,7 +9978,8 @@ $$;
 create function permissions.cedar_put_policy(policy_id text, policy text default null, policy_json jsonb default null)
 returns void
 language plpgsql security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 declare
     est jsonb;
@@ -9872,7 +10008,8 @@ $$;
 create function permissions.cedar_delete_policy(policy_id text)
 returns void
 language plpgsql security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 begin
     delete from permissions.cedar_policies c where c.policy_id = cedar_delete_policy.policy_id;
@@ -9892,7 +10029,8 @@ $$;
 create function permissions.cedar_policies()
 returns table (policy_id text, effect text, source text, est jsonb, annotations jsonb, template_id text, slots jsonb)
 language sql stable security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
     select c.policy_id, c.effect, c.source, c.est, c.annotations, c.template_id, c.slots
     from permissions.cedar_policies c
@@ -9958,7 +10096,8 @@ $$;
 create function permissions.cedar_put_template(template_id text, template text default null, template_json jsonb default null)
 returns void
 language plpgsql security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 declare
     est jsonb;
@@ -10011,7 +10150,8 @@ $$;
 create function permissions.cedar_link_template(policy_id text, template_id text, principal text default null, resource text default null)
 returns void
 language plpgsql security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 declare
     t record;
@@ -10060,7 +10200,8 @@ $$;
 create function permissions.cedar_delete_template(template_id text)
 returns void
 language plpgsql security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 declare
     n bigint;
@@ -10091,7 +10232,8 @@ $$;
 create function permissions.cedar_templates()
 returns table (template_id text, source text, est jsonb, annotations jsonb)
 language sql stable security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
     select t.template_id, t.source, t.est, t.annotations
     from permissions.cedar_templates t
@@ -10111,7 +10253,8 @@ $$;
 create function permissions.cedar_put_entities(entities jsonb)
 returns void
 language plpgsql security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 declare
     v jsonb;
@@ -10246,7 +10389,8 @@ $$;
 create function permissions.cedar_delete_entities(uids jsonb)
 returns bigint
 language plpgsql security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 declare
     n bigint;
@@ -10293,7 +10437,8 @@ $$;
 create function permissions.cedar_read_entities(type text default null, ids text[] default null)
 returns jsonb
 language plpgsql stable security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 begin
     if ids is not null and cedar_read_entities.type is null then
@@ -10326,7 +10471,8 @@ $$;
 create function permissions.cedar_uid(type text, id text)
 returns text
 language sql immutable strict parallel safe security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
     select permissions._cedar_uid_text(cedar_uid.type, cedar_uid.id)
 $$;
@@ -10377,7 +10523,8 @@ $$;
 create or replace function permissions.delete_subject(subject_type text, subject_id text)
 returns bigint
 language plpgsql security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
+set standard_conforming_strings = on
 as $$
 declare
     u jsonb := jsonb_build_object('type', subject_type, 'id', subject_id);

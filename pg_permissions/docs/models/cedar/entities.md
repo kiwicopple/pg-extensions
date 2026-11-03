@@ -214,7 +214,7 @@ select permissions.cedar_put_entities(
 
 Update entities when users join a team or documents move. Write the entity changes and the corresponding application changes in the same transaction so they become visible together.
 
-A row of your own tables does not have to be an entity. For a check in an RLS policy, the policy can pass the columns of the row as attributes. See [Cedar in RLS](../../rls/policies.md#policies-for-cedar). Store an entity when a policy uses its parents, or when you list resources with `cedar_list_resources_current`. The list function returns stored entities only.
+A row of your own tables does not have to be an entity. Your backend can pass trusted resource attributes to a check; an RLS policy can pass them from the row. See [Application checks](../../integrations/checks.md#trusted-request-context-and-resource-attributes) and [Cedar in RLS](../../rls/policies.md#policies-for-cedar). Store an entity when a policy uses its parents, or when you list resources with `cedar_list_resources_current`. The list function returns stored entities only.
 
 ## Next step
 

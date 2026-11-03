@@ -80,9 +80,9 @@ reset role;
 -- catalog properties
 select tap.ok(
     (select p.provolatile = 'i' and p.proparallel = 's' and p.proisstrict
-            and 'search_path=""' = any(p.proconfig)
+            and 'search_path=pg_catalog, pg_temp' = any(p.proconfig)
      from pg_proc p where p.oid = 'permissions.cedar_uid(text,text)'::regprocedure),
-    'cedar_uid is immutable, parallel safe, strict, with search_path empty');
+    'cedar_uid is immutable, parallel safe, strict, with search_path pg_catalog, pg_temp');
 select tap.ok(has_function_privilege('anon', 'permissions.cedar_uid(text,text)', 'execute'),
               'anon can execute cedar_uid');
 select tap.ok(not has_function_privilege('anon', 'permissions._cedar_uid_text(text,text)', 'execute'),

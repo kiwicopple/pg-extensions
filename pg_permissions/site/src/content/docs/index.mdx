@@ -1,11 +1,11 @@
 ---
 title: pg_permissions
-description: Manage roles, object sharing and policies in Postgres, with access enforced through row level security.
+description: An authorization store and check engine for Postgres. Manage roles, relationships and policies through SQL or JavaScript, with optional RLS enforcement.
 template: splash
 hero:
-  tagline: Roles, document sharing, policies, and access rules in Postgres. Enforce permissions where your data lives.
+  tagline: Your authorization store and check engine, inside Postgres. Roles, relationships and policies through SQL or JavaScript.
   actions:
-    - text: Protect your first table
+    - text: Check your first permission
       link: ./get-started/quickstart/
       icon: right-arrow
     - text: Choose a permission model
@@ -14,12 +14,15 @@ hero:
 ---
 
 import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+import LatestPost from '../../components/LatestPost.astro';
 
 <span id="what-it-is" />
 
-`pg_permissions` is a pure SQL extension for Postgres 16, 17, and 18. Manage permissions from SQL or JavaScript, then use row level security (RLS) to enforce access when your application queries a table.
+`pg_permissions` is a pure SQL extension for Postgres 16, 17, and 18. Use it as an alternative to a separate authorization service: store permissions in Postgres and call its check and list functions from your backend. You can also use row level security (RLS) to enforce access on tables.
 
 Read the [documentation overview](./overview/) for the project's purpose, goals, and how it fits into your application.
+
+<LatestPost />
 
 <span id="where-to-start" />
 
@@ -29,13 +32,14 @@ Read the [documentation overview](./overview/) for the project's purpose, goals,
   <LinkCard title="Roles and permissions" description="Give users roles across your application or within each organization. Roles can inherit permissions." href="./models/rbac/overview/" />
   <LinkCard title="Relationships and sharing" description="Share individual objects, nest teams, and inherit access from folders with the OpenFGA model." href="./models/openfga/overview/" />
   <LinkCard title="Policies with Cedar" description="Write rules on users, resources and their attributes. Use explicit forbids to override Cedar permits." href="./models/cedar/overview/" />
-  <LinkCard title="Combine models with RLS" description="Keep organization roles and add individual shares or policies. Use restrictive policies for denies across the models." href="./rls/combine-models/" />
+  <LinkCard title="Check access in your application" description="Use SQL or JavaScript to authorize backend operations. Store permission data and check access without RLS." href="./integrations/checks/" />
+  <LinkCard title="Optional: enforce access with RLS" description="Apply your authorization rules to table reads and writes using Postgres policies." href="./rls/policies/" />
   <LinkCard title="Connect your application" description="Set request identity, connect a JavaScript client, and separate client checks from admin operations." href="./integrations/identity/" />
 </CardGrid>
 
 ## Try it in a database
 
-[Install the SQL file](./install/), then follow the [quickstart](./get-started/quickstart/). You will create a permission, protect a table, and verify what two users can see. The database.dev package is not published yet; direct installation is available.
+[Install the SQL file](./install/), then follow the [quickstart](./get-started/quickstart/). You will create a permission, assign a role, and check access for two users. An optional section adds RLS to a table. The database.dev package is not published yet; direct installation is available.
 
 Cedar is included in version 0.1.0. Existing 0.0.1 databases can [upgrade](./install/#upgrade-from-001) without recreating their permission data. The [Cedar walkthrough](./models/cedar/overview/) covers policies, entities, templates and access checks.
 
@@ -45,7 +49,7 @@ For an existing application, use the [documentation map](./guide/) to find a tas
 
 The SQL reference covers [shared functions](./reference/shared/), [RBAC](./reference/rbac/), [OpenFGA](./reference/openfga/), and [Cedar](./reference/cedar/). The [JavaScript reference](./reference/javascript/) maps client methods to those functions and explains results and errors.
 
-[OpenFGA compatibility](./models/openfga/compatibility/), [Cedar compatibility](./models/cedar/compatibility/), [API limits](./reference/limits/), and [CEL support](./reference/cel/) describe the boundaries of the implementation. Application checks cannot see rules that exist only in RLS; database policies make the final decision about which rows a query returns.
+[OpenFGA compatibility](./models/openfga/compatibility/), [Cedar compatibility](./models/cedar/compatibility/), [API limits](./reference/limits/), and [CEL support](./reference/cel/) describe the boundaries of the implementation. A check returns a decision for your backend to enforce. If you add RLS, standalone checks do not include any extra rules defined only in those table policies.
 
 <span id="status" />
 <span id="the-three-prototypes-of-the-research-history" />

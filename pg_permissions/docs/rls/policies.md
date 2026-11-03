@@ -1,6 +1,6 @@
 # Read and write policies
 
-Use RLS to enforce permissions when application clients query a table. For reads, compute accessible scopes or object IDs once per query. For writes, check the row being changed.
+RLS is an optional integration for enforcing permissions when application clients query a table. You can use all permission models through [application checks](../integrations/checks.md) without it. Choose RLS when you want Postgres to filter reads and constrain writes using table policies. For reads, compute accessible scopes or object IDs once per query. For writes, check the row being changed.
 
 The examples below form a separate SQL walkthrough. Start in a fresh database with the extension installed. They define their own roles and data; do not combine them with the earlier RBAC walkthrough in the same database.
 

@@ -40,7 +40,7 @@ select permissions.rbac_has_permission(permission => 'documents.reed');
 
 ## Row attributes that only RLS sees
 
-A rule on a column of the row belongs in RLS. For example: drafts are visible to editors only.
+When using RLS, a policy can add a rule on a column of the row. For example: drafts are visible to editors only. A backend can enforce the same rule in its own decision logic, or pass trusted attributes to a model check.
 
 ```sql
 create policy documents_published
@@ -77,7 +77,7 @@ select permissions.fga_check_current(
 commit;
 ```
 
-Treat the check functions as advisory and RLS as final. Use a check to decide what to show in a UI. Let the query, under RLS, decide what it returns.
+In this example, RLS includes an extra draft rule that the standalone check does not evaluate, so the RLS query determines which rows are returned. In an application that enforces access in its backend instead, include that rule in the backend decision. Checks are not limited to UI hints; they must include the rules needed for the operation they authorize.
 
 If a check must use the attribute, pass the attribute in. The model has the relations `published` and `reader`. A backend sends the status of the row as a contextual tuple. The extension never writes a contextual tuple:
 
@@ -154,7 +154,8 @@ create function public.fga_check_now(
   relation text,
   object text
 ) returns boolean
-language plpgsql stable security definer set search_path = ''
+language plpgsql stable security definer
+set search_path = pg_catalog, pg_temp
 as $$
 begin
   return permissions.fga_check(

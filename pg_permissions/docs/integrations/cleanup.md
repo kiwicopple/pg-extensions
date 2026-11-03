@@ -59,7 +59,8 @@ create table public.users (id uuid primary key);
 insert into public.users values (:'carol'), (:'dave');
 
 create function public.forget_user() returns trigger
-language plpgsql security definer set search_path = ''
+language plpgsql security definer
+set search_path = pg_catalog, pg_temp
 as $$
 begin
   perform permissions.delete_subject(

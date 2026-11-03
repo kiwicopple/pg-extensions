@@ -94,7 +94,7 @@ p50 / p95. Budgets are those of [`bench/budgets.tsv`](../../bench/budgets.tsv); 
 - **Reads through lists are close to D.** The pages and lists that go through `cedar_list_resources_current` (an InitPlan, once per statement) are within about 0.1 to 0.4 ms of D at p50. The two counts at large scale, which read about 20,000 visible rows, are 0.8 to 1.1 ms slower at p50. Every one is inside its budget at every scale. Cedar pays a fixed cost per list: the principal's walk, the candidate policies from the scope index, and then the uids or the walk of `in X`. The documents scale does not change it, because candidates come from the policies, not from the table.
 - **Single checks cost about the same as D's.** `rbac_check` and `nest_check` are 0.3 to 0.4 ms at p50 in both designs. `rbac_update_one` costs about 0.2 to 0.3 ms more than D's: the row's check is answered from the statement's cached part (a link without conditions names the org, and no forbid applies), but the first call computes that part, and the update also runs the select policy's org list.
 - **Writes cost about 0.1 ms more.** `cedar_put_entities` validates entity JSON, upserts the entity and its parents, and fires the statement-level triggers that end the per-statement caches; `cedar_link_template` compiles the link's scope. Both stay at 0.25 ms p50.
-- **The per-row path is the expensive one.** `row_select_page` reads documents in id order and checks each one until 50 are visible: about 500 checks at small scale, 2,600 at large (a user sees 2% of the documents there). Every row is in the scope of `org_readers` (`resource is Document` with a condition), so every row parses the statement's cached part and evaluates the condition; rows in a linked folder also walk to the folder. That is about 80 µs a row on Docker (60 µs on the laptop, PG 16.4). A list view should use `cedar_list_resources_current` when its policies are on stored entities, and keep the per-row helper for policies on row attributes, writes and single rows. A policy that cannot name a row in its scope costs about 4 µs a row: the row is denied from the cached part without a query (e-cedar.md section 15.2).
+- **The per-row path is the expensive one.** `row_select_page` reads documents in id order and checks each one until 50 are visible: about 500 checks at small scale, 2,600 at large (a user sees 2% of the documents there). Every row is in the scope of `org_readers` (`resource is Document` with a condition), so every row parses the statement's cached part and evaluates the condition; rows in a linked folder also walk to the folder. That is about 80 µs a row on Docker (60 µs on the laptop, PG 16.4), before the [performance pass](#performance-pass) of 2026-11-03 cut the per-row page by about 21%. A list view should use `cedar_list_resources_current` when its policies are on stored entities, and keep the per-row helper for policies on row attributes, writes and single rows. A policy that cannot name a row in its scope costs about 4 µs a row: the row is denied from the cached part without a query (e-cedar.md section 15.2).
 - **Storage.** E stores every document as an entity, because the list returns stored entities only (plan-cedar.md, decision 3), and at the parents phase every document's parent. At large scale the permission tables are 445 MB against D's 324 MB, and the sharing seed takes 31 s against 1 s (1M entities put in calls of 10,000). D's FGA stores only the tuples.
 
 | Seed, large | D: s, MB | E: s, MB |
@@ -114,6 +114,28 @@ Two misses of the first runs were fixed before these runs (e-cedar.md section 15
 ## Phase 9
 
 The security review made the statement cache of `cedar_is_authorized_current` authenticated (MACs under an owner-only secret) and moved its own-write generation out of a client-writable setting ([`e-cedar.md`](../designs/e-cedar.md) section 17). The `p9` runs at small and medium scale have the same checksums as `p5`. Every workload is within the noise of `p5` except `row_select_page`, which is about 10% faster at p50 (35.2 against 39.9 ms small, 97.5 against 107.8 ms medium): the new code splits the cached entry byte-wise instead of taking `substr` of its second part on every row. `write_nest_team` still misses its budget, as above. The full table is in section 17.3 of the design doc.
+
+## Performance pass
+
+On 2026-11-03 a performance pass changed the shared helpers and the Cedar per-row path. These results come from local Postgres 16.4 (4 clients, p50 and p95 in ms) unless the text names another server. The tables above are from before the pass. The change list and the wrong turns are in session 11 of [the journal](../journal.md).
+
+| Measurement (Postgres 16.4, local) | Before | After |
+| --- | --- | --- |
+| `row_select_page`, small (p50 / p95) | 35.5 / 45.7 | 27.5 / 39.4 |
+| `row_select_page`, medium (p50 / p95) | 89.4 / 122.7 | 70.3 / 96.8 |
+| `rbac_has_permission`, in server for each transaction | 21.8 µs | 12.1 µs |
+| `fga_list_objects`, in server for each transaction | 125 µs | 90 µs |
+| Cedar statement-level check with a conditional policy | 272 µs | 218 µs |
+
+On Postgres 18 in Docker, the small `row_select_page` went from 34 to 25 ms in the server. Postgres 18 caches the plans of SQL functions, so the gain of the changes to the shared helpers is smaller there: `rbac_has_permission` went from 12.5 to 10.9 µs, and the FGA list did not change.
+
+The cause of most of the gain: a SQL function with a `set search_path` clause, or with an `exists` subquery, is not inlined. Before Postgres 18, Postgres plans such a function again on every call. `current_subject_id` alone took 9.3 µs of a 28 µs `rbac_has_permission`. The functions `current_subject_id`, `current_subject_type`, `_fga_path_exists`, `_cedar_current_env` and `_cedar_attrs_plain` are now PL/pgSQL, which caches the plan. For the Cedar per-row path, `_cedar_decide` no longer runs SPI subqueries for each row, the environment is built with one `||`, the walk of the ancestors is a loop, and `_cedar_current_filter` does its four passes in one.
+
+A first version of the one-pass filter was 2.3 times slower (92 to 215 µs for each row): Postgres flattened the subquery and ran `jsonb_build_object` about 10 times for each row. `offset 0` fixed it (84 µs). The same change in `cedar_list_resources_current` gave no gain and was reverted.
+
+The pgbench runs of design D at small scale (p50, ms, before and after) are: `share_select_page` 0.47 and 0.39, `parents_proj_select_count` 0.50 and 0.40, `parents_select_page` 0.46 and 0.38, `block_list_objects` 0.39 and 0.34.
+
+The security hardening of the same day (`search_path = pg_catalog, pg_temp` in each function) costs about 0.1 to 0.2 µs for each call, which is inside the noise. `bench --check` at small scale: design D met 14 of 14 budgets. Design E met each budget except the p95 of `write_nest_team`, the row-lock contention that is documented above, which also missed before the pass. The full suite passed on Postgres 16, 17 and 18, on a fresh install and on an install upgraded from 0.0.1 (263 files, 169,987 assertions each).
 
 ## For later phases
 

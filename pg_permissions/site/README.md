@@ -21,7 +21,31 @@ The site uses Astro 7, Starlight 0.42, and `starlight-links-validator`. Charts a
 
 Task guides cover setup and examples. Model guides share a structure while preserving each model's own concepts. The reference is organized by model, with current-subject helpers beside the other functions. Research keeps historical designs separate from current application guidance.
 
+Introduce the extension as an authorization store and check engine. The quickstart and application guides show direct checks first; RLS has its own optional sidebar group. Keep Cedar policies (authorization rules) distinct from Postgres RLS policies (table enforcement).
+
 `content-migration.json` records where the original sections moved and the old inbound anchors. Compatibility pages retain old paths and headings, link to the current pages, and use `pagefind: false` so they do not compete with current guides in search. Keep these pages when adding or moving material; the extension's condition error hint still names `docs/conditions.md`.
+
+## Blog
+
+Blog posts live in `../blog/*.md` as a separate Astro content collection. They use the same header, theme and search as the docs, with a reading layout at `/blog/<filename>/`. The index at `/blog/`, RSS feed at `/blog/rss.xml`, and homepage's latest-post link update automatically.
+
+Start a post with this frontmatter:
+
+```yaml
+---
+title: A descriptive title
+description: A short summary for the index, search and social previews.
+date: 2026-11-02
+author: Paul Copplestone
+draft: true
+---
+```
+
+Set `draft: false` when the post should appear in the built site. Drafts are excluded from article routes, the index, homepage, feed and Markdown exports. Dates are displayed in UTC so a publication day cannot shift with the build server's timezone. Published posts are sorted newest first.
+
+Use site-relative Markdown links such as `/models/cedar/overview/`. `markdown-base-links.mjs` adds `DOCS_BASE` through Astro's Sätteri Markdown processor. Each post also has a portable Markdown version at `/blog/<filename>.md`, with absolute links and unchanged code blocks. Blog source files are never touched by the docs sync script.
+
+`SitePageTitle.astro` supplies blog headings and metadata; other pages keep Starlight's standard title. The reading layout is in `styles/blog.css`. `DOCS_SITE` defaults to `https://permissions.dev` for canonical URLs, RSS and sitemap output; override it for another host.
 
 ## Generated files
 
@@ -54,7 +78,7 @@ The plain Markdown exports preserve the source code fences without tab markup. `
 
 `npm run build` checks rendered links and fragments, Markdown export links and code preservation, old inbound anchors, sidebar routes, and coverage of all 40 public SQL functions.
 
-`npm run check:quickstart` runs the SQL fences directly from the quickstart in an isolated Postgres cluster, then checks the visible rows and transaction-local identity. It needs Postgres binaries (`PGBIN` can select them). The existing usage specs cover the longer walkthroughs:
+`npm run check:quickstart` runs the SQL fences directly from the quickstart in an isolated Postgres cluster. It verifies direct permission checks before any application table exists, then checks the optional RLS example and transaction-local identity. It needs Postgres binaries (`PGBIN` can select them). The existing usage specs cover the longer walkthroughs:
 
 ```bash
 cd .. && ./test/run.sh usage

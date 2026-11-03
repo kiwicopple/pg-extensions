@@ -225,7 +225,7 @@ select tap.is(permissions.fga_check_current(relation => 'viewer', object => 'doc
 reset role;
 
 create function public.fga_check_now(relation text, object text) returns boolean
-language plpgsql stable security definer set search_path = ''
+language plpgsql stable security definer set search_path = pg_catalog, pg_temp
 as $$
 begin
     return permissions.fga_check(subject => 'user:' || permissions.current_subject_id(),
@@ -255,7 +255,7 @@ create table public.users (id uuid primary key);
 insert into public.users values (:'alice'), (:'bob'), (:'carol'), (:'dave'), (:'erin');
 
 create function public.forget_user() returns trigger
-language plpgsql security definer set search_path = ''
+language plpgsql security definer set search_path = pg_catalog, pg_temp
 as $$
 begin
     perform permissions.delete_subject(subject_type => 'user', subject_id => old.id::text);
