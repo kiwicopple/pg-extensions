@@ -17,6 +17,9 @@ help:
 	@echo "make test.pg_validate  			# run the pg_validate test suite on a local throwaway Postgres"
 	@echo "make test.pg_validate.docker  		# run the pg_validate test suite on Postgres 16, 17 and 18 (Docker)"
 	@echo "make docs.pg_validate  			# build the pg_validate documentation site (pg_validate/site/dist)"
+	@echo "make test.pg_crdt  			# run the pg_crdt test suite on a local throwaway Postgres"
+	@echo "make test.pg_crdt.docker  		# run the pg_crdt test suite on Postgres 16, 17 and 18 with pg_tle (Docker)"
+	@echo "make bench.pg_crdt  			# benchmark the pg_crdt PN-Counter (merge latency, WAL per write)"
 
 reset:
 	supabase db reset
@@ -86,6 +89,17 @@ docs.pg_validate: $(PG_VALIDATE_SITE)/node_modules
 
 docs.pg_validate.dev: $(PG_VALIDATE_SITE)/node_modules
 	npm --prefix pg_validate run docs:dev
+
+# pg_crdt: test suite and benchmark (see pg_crdt/test/README.md)
+.PHONY: test.pg_crdt test.pg_crdt.docker bench.pg_crdt
+test.pg_crdt:
+	cd $(REPO_DIR)/pg_crdt && ./test/run.sh
+
+test.pg_crdt.docker:
+	cd $(REPO_DIR)/pg_crdt && ./test/docker.sh
+
+bench.pg_crdt:
+	cd $(REPO_DIR)/pg_crdt && ./bench/pn-counter.sh
 
 # Research docs site for every <extension>/research/ directory (GitHub Pages). See research-site/README.md.
 RESEARCH_SITE := $(REPO_DIR)/research-site

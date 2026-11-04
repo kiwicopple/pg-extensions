@@ -8,4 +8,5 @@ Research record for pg_crdt, a Postgres extension for CRDTs, written in PL/pgSQL
 - [`prior-art.md`](./prior-art.md): supabase/pg_crdt, Yjs, Automerge, Loro, Diamond Types, Eg-walker, cr-sqlite and the CRDT algorithms.
 - [`sql-integration.md`](./sql-integration.md): namespacing (following pg_permissions), concurrency, representation, WAL, RLS, versioning.
 - [`orioledb.md`](./orioledb.md): can OrioleDB reduce write amplification? (Partly; optional accelerator only.)
+- [`benchmarks/pn-counter.md`](./benchmarks/pn-counter.md): PN-Counter merge latency (SQL vs PL/pgSQL, merge shapes) and WAL per write (state column vs delta table).
 - [`journal.md`](./journal.md): session log.
