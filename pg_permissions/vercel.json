@@ -26,8 +26,8 @@
       "permanent": true
     },
     {
-      "source": "/research/:path*",
-      "destination": "https://kiwicopple.github.io/pg-extensions/pg_permissions/:path*",
+      "source": "/research/:path(.*)",
+      "destination": "https://kiwicopple.github.io/pg-extensions/pg_permissions/:path",
       "permanent": true
     },
     {
