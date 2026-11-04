@@ -20,6 +20,8 @@ help:
 	@echo "make test.pg_crdt  			# run the pg_crdt test suite on a local throwaway Postgres"
 	@echo "make test.pg_crdt.docker  		# run the pg_crdt test suite on Postgres 16, 17 and 18 with pg_tle (Docker)"
 	@echo "make bench.pg_crdt  			# benchmark the pg_crdt PN-Counter (merge latency, WAL per write)"
+	@echo "make docs.pg_crdt  			# build the pg_crdt documentation site (pg_crdt/site/dist)"
+	@echo "make docs.pg_crdt.dev  			# run the pg_crdt documentation site locally with hot reload"
 
 reset:
 	supabase db reset
@@ -100,6 +102,19 @@ test.pg_crdt.docker:
 
 bench.pg_crdt:
 	cd $(REPO_DIR)/pg_crdt && ./bench/pn-counter.sh
+
+# pg_crdt documentation site (see pg_crdt/site/README.md)
+PG_CRDT_SITE := $(REPO_DIR)/pg_crdt/site
+
+.PHONY: docs.pg_crdt docs.pg_crdt.dev
+$(PG_CRDT_SITE)/node_modules: $(PG_CRDT_SITE)/package-lock.json
+	npm --prefix pg_crdt run docs:install
+
+docs.pg_crdt: $(PG_CRDT_SITE)/node_modules
+	npm --prefix pg_crdt run docs:build
+
+docs.pg_crdt.dev: $(PG_CRDT_SITE)/node_modules
+	npm --prefix pg_crdt run docs:dev
 
 # Research docs site for every <extension>/research/ directory (GitHub Pages). See research-site/README.md.
 RESEARCH_SITE := $(REPO_DIR)/research-site
