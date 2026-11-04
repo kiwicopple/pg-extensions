@@ -59,7 +59,7 @@ create domain crdt.yseq as jsonb
     check (
         jsonb_typeof(value) = 'object'
         and value @> '{"t": "yseq", "v": 1, "r": [], "c": [], "n": [], "s": [], "m": [], "p": [], "x": [], "q": []}'
-        and (value - '{t,v,r,c,n,s,m,p,x,q}'::text[]) = '{}'::jsonb
+        and (value - '{t,v,r,c,n,s,m,p,x,q,o}'::text[]) = '{}'::jsonb
         and value @@ 'strict $.r.size() == $.c.size() && $.n.size() == $.s.size() && $.n.size() == $.m.size()'
         and not value @? 'strict $.r[*] ? (@.type() != "string")'
         and not value @? 'strict $.c[*] ? (@.type() != "number" || @ < 1 || @ > 2147483647 || @.floor() != @)'
@@ -67,6 +67,7 @@ create domain crdt.yseq as jsonb
         and not value @? 'strict $.p[*] ? (@.type() != "array" || @.size() != 5)'
         and not value @? 'strict $.x[*] ? (@.type() != "array" || @.size() != 3)'
         and not value @? 'strict $.q[*] ? (@.type() != "array" || @.size() != 2)'
+        and not value @? '$.o ? (@.type() != "string")'
     );
 
 comment on domain crdt.yseq is
@@ -76,6 +77,15 @@ create function crdt.yseq_empty()
 returns crdt.yseq
 language sql immutable parallel safe
 return '{"t": "yseq", "v": 1, "r": [], "c": [], "n": [], "s": [], "m": [], "p": [], "x": [], "q": []}'::crdt.yseq;
+
+-- An empty document with a document id ("o", a random UUID), for a column
+-- default: `body crdt.yseq not null default crdt.yseq_new()`. yseq_merge
+-- refuses to merge states of different ids, and yseq_set refuses a base of
+-- another id (22023). VOLATILE; yseq_empty() makes a state without an id.
+create function crdt.yseq_new()
+returns crdt.yseq
+language sql volatile parallel safe
+return (crdt.yseq_empty()::jsonb || jsonb_build_object('o', gen_random_uuid()::text))::crdt.yseq;
 
 -- The text. IMMUTABLE, so it can back a stored generated column, an
 -- expression index or a full-text index. One chunk: the string itself.
@@ -125,6 +135,7 @@ return array[run[1], run[2] + off, case when deleted then -len else len end,
 create function crdt._yseq_compact(a int[])
 returns int[]
 language plpgsql immutable parallel safe
+set search_path = pg_catalog, pg_temp
 as $$
 declare
     o int[] := '{}';
@@ -169,6 +180,7 @@ $$;
 create function crdt._yseq_put(state jsonb, nv int[], j int, mm int[], t text, hdr jsonb default '{}')
 returns jsonb
 language plpgsql immutable parallel safe
+set search_path = pg_catalog, pg_temp
 as $$
 declare
     nr int := cardinality(mm) / 7;
@@ -202,6 +214,7 @@ $$;
 create function crdt._yseq_splice(state crdt.yseq, pos int, dlen int, ins text, replica text)
 returns crdt.yseq
 language plpgsql immutable parallel safe
+set search_path = pg_catalog, pg_temp
 as $$
 declare
     il int := coalesce(length(ins), 0);
@@ -430,6 +443,7 @@ return case kind when 'runs' then 256 when 'bytes' then 65536 end;
 create function crdt._yseq_integrate(state crdt.yseq, ins jsonb, dels jsonb, vops jsonb default null)
 returns crdt.yseq
 language plpgsql immutable parallel safe
+set search_path = pg_catalog, pg_temp
 as $$
 declare
     rr text[];
@@ -575,6 +589,7 @@ declare
     ir int;
     ur int;
     bad text;
+    prev_ok boolean;
     acc_dels jsonb := '[]';
     pend_q jsonb := '[]';
     lim_runs bigint;
@@ -638,9 +653,15 @@ begin
           union all
           select x, o + 4294967296 from jsonb_array_elements(coalesce(ins, '[]'::jsonb)) with ordinality b(x, o)) z;
     nw := coalesce(cardinality(w_r), 0);
+    -- waiting ops are checked again as they load: they may come from another
+    -- state (yseq_merge); one that fails is dropped, never raised
     select array_agg(x -> 0 ->> 0 order by o), array_agg(x -> 1 order by o), array_agg(o > 4294967296 order by o)
       into vo_w, vo_op, vo_inc
     from (select x, o from jsonb_array_elements(state -> 'q') with ordinality a(x, o)
+          where case when jsonb_typeof(x -> 0) = 'string' and crdt._yseq_op_static(x -> 1) is null
+                     then not exists (select 1 from jsonb_array_elements(coalesce(x -> 1 -> 'i', '[]'::jsonb)) y
+                                      where split_part(y ->> 0, ':', 1) <> x ->> 0)
+                     else false end
           union all
           select x, o + 4294967296 from jsonb_array_elements(coalesce(vops, '[]'::jsonb)) with ordinality b(x, o)) z;
     nvo := coalesce(cardinality(vo_w), 0);
@@ -773,6 +794,7 @@ begin
                     from jsonb_array_elements(coalesce(vo_op[act] -> 'i', '[]'::jsonb)) with ordinality a(x, o);
                     op_n := coalesce(cardinality(op_r), 0);
                     op_k := 0;
+                    prev_ok := false;
                     if op_n > 1 then
                         -- a later run can still be rejected: keep what to restore
                         s_mm := mm; s_nx := nx; s_pv := pv; s_sca := sca; s_mark := mark; s_sx := sx;
@@ -802,6 +824,7 @@ begin
                 if s::int8 + ln - 1 <= have then
                     -- a duplicate of integrated ids
                     vadv[ri] := greatest(vadv[ri], s + ln - 1);
+                    prev_ok := false;
                     continue;
                 elsif s <= have or s > have + 1 then
                     bad := 'the run overlaps integrated ids';
@@ -816,7 +839,17 @@ begin
                         bad := 'an origin is missing';
                     end if;
                 end if;
-                if bad is null then
+                -- a run that continues the previous run of this op (just
+                -- integrated): its origins lie inside the previous run's range,
+                -- which held nothing covered, and v only grew by that run's own
+                -- ids, so V4 and V5 hold. Skipping the walk keeps chained runs
+                -- (keystrokes sent one run each) O(1) apiece.
+                if bad is null and op_k > 1 and prev_ok and rk = op_r[op_k - 1]
+                   and s = op_s[op_k - 1] + length(op_t[op_k - 1])
+                   and olk = rk and ols = s - 1
+                   and ork is not distinct from op_ork[op_k - 1] and ors is not distinct from op_ors[op_k - 1] then
+                    null;
+                elsif bad is null then
                     -- V4, V5: originLeft before originRight, and nothing covered by
                     -- vadv strictly between them (tombstones included)
                     if olri = 0 then
@@ -1173,6 +1206,7 @@ begin
                 wi := wi + 1;
             else
                 vadv[ri] := s + ln - 1;
+                prev_ok := true;
             end if;
         end loop;
         select coalesce(jsonb_agg(distinct x), '[]'::jsonb) into pend_p
@@ -1518,11 +1552,12 @@ begin
         j := j + 1;
     end loop;
 
-    return jsonb_build_object(
+    return (jsonb_build_object(
         't', 'yseq', 'v', 1,
         'r', to_jsonb(rr), 'c', to_jsonb(cc),
         'n', to_jsonb(out_n), 's', to_jsonb(out_s), 'm', to_jsonb(out_m),
-        'p', pend_p, 'x', pend_x, 'q', pend_q)::crdt.yseq;
+        'p', pend_p, 'x', pend_x, 'q', pend_q)
+        || case when state ? 'o' then jsonb_build_object('o', state -> 'o') else '{}'::jsonb end)::crdt.yseq;
 end;
 $$;
 
@@ -1570,6 +1605,7 @@ end;
 create function crdt._yseq_delete_set(state crdt.yseq)
 returns jsonb
 language plpgsql immutable parallel safe
+set search_path = pg_catalog, pg_temp
 as $$
 declare
     rr text[] := array(select jsonb_array_elements_text(state -> 'r'));
@@ -1602,13 +1638,14 @@ $$;
 create function crdt._yseq_check_replica(fn text, replica text)
 returns void
 language plpgsql immutable parallel safe
+set search_path = pg_catalog, pg_temp
 as $$
 begin
     if replica is null then
         raise exception 'crdt.%: replica must not be null', fn using errcode = '22004';
     end if;
-    if replica !~ '^[^:]+(:.+)?$' then
-        raise exception 'crdt.%: % is not a replica key', fn, quote_literal(replica)
+    if replica !~ '^[^:]+(:.+)?$' or octet_length(replica) > crdt._yseq_limit('key_bytes') then
+        raise exception 'crdt.%: % is not a replica key', fn, quote_literal(left(replica, 64))
             using errcode = '22023',
                   hint = 'A replica key is a non-empty id without ":", optionally followed by ":<device>".';
     end if;
@@ -1622,6 +1659,7 @@ $$;
 create function crdt.yseq_insert(state crdt.yseq, pos int, content text, replica text)
 returns crdt.yseq
 language plpgsql immutable parallel safe
+set search_path = pg_catalog, pg_temp
 as $$
 begin
     perform crdt._yseq_check_replica('yseq_insert', replica);
@@ -1637,6 +1675,7 @@ $$;
 create function crdt.yseq_delete(state crdt.yseq, pos int, len int, replica text)
 returns crdt.yseq
 language plpgsql immutable parallel safe
+set search_path = pg_catalog, pg_temp
 as $$
 begin
     perform crdt._yseq_check_replica('yseq_delete', replica);
@@ -1671,6 +1710,7 @@ $$;
 create function crdt.yseq_set(state crdt.yseq, content text, replica text, base crdt.yseq default null)
 returns crdt.yseq
 language plpgsql immutable parallel safe
+set search_path = pg_catalog, pg_temp
 as $$
 declare
     old text;
@@ -1701,6 +1741,19 @@ begin
         state := crdt.yseq_empty();
     end if;
     if base is not null then
+        -- 0. The base must be a version of this document: the same document
+        --    id (when the states have one, from yseq_new), and no character
+        --    the state lacks
+        if base -> 'o' is distinct from state -> 'o' then
+            raise exception 'crdt.yseq_set: the base belongs to another document (id % against %)', coalesce(base ->> 'o', 'none'), coalesce(state ->> 'o', 'none')
+                using errcode = '22023';
+        end if;
+        if exists (select 1 from jsonb_each_text(crdt.yseq_version(base)) e
+                   where e.value::int > coalesce((crdt.yseq_version(state) ->> e.key)::int, 0)) then
+            raise exception 'crdt.yseq_set: the base has characters the state lacks, so it is not a version of this document'
+                using errcode = '22023',
+                      hint = 'Pass as base the value of the column the editor loaded.';
+        end if;
         -- 1. The writer's own characters that the state has and the base
         --    has not (an earlier save from the same base, an autosave) count
         --    as part of the base, so saving again does not insert them twice.
@@ -1792,6 +1845,7 @@ $$;
 create function crdt.yseq_ops_since(state crdt.yseq, vv jsonb default '{}')
 returns jsonb
 language plpgsql immutable parallel safe
+set search_path = pg_catalog, pg_temp
 as $$
 declare
     rr text[];
@@ -1960,6 +2014,7 @@ $$;
 create function crdt._yseq_closure(state crdt.yseq, seed jsonb)
 returns jsonb
 language plpgsql immutable parallel safe
+set search_path = pg_catalog, pg_temp
 as $$
 declare
     rr text[] := array(select jsonb_array_elements_text(state -> 'r'));
@@ -2000,6 +2055,7 @@ $$;
 create function crdt.yseq_diff(old crdt.yseq, new crdt.yseq)
 returns jsonb
 language plpgsql immutable parallel safe
+set search_path = pg_catalog, pg_temp
 as $$
 declare
     ov jsonb;
@@ -2041,6 +2097,7 @@ $$;
 create function crdt._yseq_check(state crdt.yseq, what text)
 returns void
 language plpgsql immutable parallel safe
+set search_path = pg_catalog, pg_temp
 as $$
 begin
     if state is null then
@@ -2066,6 +2123,7 @@ $$;
 create function crdt.yseq_merge(a crdt.yseq, b crdt.yseq)
 returns crdt.yseq
 language plpgsql immutable parallel safe
+set search_path = pg_catalog, pg_temp
 as $$
 declare
     ops jsonb;
@@ -2078,6 +2136,13 @@ begin
     end if;
     perform crdt._yseq_check(a, 'yseq_merge: argument a');
     perform crdt._yseq_check(b, 'yseq_merge: argument b');
+    if a -> 'o' is distinct from b -> 'o' and a ? 'o' and b ? 'o' then
+        raise exception 'crdt.yseq_merge: the states belong to different documents (ids % and %)', a ->> 'o', b ->> 'o'
+            using errcode = '22023';
+    end if;
+    if b ? 'o' and not a ? 'o' then
+        a := (a::jsonb || jsonb_build_object('o', b -> 'o'))::crdt.yseq;
+    end if;
     ops := crdt.yseq_ops_since(b, crdt.yseq_version(a));
     if jsonb_array_length(b -> 'q') > 0 then
         -- b's waiting validated ops wait in the result too (or run now)
@@ -2093,6 +2158,123 @@ create aggregate crdt.yseq_merge_agg(crdt.yseq) (
     combinefunc = crdt.yseq_merge,
     parallel = safe
 );
+
+-- Limits on what one untrusted op may carry: replica keys (ids, devices,
+-- origins, v keys) of at most 256 bytes, at most 128 insert runs after
+-- joining runs that continue each other (4,096 before), and at most 32
+-- replica keys (devices) per writer in a state.
+-- They bound the cost of the causal checks (V5 walks between the origins of
+-- each run) and the size that keys add to every later v and to the state.
+create function crdt._yseq_limit(kind text)
+returns int
+language sql immutable parallel safe
+return case kind when 'key_bytes' then 256 when 'runs' then 128 when 'devices' then 32 end;
+
+-- Join runs of an op that continue each other (same replica, consecutive
+-- seqs, originLeft the previous character, same originRight): one run, as
+-- typing them would have made. Used to count runs against the limit; the
+-- engine keeps the runs as sent (a run that repeats integrated ids is
+-- skipped, a joined one would overlap them) and skips the V4/V5 walk for a
+-- run that continues the previous one, which cannot fail where that one
+-- passed.
+create function crdt._yseq_coalesce(op jsonb)
+returns jsonb
+language plpgsql immutable parallel safe
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+    out jsonb[] := '{}';
+    n int := 0;
+    x jsonb;
+    lst jsonb;
+begin
+    if jsonb_typeof(op -> 'i') is distinct from 'array' or jsonb_array_length(op -> 'i') < 2 then
+        return op;
+    end if;
+    for x in select y from jsonb_array_elements(op -> 'i') y loop
+        if n > 0 then
+            lst := out[n];
+            if jsonb_typeof(x) = 'array' and jsonb_typeof(lst) = 'array'
+               and x -> 0 = lst -> 0 and jsonb_typeof(x -> 1) = 'number' and jsonb_typeof(lst -> 1) = 'number'
+               and jsonb_typeof(x -> 4) = 'string' and jsonb_typeof(lst -> 4) = 'string'
+               and (x ->> 1)::numeric = (lst ->> 1)::numeric + length(lst ->> 4)
+               and x -> 2 = jsonb_build_array(lst -> 0, (lst ->> 1)::numeric + length(lst ->> 4) - 1)
+               and x -> 3 = lst -> 3 then
+                out[n] := jsonb_set(lst, '{4}', to_jsonb((lst ->> 4) || (x ->> 4)));
+                continue;
+            end if;
+        end if;
+        n := n + 1;
+        out[n] := x;
+    end loop;
+    return jsonb_set(op, '{i}', to_jsonb(out));
+end;
+$$;
+
+-- The causal rules that read only the op (V0, V1, V2, V6), its shape and the
+-- limits: null when the op passes, else the reason. Used by yseq_apply on
+-- arrival and again by crdt._yseq_integrate for waiting ops it loads (which
+-- may come from another state through yseq_merge).
+create function crdt._yseq_op_static(op jsonb)
+returns text
+language plpgsql immutable parallel safe
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+    vadv jsonb;
+    x jsonb;
+begin
+    if jsonb_typeof(op) is distinct from 'object'
+       or (op - '{i,d,v}'::text[]) <> '{}'::jsonb
+       or coalesce(jsonb_typeof(op -> 'i'), 'null') not in ('array', 'null')
+       or coalesce(jsonb_typeof(op -> 'd'), 'null') not in ('array', 'null') then
+        return 'malformed op';
+    end if;
+    if exists (select 1 from jsonb_array_elements(coalesce(op -> 'i', '[]'::jsonb)) y where not crdt._yseq_valid_run(y)) then
+        return 'malformed insert run';
+    end if;
+    if exists (select 1 from jsonb_array_elements(coalesce(op -> 'd', '[]'::jsonb)) y where not crdt._yseq_valid_del(y)) then
+        return 'malformed delete';
+    end if;
+    if jsonb_array_length(coalesce(op -> 'i', '[]'::jsonb)) > 32 * crdt._yseq_limit('runs')
+       or jsonb_array_length(coalesce(crdt._yseq_coalesce(op) -> 'i', '[]'::jsonb)) > crdt._yseq_limit('runs') then
+        return format('more than %s insert runs in one op (after joining runs that continue each other), or more than %s before',
+                      crdt._yseq_limit('runs'), 32 * crdt._yseq_limit('runs'));
+    end if;
+    if jsonb_typeof(op -> 'v') is distinct from 'object'
+       or exists (select 1 from jsonb_each(op -> 'v') e
+                  where e.key !~ '^[^:]+(:.+)?$' or jsonb_typeof(e.value) <> 'number'
+                     or (e.value #>> '{}')::numeric not between 1 and 2147483647
+                     or (e.value #>> '{}')::numeric <> floor((e.value #>> '{}')::numeric)) then
+        return 'V0: the op has no version vector v of replica keys and counts from 1';
+    end if;
+    if exists (select 1 from jsonb_object_keys(op -> 'v') k where octet_length(k) > crdt._yseq_limit('key_bytes'))
+       or exists (select 1 from jsonb_array_elements(coalesce(op -> 'i', '[]'::jsonb)) y
+                  where octet_length(y ->> 0) > crdt._yseq_limit('key_bytes')
+                     or octet_length(y -> 2 ->> 0) > crdt._yseq_limit('key_bytes')
+                     or octet_length(y -> 3 ->> 0) > crdt._yseq_limit('key_bytes'))
+       or exists (select 1 from jsonb_array_elements(coalesce(op -> 'd', '[]'::jsonb)) y
+                  where octet_length(y ->> 0) > crdt._yseq_limit('key_bytes')) then
+        return format('a replica key is longer than %s bytes', crdt._yseq_limit('key_bytes'));
+    end if;
+    vadv := op -> 'v';
+    for x in select y from jsonb_array_elements(coalesce(op -> 'i', '[]'::jsonb)) y loop
+        if (x -> 2 <> 'null'::jsonb and (x -> 2 ->> 1)::numeric > coalesce((vadv ->> (x -> 2 ->> 0))::numeric, 0))
+           or (x -> 3 <> 'null'::jsonb and (x -> 3 ->> 1)::numeric > coalesce((vadv ->> (x -> 3 ->> 0))::numeric, 0)) then
+            return 'V1: an origin is not covered by v';
+        end if;
+        if coalesce((vadv ->> (x ->> 0))::numeric, 0) <> (x ->> 1)::numeric - 1 then
+            return 'V2: a run does not start at v[replica] + 1';
+        end if;
+        vadv := vadv || jsonb_build_object(x ->> 0, (x ->> 1)::numeric + length(x ->> 4) - 1);
+    end loop;
+    if exists (select 1 from jsonb_array_elements(coalesce(op -> 'd', '[]'::jsonb)) y
+               where (y ->> 1)::numeric + (y ->> 2)::numeric - 1 > coalesce((vadv ->> (y ->> 0))::numeric, 0)) then
+        return 'V6: a delete target is not covered by v';
+    end if;
+    return null;
+end;
+$$;
 
 -- The write path for untrusted writers: ops from a writer whose identity is
 -- `replica` (default crdt.current_replica_id()). `ops` is one op
@@ -2131,10 +2313,10 @@ begin
             using errcode = '42501',
                   hint = 'Pass the writer''s identity as the replica argument, or set it up for crdt.current_replica_id() (a JWT claim in request.jwt.claims, or the crdt.replica_id setting).';
     end if;
-    if replica !~ '^[^:]+$' then
-        raise exception 'crdt.yseq_apply: % is not a replica id', quote_literal(replica)
+    if replica !~ '^[^:]+$' or octet_length(replica) > crdt._yseq_limit('key_bytes') then
+        raise exception 'crdt.yseq_apply: % is not a replica id', quote_literal(left(replica, 64))
             using errcode = '22023',
-                  hint = 'A replica id is non-empty and has no ":" (":" separates a replica id from a device suffix).';
+                  hint = 'A replica id is non-empty, at most 256 bytes, and has no ":" (":" separates a replica id from a device suffix).';
     end if;
     if ops is null then
         return state;
@@ -2181,47 +2363,32 @@ begin
             using errcode = '42501',
                   hint = 'Insert runs may only carry the writer''s own replica id, or <replica id>:<device>.';
     end if;
-    -- the static causal rules, op by op (experiments/text-ref/README.md):
-    -- V0 v is a version vector, V1 origins covered by v advanced run by run,
-    -- V2 a run's first seq is v[replica] + 1, V6 delete targets covered
+    -- the static causal rules and limits, op by op
+    -- (experiments/text-ref/README.md): V0 v is a version vector, V1 origins
+    -- covered by v advanced run by run, V2 a run's first seq is v[replica] +
+    -- 1, V6 delete targets covered
     for op1 in select y from jsonb_array_elements(ops) y loop
-        if jsonb_typeof(op1 -> 'v') is distinct from 'object'
-           or exists (select 1 from jsonb_each(op1 -> 'v') e
-                      where e.key !~ '^[^:]+(:.+)?$' or jsonb_typeof(e.value) <> 'number'
-                         or (e.value #>> '{}')::numeric not between 1 and 2147483647
-                         or (e.value #>> '{}')::numeric <> floor((e.value #>> '{}')::numeric)) then
-            why := 'V0: the op has no version vector v of replica keys and counts from 1';
-        else
-            vadv := op1 -> 'v';
-            why := null;
-            for run1 in select y from jsonb_array_elements(coalesce(op1 -> 'i', '[]'::jsonb)) y loop
-                if (run1 -> 2 <> 'null'::jsonb and (run1 -> 2 ->> 1)::numeric > coalesce((vadv ->> (run1 -> 2 ->> 0))::numeric, 0))
-                   or (run1 -> 3 <> 'null'::jsonb and (run1 -> 3 ->> 1)::numeric > coalesce((vadv ->> (run1 -> 3 ->> 0))::numeric, 0)) then
-                    why := 'V1: an origin is not covered by v';
-                    exit;
-                end if;
-                if coalesce((vadv ->> (run1 ->> 0))::numeric, 0) <> (run1 ->> 1)::numeric - 1 then
-                    why := 'V2: a run does not start at v[replica] + 1';
-                    exit;
-                end if;
-                vadv := vadv || jsonb_build_object(run1 ->> 0, (run1 ->> 1)::numeric + length(run1 ->> 4) - 1);
-            end loop;
-            if why is null and exists (select 1 from jsonb_array_elements(coalesce(op1 -> 'd', '[]'::jsonb)) y
-                                       where (y ->> 1)::numeric + (y ->> 2)::numeric - 1 > coalesce((vadv ->> (y ->> 0))::numeric, 0)) then
-                why := 'V6: a delete target is not covered by v';
-            end if;
-        end if;
+        why := crdt._yseq_op_static(op1);
         if why is not null then
             raise exception 'crdt.yseq_apply: op rejected (%)', why
                 using errcode = '22023',
-                      hint = 'The op breaks a causal rule of research/text.md, Amendment 1 (experiments/text-ref/README.md, V0 to V7).';
+                      hint = 'The op breaks a causal rule of research/text.md, Amendment 1 (experiments/text-ref/README.md, V0 to V7), or a limit (crdt._yseq_limit).';
         end if;
     end loop;
+    -- at most crdt._yseq_limit('devices') replica keys per writer
+    if (select count(distinct k) from (
+            select jsonb_array_elements_text(coalesce(state, crdt.yseq_empty()) -> 'r') k
+            union
+            select x ->> 0 from jsonb_array_elements(ins) x) z
+        where split_part(k, ':', 1) = replica) > crdt._yseq_limit('devices') then
+        raise exception 'crdt.yseq_apply: writer % would have more than % replica keys (devices)', quote_literal(replica), crdt._yseq_limit('devices')
+            using errcode = '54000';
+    end if;
     if jsonb_array_length(ins) = 0 and jsonb_array_length(dels) = 0 then
         return coalesce(state, crdt.yseq_empty());
     end if;
     return crdt._yseq_integrate(coalesce(state, crdt.yseq_empty()), '[]', '[]',
-        (select jsonb_agg(jsonb_build_array(replica, x) order by o) from jsonb_array_elements(ops) with ordinality a(x, o)));
+        (select jsonb_agg(jsonb_build_array(replica, y) order by o) from jsonb_array_elements(ops) with ordinality a(y, o)));
 end;
 $$;
 
@@ -2237,6 +2404,7 @@ $$;
 create function crdt.yseq_is_valid(state jsonb)
 returns boolean
 language plpgsql immutable parallel safe
+set search_path = pg_catalog, pg_temp
 as $$
 declare
     rr text[];
@@ -2255,7 +2423,7 @@ begin
     end if;
     if not coalesce(jsonb_typeof(state) = 'object'
         and state @> '{"t": "yseq", "v": 1, "r": [], "c": [], "n": [], "s": [], "m": [], "p": [], "x": [], "q": []}'
-        and (state - '{t,v,r,c,n,s,m,p,x,q}'::text[]) = '{}'::jsonb, false) then
+        and (state - '{t,v,r,c,n,s,m,p,x,q,o}'::text[]) = '{}'::jsonb, false) then
         return false;
     end if;
     if state @? '$.r[*] ? (@.type() != "string")'
@@ -2347,6 +2515,7 @@ $$;
 create function crdt._yseq_normalize(state crdt.yseq)
 returns crdt.yseq
 language plpgsql immutable parallel safe
+set search_path = pg_catalog, pg_temp
 as $$
 declare
     rr text[];
@@ -2400,17 +2569,19 @@ begin
         pos := pos + vis;
         i := i + cnt;
     end loop;
-    return jsonb_build_object(
+    return (jsonb_build_object(
         't', 'yseq', 'v', 1,
         'r', to_jsonb(coalesce(sr, '{}')),
         'c', to_jsonb(coalesce(array(select cc[array_position(rr, x)] from unnest(sr) x), '{}')),
         'n', to_jsonb(out_n), 's', to_jsonb(out_s), 'm', to_jsonb(out_m),
         'p', (select coalesce(jsonb_agg(distinct x), '[]'::jsonb) from jsonb_array_elements(state -> 'p') x),
         'q', (select coalesce(jsonb_agg(distinct x), '[]'::jsonb) from jsonb_array_elements(state -> 'q') x),
+
         'x', (select coalesce(jsonb_agg(jsonb_build_array(k, lower(g), upper(g) - lower(g)) order by k collate "C", lower(g)), '[]'::jsonb)
               from (select k, unnest(range_agg(rg)) g
                     from (select x ->> 0 k, int8range((x ->> 1)::numeric::int8, (x ->> 1)::numeric::int8 + (x ->> 2)::numeric::int8) rg
-                          from jsonb_array_elements(state -> 'x') x) z group by k) y))::crdt.yseq;
+                          from jsonb_array_elements(state -> 'x') x) z group by k) y))
+        || case when state ? 'o' then jsonb_build_object('o', state -> 'o') else '{}'::jsonb end)::crdt.yseq;
 end;
 $$;
 

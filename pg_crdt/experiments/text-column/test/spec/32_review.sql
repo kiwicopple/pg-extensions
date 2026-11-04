@@ -22,11 +22,15 @@ select tap.is(crdt.yseq_length(:'dd'), 32000, '8,000 deletes in one apply: 8,000
 select tap.ok(:dels_s < 1.5, format('and fast (%s s; O(n^2) took 12.7 s)', round(:dels_s::numeric, 2)));
 select tap.ok(crdt.yseq_is_valid(:'dd'), 'and the state is valid');
 select clock_timestamp() as t1 \gset
-select crdt.yseq_apply(:'big', jsonb_build_object('v', '{"bob": 40000}'::jsonb, 'i', (
-    select jsonb_agg(jsonb_build_array('mal', rn, jsonb_build_array('bob', g), jsonb_build_array('bob', g + 1), 'x'))
-    from (select g, row_number() over () rn from (select g from generate_series(1, 39998, 2) g order by random() limit 8000) y) z)), 'mal') as ii \gset
+-- (as 80 ops of 100 runs in one call: one op may carry at most 128 runs)
+select crdt.yseq_apply(:'big', (
+    select jsonb_agg(jsonb_build_object('v', '{"bob": 40000}'::jsonb || case when b > 0 then jsonb_build_object('mal', 100 * b) else '{}'::jsonb end,
+                                        'i', i) order by b)
+    from (select (rn - 1) / 100 b, jsonb_agg(jsonb_build_array('mal', rn, jsonb_build_array('bob', g), jsonb_build_array('bob', g + 1), 'x') order by rn) i
+          from (select g, row_number() over () rn from (select g from generate_series(1, 39998, 2) g order by random() limit 8000) y) z
+          group by 1) w), 'mal') as ii \gset
 select extract(epoch from clock_timestamp() - :'t1'::timestamptz) as ins_s \gset
-select tap.is(crdt.yseq_length(:'ii'), 48000, '8,000 inserts after random characters in one apply');
+select tap.is(crdt.yseq_length(:'ii'), 48000, '8,000 inserts after random characters in one apply call');
 select tap.ok(:ins_s < 2, format('and fast (%s s)', round(:ins_s::numeric, 2)));
 select tap.ok(crdt.yseq_is_valid(:'ii') and length(replace(crdt.yseq_value(:'ii'), 'a', '')) = 8000, 'valid, with every x in');
 

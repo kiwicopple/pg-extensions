@@ -26,6 +26,7 @@ create index on posts using gin (to_tsvector('english', crdt.yseq_value(body)));
 | Function | Behaviour |
 | --- | --- |
 | `yseq_empty()` | The empty document. |
+| `yseq_new()` | An empty document with a random document id (`"o"`), for a column default. VOLATILE. `yseq_merge` refuses states of different ids and `yseq_set` a base of another id (22023). |
 | `yseq_value(s) -> text` | The text. IMMUTABLE: usable in stored generated columns, expression indexes and full-text indexes (`test/spec/31_generated.sql`). |
 | `yseq_length(s) -> int` | Length in code points. |
 | `yseq_version(s) -> jsonb` | Version vector `{"replica": count}` (characters integrated per replica key; pending runs not counted). |
@@ -238,6 +239,20 @@ research/text.md said that concurrent saves of different paragraphs both survive
 
 Why the base is the whole state and not a version vector token, as in shape B (`ydoc_base`): the text at a version needs (1) which characters were visible then, so each delete needs a stamp saying when it happened, and (2) the text of characters deleted since, which this shape does not store. Stamps would also stop adjacent tombstones from merging into one run unless their stamps are equal. The trace has 77,463 single-character delete patches that now merge into about 6,900 tombstone runs; with a stamp per delete they would be up to 77,463 runs, about 6 times the current 12,396 runs in total. A bounded log of recent deletes with their text would allow a small token for recent bases and is listed below as a follow-up. The cost of the current design is the payload: the client sends the state back (30 kB raw for the 10k document, 450 kB for 100k).
 
+## Second review: the sibling's bugs, checked on yseq_
+
+The review of the table-backed ydoc_ found seven problems; each was checked here with a repro, and the fixes have regressions in `33_review2`.
+
+- **(a) Unbounded replica keys.** A 6 kB replica id was accepted. Now every replica key in an op (run replicas, origins, delete targets, keys of `v`) and the caller's id are at most 256 bytes (22023), local edits refuse longer keys too, and a writer may have at most 32 replica keys (devices) in a state (54000). Limits: `crdt._yseq_limit`.
+- **(b) Chained runs.** An op with `v {}` and 2,000 one-character runs, each continuing the previous one, took 2.3 s on a document of 9,600 runs: every run walked from its originLeft to the end of the document for V5. A run that continues the previous run of the same op cannot fail V4 or V5 where that one passed (its origins lie inside the range just checked, and `v` grew only by the previous run's ids), so the walk is skipped; 3,000 such runs now take well under a second. Runs are kept as sent (joining them would turn "skip the duplicate run, integrate the next" into "reject the overlap", a different decision from the reference); the limit counts runs after joining the ones that continue each other: at most 128 per op (4,096 before joining), which bounds the remaining V5 walks. The trace's batch100 ops have at most 33 runs.
+- **(c) Waiting ops that fail differently.** Waiting ops are checked again when they load (shape, limits, static rules, writer), so a malformed one (it can arrive in another state through `yseq_merge`) is dropped instead of raising a cast or overflow error in every later call. Only incoming ops count against the quota.
+- **(d) Three-way set after two saves from one base.** Not a bug here: with a concurrent edit by another writer, the op of the second save (`yseq_diff`) passes V3 and V5 on a peer and gives the same text. Now tested.
+- **(e) search_path.** Every PL/pgSQL yseq function now pins `search_path = pg_catalog, pg_temp`, and a test asserts it. (The extension file pins only identity-dependent functions, because a SET clause costs a GUC save and restore per call; the cost here is in the bench below.) The SQL-standard functions stay unpinned so that they inline; their bodies are bound at creation.
+- **(f) A base from another document.** Two documents written by the same replica ("hello" and "world", both `alice` 1..5) gave a garbage save. Now `yseq_set` refuses a base with characters the state lacks (22023), and states made by `yseq_new()` carry a document id that `yseq_set` and `yseq_merge` compare (22023). Without ids, two documents that happen to have the same ids are not told apart (documented).
+- **(g) Positions near 2^31.** Already 22023 (the range check subtracts instead of adding); now tested.
+
+Cost (`bench.sh --quick`): edits by position, apply of one run, reads and merge are unchanged within noise (the pinned search_path is not visible at these sizes: insert 0.23 ms at 100k). The batch100 replay through `yseq_apply` went from 6.0 to 6.5 ms per call with lz4 (11.5 to 12.7 ms with pglz), from the per-op work added on arrival: joining runs to count them, the key and device checks, and checking the op again when it is loaded.
+
 ## Causal validation (Amendment 1)
 
 research/text.md, Amendment 1: origins that merely exist are not enough. A writer that names origins which were never adjacent (the reviewer's repro: originRight skips a character) makes replicas diverge. Every op on the untrusted path now carries `v`, the sender's version vector before the op, and `yseq_apply` checks the rules of experiments/text-ref/README.md:
@@ -273,7 +288,7 @@ The trace's ops all come from one up-to-date writer, so V3 never scans and V4/V5
 
 ## Tests
 
-`experiments/text-column/test/run.sh`: 11 files, 199 assertions, all passing on Postgres 16.4. The suite also passes with chunks of 4 runs and the bulk-delete path forced (`--impl` with an edited copy), which exercises chunk splits on almost every edit.
+`experiments/text-column/test/run.sh`: 12 files, 221 assertions, all passing on Postgres 16.4. The suite also passes with chunks of 4 runs and the bulk-delete path forced (`--impl` with an edited copy), which exercises chunk splits on almost every edit.
 
 | File | Goal |
 | --- | --- |
@@ -287,6 +302,7 @@ The trace's ops all come from one up-to-date writer, so V3 never scans and V4/V5
 | `30_apply` | owner rule (id, device key, exact match), null and malformed caller ids, deletes of others, arrays of ops, idempotence; each causal rule V0 to V7 (the reviewer's repro, a two-run op rejected whole, a waiting op dropped later with nothing applied, a waiting op carried by merge); the quota (54000); malformed ops (22023); default identity; labels and grants |
 | `31_generated` | stored generated column, GIN full-text index and expression index used by the planner, `like`, REINDEX and updates under `search_path = pg_catalog, pg_temp` |
 | `32_review` | regressions from the adversarial review: linear cost of 8,000 deletes and 8,000 random inserts in one apply, a second save from the same base, malformed states (23514, 22023), seq and len written as 1.0, seq 2147483647, pending entries that are not pending |
+| `33_review2` | regressions for the sibling ydoc_'s review, checked on yseq_: key length and device caps, 3,000 chained runs in one op on a 10,000-run document, the run cap, malformed waiting ops dropped, a three-way save's op after two saves from one base passing V3/V5 on a peer, pinned search_path for every PL/pgSQL function, bases and merges across documents (22023), positions near 2^31 |
 | `40_differential` | all JS reference fixtures (`experiments/text-ref/fixtures/fixtures.sql`), `malicious-*` included: validated one op per call (shuffled with duplicates, and causal) with the reference's text and decisions, two validated halves merged, ops_since replayed on the trusted path, honest fixtures in one trusted call |
 
 ## Limitations
@@ -299,7 +315,8 @@ The trace's ops all come from one up-to-date writer, so V3 never scans and V4/V5
 - A waiting op rejected in a later call is dropped silently; the writer learns only that its text never appears.
 - Many concurrent inserts at one spot still cost O(k) each in the YjsMod scan, as in any YjsMod implementation.
 - `yseq_is_valid` rejects pending entries that are not pending (a pending delete of a present id, a pending run that is wholly present or ready), which only a hand-made state has. A writer that uses one replica key both locally and through `yseq_apply` can make such a state (see below).
-- The waiting-op quota is per writer (256 runs plus deletes, 64 kB); many writer ids can still fill a state. The quota is a constant (`crdt._yseq_quota`), not a setting, so that `yseq_apply` stays IMMUTABLE.
+- The waiting-op quota is per writer (256 runs plus deletes, 64 kB); many writer ids can still fill a state.
+- A base from another document is detected only by a document id (`yseq_new()`) or by having characters the state lacks. The quota is a constant (`crdt._yseq_quota`), not a setting, so that `yseq_apply` stays IMMUTABLE.
 - Local edits do not retry pending ops (only `yseq_apply` and `yseq_merge` do), and a replica that writes both locally and through `yseq_apply` with the same key can collide with its own pending ids.
 - `yseq_ops_since` sends the whole delete set every time.
 - Positions are code points; JS clients must convert from UTF-16 indexes. Grapheme clusters (combining marks, ZWJ sequences) can be split by a position edit or by set()'s diff.

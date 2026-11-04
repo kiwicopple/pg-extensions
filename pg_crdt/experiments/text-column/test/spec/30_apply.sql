@@ -121,8 +121,8 @@ rollback;
 select tap.ok(not exists (select 1 from pg_proc where pronamespace = 'crdt'::regnamespace and proname ~ '^_?yseq_' and prosecdef),
               'no SECURITY DEFINER function');
 select tap.ok(not exists (select 1 from pg_proc where pronamespace = 'crdt'::regnamespace and proname ~ '^_?yseq_' and prokind = 'f'
-                          and (provolatile <> 'i' or proparallel <> 's')),
-              'every yseq function is IMMUTABLE and PARALLEL SAFE');
+                          and proname <> 'yseq_new' and (provolatile <> 'i' or proparallel <> 's')),
+              'every yseq function but yseq_new (a random document id) is IMMUTABLE and PARALLEL SAFE');
 select tap.ok((select proconfig @> array['search_path=pg_catalog, pg_temp'] from pg_proc where oid = 'crdt.yseq_apply(crdt.yseq, jsonb, text)'::regprocedure),
               'yseq_apply pins search_path');
 select tap.ok(not exists (
