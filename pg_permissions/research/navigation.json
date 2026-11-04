@@ -1,0 +1,276 @@
+{
+  "description": "Page inventory and sidebar for the research docs site (research-site/ at the repo root). src is relative to this directory; route and slug are relative to /pg_permissions/ (an empty route is the index). historical pages get a Historical: title prefix. Sidebar slugs may also name hand-written pages in research-site/src/content/docs/pg_permissions/.",
+  "title": "pg_permissions",
+  "userSite": "https://permissions.dev",
+  "pages": [
+    {
+      "src": "README.md",
+      "route": "",
+      "label": "Overview"
+    },
+    {
+      "src": "architecture.md",
+      "route": "architecture",
+      "label": "Current architecture"
+    },
+    {
+      "src": "benchmarks/README.md",
+      "route": "benchmarks/overview",
+      "label": "Overview"
+    },
+    {
+      "src": "benchmarks/D.md",
+      "route": "benchmarks/design-d-report",
+      "label": "Current implementation"
+    },
+    {
+      "src": "benchmarks/cedar.md",
+      "route": "benchmarks/cedar-report",
+      "label": "Cedar model (design E)"
+    },
+    {
+      "src": "benchmarks/COMPARISON.md",
+      "route": "benchmarks/comparison",
+      "label": "Earlier engine comparison"
+    },
+    {
+      "src": "benchmarks/VERSIONS.md",
+      "route": "benchmarks/versions-report",
+      "label": "Version measurements"
+    },
+    {
+      "src": "benchmarks/OPTIMIZATIONS.md",
+      "route": "benchmarks/optimizations-report",
+      "label": "Optimization report"
+    },
+    {
+      "src": "decision.md",
+      "route": "decision",
+      "label": "Decision record",
+      "historical": true
+    },
+    {
+      "src": "designs/d-per-model.md",
+      "route": "designs/d-per-model",
+      "label": "Per-model implementation"
+    },
+    {
+      "src": "designs/d-conditions.md",
+      "route": "designs/d-conditions",
+      "label": "Condition evaluator"
+    },
+    {
+      "src": "designs/e-cedar.md",
+      "route": "designs/e-cedar",
+      "label": "Cedar model (design E)"
+    },
+    {
+      "src": "goals.md",
+      "route": "goals",
+      "label": "Goals and budgets"
+    },
+    {
+      "src": "plan.md",
+      "route": "plan",
+      "label": "Completed implementation plan",
+      "historical": true
+    },
+    {
+      "src": "prototypes/README.md",
+      "route": "prototypes/overview",
+      "label": "Overview"
+    },
+    {
+      "src": "designs/a-tuple-core.md",
+      "route": "designs/a-tuple-core",
+      "label": "A: tuple core",
+      "historical": true
+    },
+    {
+      "src": "designs/b-policy-first.md",
+      "route": "designs/b-policy-first",
+      "label": "B: policy first",
+      "historical": true
+    },
+    {
+      "src": "designs/c-compiled-model.md",
+      "route": "designs/c-compiled-model",
+      "label": "C: compiled model",
+      "historical": true
+    },
+    {
+      "src": "prototypes/a-tuple-core.md",
+      "route": "prototypes/a-tuple-core",
+      "label": "A: usage",
+      "historical": true
+    },
+    {
+      "src": "prototypes/b-policy-first.md",
+      "route": "prototypes/b-policy-first",
+      "label": "B: usage",
+      "historical": true
+    },
+    {
+      "src": "prototypes/c-compiled-model.md",
+      "route": "prototypes/c-compiled-model",
+      "label": "C: usage",
+      "historical": true
+    },
+    {
+      "src": "security/2026-11-03-SECURITY_REVIEW.md",
+      "route": "security-review-2026-11-03",
+      "label": "Security review (2026-11-03)"
+    },
+    {
+      "src": "security/2026-11-04-CORRECTNESS.md",
+      "route": "correctness-review-2026-11-04",
+      "label": "Correctness review (2026-11-04)"
+    },
+    {
+      "src": "upstream/openfga-cycle-but-not-inconsistency.md",
+      "route": "upstream/openfga-cycle-but-not",
+      "label": "OpenFGA upstream report"
+    },
+    {
+      "src": "journal.md",
+      "route": "journal",
+      "label": "Build journal"
+    }
+  ],
+  "sidebar": [
+    {
+      "label": "Overview",
+      "slug": ""
+    },
+    {
+      "label": "Current architecture",
+      "slug": "architecture"
+    },
+    {
+      "label": "Benchmarks",
+      "collapsed": true,
+      "items": [
+        {
+          "label": "Overview",
+          "slug": "benchmarks/overview"
+        },
+        {
+          "label": "Current implementation",
+          "slug": "benchmarks/design-d-report"
+        },
+        {
+          "label": "Cedar model (design E)",
+          "slug": "benchmarks/cedar-report"
+        },
+        {
+          "label": "Comparison dashboard",
+          "slug": "benchmarks/dashboard"
+        },
+        {
+          "label": "Optimizations",
+          "slug": "benchmarks/optimizations"
+        },
+        {
+          "label": "Postgres versions",
+          "slug": "benchmarks/postgres-versions"
+        },
+        {
+          "label": "Earlier engine comparison",
+          "slug": "benchmarks/comparison"
+        },
+        {
+          "label": "Version measurements",
+          "slug": "benchmarks/versions-report"
+        },
+        {
+          "label": "Optimization report",
+          "slug": "benchmarks/optimizations-report"
+        }
+      ]
+    },
+    {
+      "label": "Design decisions",
+      "collapsed": true,
+      "items": [
+        {
+          "label": "Decision record",
+          "slug": "decision"
+        },
+        {
+          "label": "Per-model implementation",
+          "slug": "designs/d-per-model"
+        },
+        {
+          "label": "Cedar model (design E)",
+          "slug": "designs/e-cedar"
+        },
+        {
+          "label": "Condition evaluator",
+          "slug": "designs/d-conditions"
+        },
+        {
+          "label": "Goals and budgets",
+          "slug": "goals"
+        },
+        {
+          "label": "Completed implementation plan",
+          "slug": "plan"
+        }
+      ]
+    },
+    {
+      "label": "Historical designs and prototypes",
+      "collapsed": true,
+      "items": [
+        {
+          "label": "Prototype comparison",
+          "slug": "prototypes-comparison"
+        },
+        {
+          "label": "Overview",
+          "slug": "prototypes/overview"
+        },
+        {
+          "label": "A: tuple core",
+          "slug": "designs/a-tuple-core"
+        },
+        {
+          "label": "B: policy first",
+          "slug": "designs/b-policy-first"
+        },
+        {
+          "label": "C: compiled model",
+          "slug": "designs/c-compiled-model"
+        },
+        {
+          "label": "A: usage",
+          "slug": "prototypes/a-tuple-core"
+        },
+        {
+          "label": "B: usage",
+          "slug": "prototypes/b-policy-first"
+        },
+        {
+          "label": "C: usage",
+          "slug": "prototypes/c-compiled-model"
+        }
+      ]
+    },
+    {
+      "label": "Security review (2026-11-03)",
+      "slug": "security-review-2026-11-03"
+    },
+    {
+      "label": "Correctness review (2026-11-04)",
+      "slug": "correctness-review-2026-11-04"
+    },
+    {
+      "label": "OpenFGA upstream report",
+      "slug": "upstream/openfga-cycle-but-not"
+    },
+    {
+      "label": "Build journal",
+      "slug": "journal"
+    }
+  ]
+}

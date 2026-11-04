@@ -3,14 +3,14 @@ title: Benchmarks dashboard
 description: Charts of the latency, scale, shape, read and write, parents and storage results of the three pg_permissions designs.
 ---
 
-import DatasetNote from '../../../../components/bench/DatasetNote.astro';
-import EngineComparison from '../../../../components/bench/EngineComparison.astro';
-import Scaling from '../../../../components/bench/Scaling.astro';
-import Shapes from '../../../../components/bench/Shapes.astro';
-import ReadWrite from '../../../../components/bench/ReadWrite.astro';
-import Parents from '../../../../components/bench/Parents.astro';
-import Seeds from '../../../../components/bench/Seeds.astro';
-import WorkloadTable from '../../../../components/bench/WorkloadTable.astro';
+import DatasetNote from '../../../../extensions/pg_permissions/components/bench/DatasetNote.astro';
+import EngineComparison from '../../../../extensions/pg_permissions/components/bench/EngineComparison.astro';
+import Scaling from '../../../../extensions/pg_permissions/components/bench/Scaling.astro';
+import Shapes from '../../../../extensions/pg_permissions/components/bench/Shapes.astro';
+import ReadWrite from '../../../../extensions/pg_permissions/components/bench/ReadWrite.astro';
+import Parents from '../../../../extensions/pg_permissions/components/bench/Parents.astro';
+import Seeds from '../../../../extensions/pg_permissions/components/bench/Seeds.astro';
+import WorkloadTable from '../../../../extensions/pg_permissions/components/bench/WorkloadTable.astro';
 
 The page draws every chart at build time from the run files. Each chart has a table view under it. The design colors are the same everywhere:
 <strong style="color:var(--eng-a)">A</strong> tuple core, <strong style="color:var(--eng-b)">B</strong> policy first,

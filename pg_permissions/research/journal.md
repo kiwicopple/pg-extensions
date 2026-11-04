@@ -1204,3 +1204,11 @@ An external tester sent nine discrepancies, found against an earlier 0.1.0 snaps
 - 9 reports: 6 fixed, 2 already fixed, 1 matching upstream.
 - 19 failing SQL assertions and 3 races reproduced before the fixes.
 - 170,045 SQL assertions (PG 16.4), 93 JS integration tests.
+
+## Session 14 (2026-11-04): research moves to its own site
+
+The docs site at permissions.dev had a "Research and design" section next to the user guides: design records, benchmark reports, reviews and this journal. That mixed internal development material with the documentation people read to install and use the extension. The research records now publish on a separate site for the whole repository, built from `research-site/` and deployed to GitHub Pages at https://kiwicopple.github.io/pg-extensions/. pg_permissions is under `/pg_permissions/`.
+
+- The sources did not move. The site reads every `<extension>/research/` directory, so another extension appears once it has one. `research/navigation.json` keeps the routes and sidebar order of the old section.
+- The benchmark chart pages and their components moved to `research-site/`, because only research used them.
+- permissions.dev no longer builds research pages. Links from the guides, the homepage and the blog post point to the research site, rewritten at build time where possible.

@@ -21,3 +21,7 @@ If you have `dbdev` CLI version `0.1.3` or older, you will need to specify the p
 
 - `select * from pgtle.available_extensions();` - get all extensions
 - `select * from pgtle.available_extension_versions();` -- get all versions
+
+## Research docs
+
+Each extension's research records (`<extension>/research/`) are published together at https://kiwicopple.github.io/pg-extensions/. Build or preview locally with `make research.docs` or `make research.docs.dev`; see [research-site/README.md](research-site/README.md).

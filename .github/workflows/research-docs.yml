@@ -1,0 +1,59 @@
+# Build the research docs site (research-site/) and deploy it to GitHub Pages.
+# Repository settings: Pages > Build and deployment > Source must be "GitHub Actions".
+name: Research docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '*/research/**'
+      - 'research-site/**'
+      - '.github/workflows/research-docs.yml'
+      # inputs of the pg_permissions chart pages and user-site links
+      - 'pg_permissions/bench/baselines/data/**'
+      - 'pg_permissions/bench/**/workloads/**'
+      - 'pg_permissions/site/navigation.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; let a running deployment finish rather than cancel it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: research-site/package-lock.json
+      - id: pages
+        uses: actions/configure-pages@v5
+      - run: npm ci
+        working-directory: research-site
+      - run: npm run build
+        working-directory: research-site
+        env:
+          DOCS_SITE: ${{ steps.pages.outputs.origin }}
+          DOCS_BASE: ${{ steps.pages.outputs.base_path }}
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: research-site/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

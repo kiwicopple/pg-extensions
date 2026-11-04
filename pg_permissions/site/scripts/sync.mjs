@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Sync the pg_permissions docs and benchmark data into the Starlight site.
+// Sync the pg_permissions docs into the Starlight site.
 //
 //   npm run sync     (also runs automatically before `npm run dev` and `npm run build`)
 //
@@ -7,22 +7,23 @@
 //   1. Markdown   -> src/content/docs/<route>.md  (frontmatter added, relative links rewritten;
 //                    the page inventory and sidebar are in navigation.mjs).
 //                    A page with code tab groups is written as <route>.mdx instead (see convertTabs).
-//   2. Bench data -> src/data/bench/*.json        (copied from pg_permissions/bench/baselines/data)
-//   3. Workloads  -> src/data/workloads.generated.json (description = first sentence of each
-//                    workload SQL file header))
+//   2. Plain Markdown exports -> public/markdown/<route>.md, and public/llms.txt
+//
+// Research records (../research) are not part of this site. Links to them become absolute URLs on the
+// research site (research-site/ at the repo root, see research-links.mjs).
 //
 // Hand-written pages are .mdx; generated pages are .md, or .mdx with the GENERATED marker on its first
 // line after the imports. rmGenerated removes only those, so cleaning is safe.
 
 import fs from 'node:fs';
 import { pages } from '../navigation.mjs';
+import { RESEARCH_URL, researchSourceUrl } from '../research-links.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const DOCS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SRC_ROOT = path.resolve(DOCS, '..'); // pg_permissions/ (this site is pg_permissions/site)
 const OUT_DOCS = path.join(DOCS, 'src', 'content', 'docs');
-const OUT_DATA = path.join(DOCS, 'src', 'data');
 const REPO = process.env.DOCS_REPO_URL ?? 'https://github.com/kiwicopple/pg-extensions';
 const REF = process.env.DOCS_REPO_REF ?? 'main';
 const REPO_PREFIX = 'pg_permissions'; // where SRC_ROOT lives inside the repo
@@ -39,9 +40,6 @@ const DIR_ROUTES = {
 	docs: 'guide',
 	test: 'contributing/test-suite',
 	'test/README.md': 'contributing/test-suite',
-	research: 'research/overview',
-	'research/prototypes': 'research/prototypes/overview',
-	'research/benchmarks': 'research/benchmarks/overview',
 };
 
 const warnings = [];
@@ -96,6 +94,8 @@ function rewriteTarget(target, srcFile, fromRoute, markdown = false) {
 	const abs = path.resolve(SRC_ROOT, path.dirname(srcFile), decodeURI(pathPart));
 	const rel = posix(path.relative(SRC_ROOT, abs));
 	if (rel.startsWith('..')) return { code: target };
+	const research = researchSourceUrl(rel, tail.replace(/^\?[^#]*/, ''));
+	if (research) return { url: research };
 	if (bySrc.has(rel)) {
 		const route = bySrc.get(rel).route;
 		const url = markdown ? path.posix.relative(path.posix.dirname(fromRoute), route + '.md') : routeLink(fromRoute, route);
@@ -286,8 +286,6 @@ function syncMarkdown() {
 			title = stripInline(h1[1]);
 			text = text.replace(h1[0], ''); // Starlight renders the title as the page H1
 		}
-		const historical = /^research\/(?:designs|prototypes)\/[abc]-/.test(page.route) || ['research/plan', 'research/decision'].includes(page.route);
-		if (historical) title = `Historical: ${title}`;
 		const description = firstParagraph(text);
 		let body = rewriteLinks(text, page.src, page.route);
 		const tabs = convertTabs(body, page.src);
@@ -335,7 +333,7 @@ function syncPlainMarkdown() {
 		'The extension has three models: RBAC, OpenFGA and Cedar. SQL and JavaScript examples are both included in Markdown.', '',
 		'## Guides and reference', '',
 	];
-	const groups = { current: [], research: [], contributing: [] };
+	const groups = { current: [], contributing: [] };
 	for (const page of AVAILABLE) {
 		const text = fs.readFileSync(path.join(SRC_ROOT, page.src), 'utf8');
 		const dest = path.join(markdownDir, page.route + '.md');
@@ -345,64 +343,16 @@ function syncPlainMarkdown() {
 		if (page.legacy) continue;
 		const description = firstParagraph(text);
 		const title = stripInline(text.match(/^# (.+)$/m)?.[1] ?? page.label);
-		const group = page.route.startsWith('research/') ? 'research' : page.route.startsWith('contributing/') ? 'contributing' : 'current';
+		const group = page.route.startsWith('contributing/') ? 'contributing' : 'current';
 		groups[group].push(`- [${title}](${site}${base}/markdown/${page.route}.md): ${description}`);
 	}
 	index.push(...groups.current, '', '## Blog', '',
 		`- [Blog](${site}${base}/blog/): Release stories and design essays. Each post links to a plain Markdown version.`,
-		'', '## Research and design records', '', ...groups.research, '', '## Contributing', '', ...groups.contributing);
+		'', '## Research and design records', '',
+		`- [Research and design records](${RESEARCH_URL}/): Design records, benchmark reports, reviews and the build journal, on the separate research site.`,
+		'', '## Contributing', '', ...groups.contributing);
 	fs.writeFileSync(path.join(publicDir, 'llms.txt'), index.join('\n') + '\n');
 	console.log(`sync: ${AVAILABLE.length} plain Markdown exports and llms.txt`);
-}
-
-function syncData() {
-	const from = path.join(SRC_ROOT, 'bench', 'baselines', 'data');
-	const to = path.join(OUT_DATA, 'bench');
-	fs.rmSync(to, { recursive: true, force: true });
-	if (!fs.existsSync(from)) {
-		console.log('sync: no bench/baselines/data yet, the site will use src/data/fixture');
-		return;
-	}
-	fs.mkdirSync(to, { recursive: true });
-	let n = 0;
-	for (const f of fs.readdirSync(from)) {
-		if (!f.endsWith('.json')) continue;
-		try {
-			JSON.parse(fs.readFileSync(path.join(from, f), 'utf8'));
-		} catch (e) {
-			warn(`bench data ${f} is not valid JSON, skipped (${e.message})`);
-			continue;
-		}
-		fs.copyFileSync(path.join(from, f), path.join(to, f));
-		n++;
-	}
-	console.log(`sync: ${n} bench data file(s) -> src/data/bench${n ? '' : ' (empty: using fixture)'}`);
-}
-
-function syncWorkloads() {
-	// design d's directory last, for the workloads only it has (conditions, blocklist); the shared names keep c's text
-	const dirs = [path.join(SRC_ROOT, 'bench', 'workloads'), path.join(SRC_ROOT, 'bench', 'designs', 'c', 'workloads'),
-		path.join(SRC_ROOT, 'bench', 'designs', 'd', 'workloads')];
-	const out = {};
-	for (const dir of dirs) {
-		if (!fs.existsSync(dir)) continue;
-		for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.sql'))) {
-			const name = f.replace(/\.sql$/, '');
-			if (out[name]) continue;
-			const header = [];
-			for (const line of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) {
-				const m = line.match(/^--\s?(.*)$/);
-				if (!m) break;
-				header.push(m[1].trim());
-			}
-			const joined = header.join(' ').replace(/\s+/g, ' ');
-			const sentence = joined.match(/^(.*?[.!?])(\s|$)/)?.[1] ?? joined;
-			out[name] = { description: sentence, source: posix(path.relative(SRC_ROOT, path.join(dir, f))) };
-		}
-	}
-	fs.mkdirSync(OUT_DATA, { recursive: true });
-	fs.writeFileSync(path.join(OUT_DATA, 'workloads.generated.json'), JSON.stringify(out, null, 2) + '\n');
-	console.log(`sync: ${Object.keys(out).length} workload descriptions -> src/data/workloads.generated.json`);
 }
 
 if (!fs.existsSync(SRC_ROOT)) {
@@ -411,6 +361,4 @@ if (!fs.existsSync(SRC_ROOT)) {
 }
 syncMarkdown();
 syncPlainMarkdown();
-syncData();
-syncWorkloads();
 if (warnings.length) console.warn(`sync: ${warnings.length} warning(s)`);

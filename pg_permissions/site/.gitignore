@@ -26,8 +26,6 @@ src/content/docs/**/*.md
 src/content/docs/rbac.mdx
 src/content/docs/fga.mdx
 src/content/docs/conditions.mdx
-src/data/bench/
-src/data/workloads.generated.json
 
 src/content/docs/models/
 src/content/docs/integrations/

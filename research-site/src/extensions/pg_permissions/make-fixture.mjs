@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Dev fixture: turn the saved per-run reports (pg_permissions/bench/baselines/<design>-<scale>-<shape>.md)
-// into JSON files in the shape the benchmark data contract uses. Output: src/data/fixture/*.json.
-// The site only reads the fixture when src/data/bench has no files. Re-run with `npm run fixture`
+// into JSON files in the shape the benchmark data contract uses. Output: data/fixture/*.json (next to this file).
+// The site only reads the fixture when data/bench has no files. Re-run with `npm run fixture` (in research-site/)
 // if the baselines change; the output is committed so the site builds without it.
 
 import fs from 'node:fs';
@@ -9,9 +9,9 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-const DOCS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const BASE = path.resolve(DOCS, '..', 'bench', 'baselines');
-const OUT = path.join(DOCS, 'src', 'data', 'fixture');
+const HERE = path.dirname(fileURLToPath(import.meta.url)); // research-site/src/extensions/pg_permissions
+const BASE = path.resolve(HERE, '..', '..', '..', '..', 'pg_permissions', 'bench', 'baselines');
+const OUT = path.join(HERE, 'data', 'fixture');
 
 const rows = (md, heading) => {
 	const i = md.indexOf(heading);
@@ -69,4 +69,4 @@ for (const f of fs.readdirSync(BASE).sort()) {
 	fs.writeFileSync(path.join(OUT, `${run.run_id}.json`), JSON.stringify(run, null, 1) + '\n');
 	n++;
 }
-console.log(`fixture: wrote ${n} run file(s) to src/data/fixture`);
+console.log(`fixture: wrote ${n} run file(s) to data/fixture`);
