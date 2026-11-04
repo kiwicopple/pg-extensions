@@ -53,3 +53,15 @@ The user reviewed the slice. Guiding principle: pg_crdt is generic Postgres and 
 - **Identity is pluggable.** `pn_apply_delta(state, delta, replica text default crdt.current_replica_id())`. The app's SECURITY DEFINER wrapper passes the identity it trusts: `session_user` for direct SQL clients (not `current_user`, which is the definer), its own users table, a JWT claim, or `auth.uid()::text` on Supabase. A null replica is 42501. With the replica an argument, `pn_apply_delta` is pure, so it is now IMMUTABLE.
 - **The default resolver** reads a JWT claim from `request.jwt.claims`, which is the PostgREST convention rather than a Supabase one; the claim name comes from `crdt.replica_id_claim`, default `sub`. Then the `crdt.replica_id` setting, which app servers set with `SET LOCAL`. The same order as pg_permissions' subject. Trust model, stated in the README and pinned by a test: any role can `SET` these settings, so a direct-SQL client can claim any id through the default; such deployments pass `session_user`.
 - **Docs and tests are generic.** The README leads with the wrapper pattern and two identity sources (PostgREST JWT, app server or `session_user`), mentioning Supabase as one example. Spec 30 creates its own roles instead of relying on `authenticated`; only the grant check in `02_security` uses the PostgREST-convention roles, and only where they exist.
+
+## Session 4: 2026-11-04, user documentation
+
+- User docs in `docs/` and an Astro/Starlight site in `site/`. Copied from pg_validate's site, plus pg_permissions' code tabs. App examples use node-postgres first, then SQL. There is no client library.
+- Pages: overview, install, quickstart, four guides (replicas and identity, safe updates, security, storage and performance), the PN-counter page, and a reference (shared, pn, errors, limits). Plus `STYLE.md` and `CHANGELOG.md`.
+- Every SQL and JS example was run against a throwaway cluster. The install paths were run in Docker (pg_tle on PG18, control file on PG16).
+- **Found while writing the docs:**
+  - `drop extension` leaves the empty `crdt` schema behind.
+  - A `pn_empty()` column default blocks `drop extension` even after the column is altered to jsonb.
+  - The old README's error table missed several SQLSTATEs.
+- Added a hand-written compaction recipe for delta tables: `delete ... returning` folded into a snapshot upsert in one statement. Compaction is not built in yet.
+- The production URL is undecided. The placeholder is `https://pg-crdt.vercel.app` (`site/astro.config.mjs`, `research/navigation.json`).

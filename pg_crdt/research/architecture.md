@@ -70,7 +70,7 @@ Rejected alternatives, from `sql-integration.md`:
 ```
 
 - `t` is the variant and `v` the format version. Every function checks `t`, and merge upgrades older `v` (the upgrade must commute with merge).
-- **Domain per variant (decided)** (`crdt.pn` as a domain over jsonb, with `check (value->>'t' = 'pn')`). It gives readable column types and a cheap guard. It does **not** enable operators: a domain resolves as its base type, so there is no `||` merge operator. Merge is function-only. Open question: do overloads resolve cleanly on domains? Test this before committing.
+- **Domain per variant (decided)** (`crdt.pn` as a domain over jsonb, whose CHECK validates the envelope: `t`, `v`, and `p`/`n` objects. Per-entry validation is in `crdt.pn_is_valid`, which `pn_apply_delta` enforces, because a full check costs about 4 ms at 10k replicas). It gives readable column types and a cheap guard. It does **not** enable operators: a domain resolves as its base type, so there is no `||` merge operator. Merge is function-only. Settled by tests: plain jsonb coerces to the domain without an explicit cast.
 - **Custom base type: rejected for the MVP.** pg_tle allows PL/pgSQL I/O functions, but the type is bytea-backed with no send/recv and no typmod. A btree/hash opclass needs superuser on most providers, which breaks `=`, `GROUP BY` and `DISTINCT`. I/O and operator functions cannot be replaced in upgrade scripts. It costs availability and patchability, and it only buys syntax.
 - **bytea: rejected for state.** PL/pgSQL has no good binary tooling, and the JSON shape works with PostgREST and Realtime as it is. bytea is right only for the opaque document update log.
 

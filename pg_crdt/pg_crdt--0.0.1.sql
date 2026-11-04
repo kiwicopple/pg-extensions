@@ -309,7 +309,7 @@ create aggregate crdt.pn_merge_agg(crdt.pn) (
 -- `replica`: the id itself, or <id>:<device>. Entries lower than the current
 -- ones are ignored, as by pn_merge: a retry or a replayed older delta
 -- succeeds and changes nothing. (A writer that lost its state must read its
--- entries back first, or use a new device id; see the README.)
+-- entries back first, or use a new device id; see docs/guides/replicas-and-identity.md.)
 --
 -- IMMUTABLE: the result depends on the arguments only; the default argument
 -- is evaluated by the caller. Errors: 42501 no replica (null), or an entry
