@@ -6,7 +6,7 @@
 #   experiments/text-table/bench.sh --quick    # sizes 1k, 10k, 100k; trace prefix
 #   experiments/text-table/bench.sh --impl x.sql
 #   ONLY=trace,keys experiments/text-table/bench.sh   # some sections only:
-#       sizes pos render cache conc merge keys compact trace
+#       sizes pos render cache conc merge keys compact replica trace
 #
 # Throwaway cluster from pg_crdt/test/lib/cluster.sh (temp dir, Unix socket),
 # full_page_writes=on as in bench/pn-counter.sh, so WAL includes full-page
@@ -155,7 +155,7 @@ for size in $SIZES; do
     t0=$(python3 -c 'import time; print(time.time())')
     P -d "$db" -c "select crdt.ydoc_create()" -c "call bench.grow(1, $size)" >/dev/null
     t1=$(python3 -c 'import time; print(time.time())')
-    edits=$(PT -d "$db" -c "select count(*) from crdt.ydoc_items where replica like 'w%'")
+    edits=$(PT -d "$db" -c "select count(*) from crdt.ydoc_items i join crdt.ydoc_replicas r on r.id = i.replica where r.name like 'w%'")
     build_ms=$(python3 -c "print(round(($t1 - $t0) * 1000 / max(1, $edits), 2))")
     # storage of the document as built, compacted
     P -d "$db" -c "vacuum full crdt.ydoc_items" -c "vacuum full crdt.ydoc_blocks" -c "vacuum full crdt.ydoc_docs" -c "analyze"
@@ -317,7 +317,7 @@ newdb "$db"
 P -d "$db" -c "select crdt.ydoc_create() from generate_series(1, 9)" >/dev/null
 P -d "$db" -c "call bench.grow(1, 10000)" >/dev/null
 P -d "$db" -c "delete from crdt.ydoc_blocks where doc > 1" >/dev/null
-for d in 2 3 4 5 6 7 8 9; do P -d "$db" -c "insert into crdt.ydoc_items select $d, ord, ins, seq, ol_seq, or_seq, replica, ol_replica, or_replica, del_gen, len, content from crdt.ydoc_items where doc = 1" -c "insert into crdt.ydoc_blocks select $d, lo, vis, n from crdt.ydoc_blocks where doc = 1" -c "update crdt.ydoc_docs set len = (select len from crdt.ydoc_docs where id = 1) where id = $d" >/dev/null; done
+for d in 2 3 4 5 6 7 8 9; do P -d "$db" -c "insert into crdt.ydoc_items (doc, ord, ins, seq, ol_seq, or_seq, replica, ol_replica, or_replica, del_gen, len, content) select $d, ord, ins, seq, ol_seq, or_seq, replica, ol_replica, or_replica, del_gen, len, content from crdt.ydoc_items where doc = 1" -c "insert into crdt.ydoc_blocks select $d, lo, vis, n from crdt.ydoc_blocks where doc = 1" -c "update crdt.ydoc_docs set len = (select len from crdt.ydoc_docs where id = 1) where id = $d" >/dev/null; done
 P -d "$db" -c "vacuum analyze"
 cat > "$WORK/ins_own.sql" <<'EOF'
 \set d 2 + :client_id
@@ -488,6 +488,57 @@ SQL
         done
     done
     printf '%s\n\n' "$COMPACT_NOTES"
+fi
+
+# --- 6d. replica ids: a short id vs a UUID -----------------------------------
+if want replica && [ -f "$TRACE_DIR/automerge-paper.patches.jsonl" ]; then
+    echo "### Replica id length: 'paper' vs a 36-char UUID"
+    echo
+    echo "automerge-paper, local replay as replica R (commit every 5,000 ops), then pgbench edits as a second replica of the same kind (insert/delete 1 char, 500 each, warm-up run; WAL = records + full-page images), value(); sizes after VACUUM FULL, before and after ydoc_compact(doc)."
+    echo
+    echo "| replica ids | rows | bytes per char | bytes per char after compact | insert 1 char | delete 1 char | value() | WAL per insert | WAL per delete | replay us per op |"
+    echo "|---|---|---|---|---|---|---|---|---|---|"
+    for kind in short uuid; do
+        if [ $kind = short ]; then R=paper; R2=bench; else R=6f1c2a0e-3b7d-4c55-9e21-8a4f0d6b7c19; R2=0b9e5d4a-71c3-4f08-a6d2-5c8e1f3a9b70; fi
+        db=b_rep_$kind
+        newdb "$db"
+        P -d "$db" <<SQL
+create table bench.patches (n bigserial primary key, p jsonb);
+\copy bench.patches (p) from '$TRACE_DIR/automerge-paper.patches.jsonl' with (format csv, delimiter E'\x01', quote E'\x02')
+create table bench.r (ms numeric);
+create procedure bench.replay(rep text) language plpgsql as \$\$
+declare r record; k int := 0; t0 timestamptz := clock_timestamp();
+begin
+    perform crdt.ydoc_create();
+    for r in select p from bench.patches order by n loop
+        if (r.p ->> 1)::int > 0 then perform crdt.ydoc_delete(1, (r.p ->> 0)::int, (r.p ->> 1)::int, rep);
+        else perform crdt.ydoc_insert(1, (r.p ->> 0)::int, r.p ->> 2, rep); end if;
+        k := k + 1;
+        if k % 5000 = 0 then commit; end if;
+    end loop;
+    insert into bench.r values (extract(epoch from clock_timestamp() - t0) * 1000);
+end \$\$;
+call bench.replay('$R');
+drop table bench.patches;
+vacuum full crdt.ydoc_items;
+vacuum full crdt.ydoc_blocks;
+analyze;
+SQL
+        st=$(PT -d "$db" -F ' ' -c "select (select count(*) from crdt.ydoc_items),
+            round((pg_total_relation_size('crdt.ydoc_items') + pg_total_relation_size('crdt.ydoc_blocks'))::numeric / crdt.ydoc_length(1), 1),
+            round((select ms from bench.r) * 1000 / 259778)")
+        read -r rows per us <<<"$st"
+        printf "select crdt.ydoc_insert(1, (random() * crdt.ydoc_length(1))::int, 'x', '%s');\n" "$R2" > "$WORK/ins_r.sql"
+        printf "select crdt.ydoc_delete(1, (random() * (crdt.ydoc_length(1) - 1))::int, 1, '%s');\n" "$R2" > "$WORK/del_r.sql"
+        read -r lv _ _ _ _ < <(bench_op "$db" "$WORK/value.sql" 20)
+        read -r li wi _ ri fi < <(bench_op "$db" "$WORK/ins_r.sql" 500)
+        read -r ld wd _ rd fd < <(bench_op "$db" "$WORK/del_r.sql" 500)
+        per2=$(PT -d "$db" -c "select crdt.ydoc_compact(1)" -c "vacuum full crdt.ydoc_items" -c "vacuum full crdt.ydoc_blocks" \
+            -c "select round((pg_total_relation_size('crdt.ydoc_items') + pg_total_relation_size('crdt.ydoc_blocks'))::numeric / crdt.ydoc_length(1), 1)" | tail -1)
+        echo "| $kind | $rows | $per | $per2 | $li ms | $ld ms | $lv ms | $wi ($ri + $fi) | $wd ($rd + $fd) | $us |"
+        psql_admin -c "drop database $db"
+    done
+    echo
 fi
 
 # --- 6. editing trace --------------------------------------------------------

@@ -6,6 +6,7 @@
  * experiments/text-table/NOTES.md.
  *
  *   ydoc_docs     one row per document: visible length, write counter (gen)
+ *   ydoc_replicas replica ids (entry keys), interned: rows hold an integer
  *   ydoc_items    one row per run of characters: id (replica, seq), length,
  *                 origins of its first character, content, tombstone (del_gen),
  *                 and `ord`, a server-local order label (bigint)
@@ -46,16 +47,28 @@ create sequence crdt.ydoc_ins;
 -- last, so a same-page update logs only them. ord is unique per document by
 -- construction; the index is not unique so that a relabel can rewrite a
 -- window of labels in one statement.
+-- Replica ids (entry keys: `id` or `id:device`), interned for the whole
+-- database. A row names its replica and its origins' replicas with these
+-- integers, so an id costs 4 bytes per use however long it is (UUIDs are 36
+-- chars). The integer is local to this database and never leaves it: ops in
+-- and out carry names, and the YjsMod tie-break compares names (collate "C"),
+-- never these integers. Rows are never deleted (ids live as long as the
+-- characters that carry them).
+create table crdt.ydoc_replicas (
+    id   integer generated always as identity primary key,
+    name text collate "C" not null unique
+);
+
 create table crdt.ydoc_items (
     doc        bigint not null,
     ord        bigint not null,
     ins        bigint not null default nextval('crdt.ydoc_ins'),  -- integration order (causal), for ops_since
     seq        integer not null,
+    replica    integer not null,      -- crdt.ydoc_replicas.id
     ol_seq     integer,
+    ol_replica integer,
     or_seq     integer,
-    replica    text collate "C" not null,
-    ol_replica text collate "C",
-    or_replica text collate "C",
+    or_replica integer,
     del_gen    bigint,                -- null: visible; else the gen of the delete
     len        integer not null,
     content    text not null,
@@ -74,6 +87,8 @@ create table crdt.ydoc_blocks (
     primary key (doc, lo)
 ) with (fillfactor = 50);
 
+-- The buffers keep replica names: they hold input that may never become
+-- ready (forged or far-ahead ids), which should not grow ydoc_replicas.
 create table crdt.ydoc_pending (
     doc        bigint not null,
     replica    text collate "C" not null,
@@ -101,6 +116,7 @@ create table crdt.ydoc_pending_deletes (
 do $$
 begin
     perform pg_catalog.pg_extension_config_dump('crdt.ydoc_docs', '');
+    perform pg_catalog.pg_extension_config_dump('crdt.ydoc_replicas', '');
     perform pg_catalog.pg_extension_config_dump('crdt.ydoc_items', '');
     perform pg_catalog.pg_extension_config_dump('crdt.ydoc_blocks', '');
     perform pg_catalog.pg_extension_config_dump('crdt.ydoc_pending', '');
@@ -237,12 +253,46 @@ $$;
 -- Highest integrated seq of a replica in a document (0 for none). Integrated
 -- ids have no gaps (an insert waits for seq-1), so this is the version vector
 -- entry, and (replica, s) is integrated iff s <= clock.
-create function crdt._ydoc_clock(p_doc bigint, p_replica text)
+create function crdt._ydoc_clock(p_doc bigint, p_replica integer)
 returns integer
 language sql stable parallel safe
 return coalesce((select i.seq + i.len - 1 from crdt.ydoc_items i
                  where i.doc = p_doc and i.replica = p_replica
                  order by i.seq desc limit 1), 0);
+
+-- Replica name <-> interned integer.
+create function crdt._ydoc_rid(p_name text)
+returns integer
+language sql stable parallel safe
+return (select r.id from crdt.ydoc_replicas r where r.name = p_name);
+
+create function crdt._ydoc_rname(p_id integer)
+returns text
+language sql stable parallel safe
+return (select r.name from crdt.ydoc_replicas r where r.id = p_id);
+
+create function crdt._ydoc_rid_make(p_name text)
+returns integer
+language plpgsql volatile
+as $$
+declare
+    r integer := crdt._ydoc_rid(p_name);
+begin
+    if r is null then
+        insert into crdt.ydoc_replicas (name) values (p_name) on conflict (name) do nothing returning id into r;
+        if r is null then
+            r := crdt._ydoc_rid(p_name);
+        end if;
+    end if;
+    return r;
+end;
+$$;
+
+-- The clock of a replica given by name (0 if it has never been seen).
+create function crdt._ydoc_clock_name(p_doc bigint, p_name text)
+returns integer
+language sql stable parallel safe
+return crdt._ydoc_clock(p_doc, crdt._ydoc_rid(p_name));
 
 -- Adds to the counters of the block that holds label p_ord; splits it when full.
 create function crdt._ydoc_blk(p_doc bigint, p_ord bigint, p_dvis integer, p_dn integer)
@@ -280,7 +330,7 @@ $$;
 -- part's first char has originLeft = its predecessor in the run and the
 -- run's originRight, exactly as if the run had been sent as two. A relabel
 -- may change other rows' labels: callers re-read labels after a split.
-create function crdt._ydoc_split(p_doc bigint, p_r text, p_at integer)
+create function crdt._ydoc_split(p_doc bigint, p_r integer, p_at integer)
 returns bigint
 language plpgsql volatile
 as $$
@@ -310,7 +360,7 @@ end;
 $$;
 
 -- Position of char (replica, seq) in the order: (row label, offset in the row).
-create function crdt._ydoc_pos(p_doc bigint, p_replica text, p_seq integer, out ord bigint, out off integer)
+create function crdt._ydoc_pos(p_doc bigint, p_replica integer, p_seq integer, out ord bigint, out off integer)
 language sql stable
 begin atomic
     select i.ord, p_seq - i.seq from crdt.ydoc_items i
@@ -323,10 +373,11 @@ end;
 -- splitting so that originLeft ends a row and originRight starts one, every
 -- candidate destination is a row boundary, and only the first char of a row
 -- can change the scan state (the others have originLeft = their predecessor,
--- which is > left). Returns the visible chars added.
+-- which is > left). Returns the visible chars added. Replicas are interned
+-- integers; p_rname is the inserting replica's name, for the tie-break.
 create function crdt._ydoc_integrate(
-    p_doc bigint, p_gen bigint, p_r text, p_s integer,
-    p_olr text, p_ols integer, p_orr text, p_ors integer, p_text text)
+    p_doc bigint, p_gen bigint, p_r integer, p_rname text, p_s integer,
+    p_olr integer, p_ols integer, p_orr integer, p_ors integer, p_text text)
 returns integer
 language plpgsql volatile
 as $$
@@ -376,7 +427,7 @@ begin
         l_ord := x.ord;
         l_off := p_ols - x.seq;
         if r_ord is not null and r_ord <= l_ord then
-            raise exception 'crdt.ydoc: insert %:% has originRight before originLeft', p_r, p_s
+            raise exception 'crdt.ydoc: insert %:% has originRight before originLeft', p_rname, p_s
                 using errcode = '22023';
         end if;
     end if;
@@ -384,6 +435,9 @@ begin
     -- The rows strictly between the origins. An explicit cursor, bounded on
     -- both sides when it can be, so the plan is an ordered index range scan
     -- that stops early (a FOR loop over a query got a sort of the document).
+    -- This range (l_ord, r_ord) is also where a causal check of an op that
+    -- carries its author's version vector belongs: a row here whose ids that
+    -- vector covers means the origins were not adjacent for the author.
     prev_ord := l_ord;
     dest_prev := l_ord;
     dest_next := r_ord;
@@ -439,7 +493,8 @@ begin
             if cr < 0 then
                 scanning := true;
             elsif cr = 0 then
-                if p_r collate "C" < o.replica collate "C" then
+                -- names, collate "C" (never the interned integers)
+                if p_rname collate "C" < crdt._ydoc_rname(o.replica) collate "C" then
                     broke := true;
                     exit;
                 end if;
@@ -489,8 +544,9 @@ $$;
 -- Tombstones ids (replica, s .. s+n-1). Ids not integrated yet are kept in
 -- ydoc_pending_deletes. Already deleted chars keep their first del_gen.
 -- Returns the visible chars removed. Rows are addressed by id, not by label,
--- because a split can relabel.
-create function crdt._ydoc_delete_range(p_doc bigint, p_gen bigint, p_r text, p_s integer, p_n integer)
+-- because a split can relabel. p_r is the interned replica (null if never
+-- seen); p_rname its name, needed only to buffer (looked up if null).
+create function crdt._ydoc_delete_range(p_doc bigint, p_gen bigint, p_r integer, p_rname text, p_s integer, p_n integer)
 returns integer
 language plpgsql volatile
 as $$
@@ -506,7 +562,7 @@ declare
 begin
     if e > c then
         insert into crdt.ydoc_pending_deletes as pd (doc, replica, seq, len)
-        values (p_doc, p_r, greatest(p_s, c + 1), e - greatest(p_s, c + 1) + 1)
+        values (p_doc, coalesce(p_rname, crdt._ydoc_rname(p_r)), greatest(p_s, c + 1), e - greatest(p_s, c + 1) + 1)
         on conflict (doc, replica, seq) do update set len = greatest(pd.len, excluded.len);
         e := c;
     end if;
@@ -543,8 +599,8 @@ $$;
 -- Integrates a ready run, then the pending deletes it satisfies. Returns the
 -- change in visible length.
 create function crdt._ydoc_settle(
-    p_doc bigint, p_gen bigint, p_r text, p_s integer,
-    p_olr text, p_ols integer, p_orr text, p_ors integer, p_text text)
+    p_doc bigint, p_gen bigint, p_rname text, p_r integer, p_s integer,
+    p_olr integer, p_ols integer, p_orr integer, p_ors integer, p_text text)
 returns integer
 language plpgsql volatile
 as $$
@@ -553,13 +609,13 @@ declare
     e integer := p_s + pg_catalog.length(p_text) - 1;
     pd record;
 begin
-    added := crdt._ydoc_integrate(p_doc, p_gen, p_r, p_s, p_olr, p_ols, p_orr, p_ors, p_text);
+    added := crdt._ydoc_integrate(p_doc, p_gen, p_r, p_rname, p_s, p_olr, p_ols, p_orr, p_ors, p_text);
     for pd in
         delete from crdt.ydoc_pending_deletes x
-        where x.doc = p_doc and x.replica = p_r and x.seq <= e
+        where x.doc = p_doc and x.replica = p_rname and x.seq <= e
         returning x.seq, x.len
     loop
-        added := added - crdt._ydoc_delete_range(p_doc, p_gen, p_r, pd.seq, pd.len);
+        added := added - crdt._ydoc_delete_range(p_doc, p_gen, p_r, p_rname, pd.seq, pd.len);
     end loop;
     return added;
 end;
@@ -577,8 +633,9 @@ create function crdt._ydoc_try(
 language plpgsql volatile
 as $$
 declare
-    c integer := crdt._ydoc_clock(p_doc, p_r);
+    c integer := crdt._ydoc_clock_name(p_doc, p_r);
     n integer := pg_catalog.length(p_text);
+    rid integer;
 begin
     if p_s + n - 1 <= c then
         added := 0;
@@ -591,11 +648,13 @@ begin
         p_s := c + 1;
     end if;
     if p_s > c + 1
-       or (p_olr is not null and p_olr <> p_r and crdt._ydoc_clock(p_doc, p_olr) < p_ols)
-       or (p_orr is not null and crdt._ydoc_clock(p_doc, p_orr) < p_ors) then
+       or (p_olr is not null and p_olr <> p_r and crdt._ydoc_clock_name(p_doc, p_olr) < p_ols)
+       or (p_orr is not null and crdt._ydoc_clock_name(p_doc, p_orr) < p_ors) then
         return;
     end if;
-    added := crdt._ydoc_settle(p_doc, p_gen, p_r, p_s, p_olr, p_ols, p_orr, p_ors, p_text);
+    rid := crdt._ydoc_rid_make(p_r);
+    added := crdt._ydoc_settle(p_doc, p_gen, p_r, rid, p_s, crdt._ydoc_rid(p_olr), p_ols,
+                               crdt._ydoc_rid(p_orr), p_ors, p_text);
     o_s := p_s;
 end;
 $$;
@@ -665,7 +724,7 @@ $$;
 -- picks (a generic plan cannot see that the running sum stops early), it
 -- reads one block, not the rest of the document.
 create function crdt._ydoc_visible_at(p_doc bigint, p_pos integer,
-    out ord bigint, out replica text, out seq integer, out len integer, out off integer)
+    out ord bigint, out replica integer, out seq integer, out len integer, out off integer)
 language plpgsql stable
 as $$
 declare
@@ -710,11 +769,12 @@ language plpgsql volatile
 as $$
 declare
     v record;
-    olr text;
+    olr integer;
     ols integer;
-    orr text;
+    orr integer;
     ors integer;
     s integer;
+    rid integer := crdt._ydoc_rid_make(p_r);
 begin
     if p_pos = 0 then
         select i.replica, i.seq into orr, ors from crdt.ydoc_items i
@@ -731,9 +791,12 @@ begin
             where i.doc = p_doc and i.ord > v.ord order by i.ord limit 1;
         end if;
     end if;
-    s := crdt._ydoc_clock(p_doc, p_r) + 1;
-    added := crdt._ydoc_settle(p_doc, p_gen, p_r, s, olr, ols, orr, ors, p_text);
-    op := pg_catalog.jsonb_build_array(p_r, s, crdt._ydoc_id(olr, ols), crdt._ydoc_id(orr, ors), p_text);
+    s := crdt._ydoc_clock(p_doc, rid) + 1;
+    added := crdt._ydoc_settle(p_doc, p_gen, p_r, rid, s, olr, ols, orr, ors, p_text);
+    -- names for the op; the common case (typing on) is the writer's own id
+    op := pg_catalog.jsonb_build_array(p_r, s,
+        crdt._ydoc_id(case when olr = rid then p_r else crdt._ydoc_rname(olr) end, ols),
+        crdt._ydoc_id(case when orr = rid then p_r else crdt._ydoc_rname(orr) end, ors), p_text);
 end;
 $$;
 
@@ -751,7 +814,7 @@ declare
     z record;
     a integer;
     b integer;
-    rs text[] := '{}';
+    rs integer[] := '{}';
     ss integer[] := '{}';
     ns integer[] := '{}';
     m integer := 0;
@@ -802,8 +865,8 @@ begin
     end loop;
     close cur;
     for j in 1 .. m loop
-        perform crdt._ydoc_delete_range(p_doc, p_gen, rs[j], ss[j], ns[j]);
-        ops := ops || pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_array(rs[j], ss[j], ns[j]));
+        perform crdt._ydoc_delete_range(p_doc, p_gen, rs[j], null, ss[j], ns[j]);
+        ops := ops || pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_array(crdt._ydoc_rname(rs[j]), ss[j], ns[j]));
     end loop;
     return ops;
 end;
@@ -926,9 +989,12 @@ begin
     if p_ops is null then
         return;
     end if;
-    if pg_catalog.jsonb_typeof(p_ops) <> 'object' or (p_ops - '{i,d}'::text[]) <> '{}'::jsonb
+    -- "v" (the sender's version vector, research/text.md's causal validation
+    -- rules) is accepted and not yet checked.
+    if pg_catalog.jsonb_typeof(p_ops) <> 'object' or (p_ops - '{i,d,v}'::text[]) <> '{}'::jsonb
        or coalesce(pg_catalog.jsonb_typeof(p_ops -> 'i'), 'array') <> 'array'
-       or coalesce(pg_catalog.jsonb_typeof(p_ops -> 'd'), 'array') <> 'array' then
+       or coalesce(pg_catalog.jsonb_typeof(p_ops -> 'd'), 'array') <> 'array'
+       or coalesce(pg_catalog.jsonb_typeof(p_ops -> 'v'), 'object') <> 'object' then
         raise exception 'crdt.%: ops must be an object {"i": [...], "d": [...]}', p_fn
             using errcode = '22023';
     end if;
@@ -981,7 +1047,8 @@ begin
     end loop;
 
     for v in select e.v from pg_catalog.jsonb_array_elements(coalesce(p_ops -> 'd', '[]')) e(v) loop
-        delta := delta - crdt._ydoc_delete_range(p_doc, g, v ->> 0, (v ->> 1)::integer, (v ->> 2)::integer);
+        delta := delta - crdt._ydoc_delete_range(p_doc, g, crdt._ydoc_rid(v ->> 0), v ->> 0,
+                                                  (v ->> 1)::integer, (v ->> 2)::integer);
     end loop;
 
     update crdt.ydoc_docs d set gen = g, len = d.len + delta where d.id = p_doc;
@@ -1049,8 +1116,8 @@ begin atomic
                 where i.doc = ydoc_version.doc and i.replica > r.replica order by i.replica limit 1)
         from r where r.replica is not null
     )
-    select coalesce(jsonb_object_agg(r.replica, crdt._ydoc_clock(ydoc_version.doc, r.replica)), '{}'::jsonb)
-    from r where r.replica is not null;
+    select coalesce(jsonb_object_agg(n.name, crdt._ydoc_clock(ydoc_version.doc, r.replica)), '{}'::jsonb)
+    from r join crdt.ydoc_replicas n on n.id = r.replica;
 end;
 
 -- The version an editor starts from, for ydoc_set's base argument: the write
@@ -1152,15 +1219,16 @@ declare
     z record;
     a integer;
     b integer;
-    rs text[] := '{}';
+    rs integer[] := '{}';
     ss integer[] := '{}';
     ns integer[] := '{}';
     m integer := 0;
     removed integer := 0;
-    olr text;
+    olr integer;
     ols integer;
-    orr text;
+    orr integer;
     ors integer;
+    rid integer;
     s integer;
     added integer;
 begin
@@ -1196,13 +1264,15 @@ begin
        or jsonb_typeof(base -> 'v') is distinct from 'object'
        or exists (select 1 from jsonb_each(base -> 'v') e
                   where not crdt._ydoc_is_int(e.value, 0, 2147483647)
-                     or (e.value)::integer > crdt._ydoc_clock(v_doc, e.key))
+                     or (e.value)::integer > crdt._ydoc_clock_name(v_doc, e.key))
        or (base ->> 'g')::bigint > lk.gen then
         raise exception 'crdt.ydoc_set: base is not a version of document %', v_doc
             using errcode = '22023', hint = 'Pass the value of crdt.ydoc_base(doc), read together with the text.';
     end if;
     bg := (base ->> 'g')::bigint;
-    bv := base -> 'v';
+    -- the base's version vector keyed by interned id
+    bv := (select coalesce(jsonb_object_agg(r.id::text, e.value), '{}') from jsonb_each(base -> 'v') e
+           join crdt.ydoc_replicas r on r.name = e.key);
     -- Compaction merged tombstones stamped at or before the horizon, so the
     -- text at an older base cannot be rebuilt. Refuse rather than guess: a
     -- wrong base text widens the diff and reverts or duplicates text.
@@ -1212,9 +1282,9 @@ begin
                   hint = 'Read the text and crdt.ydoc_base(doc) again, or call ydoc_set without base (a two-way diff against the current text).';
     end if;
     cur := coalesce((
-        select string_agg(left(i.content, least(i.len, (bv ->> i.replica)::integer - i.seq + 1)), '' order by i.ord)
+        select string_agg(left(i.content, least(i.len, (bv ->> i.replica::text)::integer - i.seq + 1)), '' order by i.ord)
         from crdt.ydoc_items i
-        where i.doc = v_doc and (bv ->> i.replica)::integer >= i.seq and (i.del_gen is null or i.del_gen > bg)), '');
+        where i.doc = v_doc and (bv ->> i.replica::text)::integer >= i.seq and (i.del_gen is null or i.del_gen > bg)), '');
     if cur = new_text then
         return '{"i": [], "d": []}'::jsonb;
     end if;
@@ -1229,8 +1299,8 @@ begin
             select i.ord, i.replica, i.seq, x.bl,
                    sum(x.bl) over (order by i.ord rows unbounded preceding) as cum
             from crdt.ydoc_items i
-            cross join lateral (select least(i.len, (bv ->> i.replica)::integer - i.seq + 1) as bl) x
-            where i.doc = v_doc and (bv ->> i.replica)::integer >= i.seq and (i.del_gen is null or i.del_gen > bg)
+            cross join lateral (select least(i.len, (bv ->> i.replica::text)::integer - i.seq + 1) as bl) x
+            where i.doc = v_doc and (bv ->> i.replica::text)::integer >= i.seq and (i.del_gen is null or i.del_gen > bg)
         ) y where y.cum >= df.p order by y.ord
     loop
         if df.p > 0 and olr is null and z.cum >= df.p then
@@ -1242,7 +1312,7 @@ begin
                 ors := ols + 1;
             else
                 select i.replica, i.seq into orr, ors from crdt.ydoc_items i
-                where i.doc = v_doc and i.ord > z.ord and (bv ->> i.replica)::integer >= i.seq
+                where i.doc = v_doc and i.ord > z.ord and (bv ->> i.replica::text)::integer >= i.seq
                 order by i.ord limit 1;
             end if;
         end if;
@@ -1257,17 +1327,19 @@ begin
     end loop;
     if df.p = 0 then
         select i.replica, i.seq into orr, ors from crdt.ydoc_items i
-        where i.doc = v_doc and (bv ->> i.replica)::integer >= i.seq order by i.ord limit 1;
+        where i.doc = v_doc and (bv ->> i.replica::text)::integer >= i.seq order by i.ord limit 1;
     end if;
 
     for j in 1 .. m loop
-        removed := removed + crdt._ydoc_delete_range(v_doc, g, rs[j], ss[j], ns[j]);
-        dops := dops || jsonb_build_array(jsonb_build_array(rs[j], ss[j], ns[j]));
+        removed := removed + crdt._ydoc_delete_range(v_doc, g, rs[j], null, ss[j], ns[j]);
+        dops := dops || jsonb_build_array(jsonb_build_array(crdt._ydoc_rname(rs[j]), ss[j], ns[j]));
     end loop;
     if ins <> '' then
-        s := crdt._ydoc_clock(v_doc, replica) + 1;
-        added := crdt._ydoc_settle(v_doc, g, replica, s, olr, ols, orr, ors, ins);
-        iops := jsonb_build_array(jsonb_build_array(replica, s, crdt._ydoc_id(olr, ols), crdt._ydoc_id(orr, ors), ins));
+        rid := crdt._ydoc_rid_make(replica);
+        s := crdt._ydoc_clock(v_doc, rid) + 1;
+        added := crdt._ydoc_settle(v_doc, g, replica, rid, s, olr, ols, orr, ors, ins);
+        iops := jsonb_build_array(jsonb_build_array(replica, s, crdt._ydoc_id(crdt._ydoc_rname(olr), ols),
+                                                    crdt._ydoc_id(crdt._ydoc_rname(orr), ors), ins));
     end if;
     update crdt.ydoc_docs d set gen = g, len = d.len - removed + coalesce(added, 0) where d.id = v_doc;
     return jsonb_build_object('i', iops, 'd', dops);
@@ -1353,14 +1425,17 @@ begin
                 select a.*, lag(a.replica) over w as p_replica, lag(a.s + length(a.txt)) over w as p_end,
                        lag(a.orr) over w as p_orr, lag(a.ors) over w as p_ors
                 from (
-                    select i.ins, i.replica, i.seq,
+                    select i.ins, r0.name as replica, i.seq,
                            greatest(i.seq, h.have + 1) as s,
-                           case when i.seq > h.have then i.ol_replica else i.replica end as olr,
+                           case when i.seq > h.have then r1.name else r0.name end as olr,
                            case when i.seq > h.have then i.ol_seq else h.have end as ols,
-                           i.or_replica as orr, i.or_seq as ors,
+                           r2.name as orr, i.or_seq as ors,
                            case when i.seq > h.have then i.content else substr(i.content, h.have - i.seq + 2) end as txt
                     from crdt.ydoc_items i
-                    cross join lateral (select coalesce((vv ->> i.replica)::integer, 0) as have) h
+                    join crdt.ydoc_replicas r0 on r0.id = i.replica
+                    left join crdt.ydoc_replicas r1 on r1.id = i.ol_replica
+                    left join crdt.ydoc_replicas r2 on r2.id = i.or_replica
+                    cross join lateral (select coalesce((vv ->> r0.name)::integer, 0) as have) h
                     where i.doc = v_doc and i.seq + i.len - 1 > h.have
                 ) a
                 window w as (order by a.ins, a.replica, a.seq)
@@ -1372,7 +1447,7 @@ begin
     select coalesce(jsonb_agg(jsonb_build_array(u.replica, u.s, u.n) order by u.replica, u.s), '[]')
     into dels
     from (
-        select z.replica, min(z.seq) as s, sum(z.len)::integer as n
+        select (select r.name from crdt.ydoc_replicas r where r.id = z.replica) as replica, min(z.seq) as s, sum(z.len)::integer as n
         from (select i.replica, i.seq, i.len,
                      i.seq - coalesce(sum(i.len) over (partition by i.replica order by i.seq
                                                        rows between unbounded preceding and 1 preceding), 0) as grp
@@ -1494,6 +1569,7 @@ $$;
 -- SECURITY INVOKER, so they run with the caller's table privileges. Execute
 -- is granted to public, as for pn_; without table privileges a call fails
 -- with 42501.
+revoke all on crdt.ydoc_replicas from public;
 revoke all on crdt.ydoc_docs, crdt.ydoc_items, crdt.ydoc_blocks, crdt.ydoc_pending,
     crdt.ydoc_pending_deletes from public;
 revoke all on all functions in schema crdt from public;

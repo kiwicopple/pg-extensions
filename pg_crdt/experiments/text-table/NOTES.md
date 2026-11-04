@@ -36,8 +36,9 @@ Positions and lengths count code points (`length()`), not UTF-16 units. Errors: 
 
 ```
 ydoc_docs(id, len, gen, horizon)                one row per document; the row lock serializes writers
-ydoc_items(doc, ord, ins, seq, ol_seq, or_seq,  one row per run of characters of one replica
-           replica, ol_replica, or_replica,     pk (doc, replica, seq); index (doc, ord)
+ydoc_replicas(id int, name text unique)         replica ids (entry keys), interned for the database
+ydoc_items(doc, ord, ins, seq, replica,         one row per run of characters of one replica
+           ol_seq, ol_replica, or_seq, or_replica,  replicas as interned ints; pk (doc, replica, seq); index (doc, ord)
            del_gen, len, content)
 ydoc_blocks(doc, lo, vis, n)                    positional index: label ranges with visible length and row count
 ydoc_pending(doc, replica, seq, ol_*, or_*, content)   inserts waiting for their dependencies
@@ -105,8 +106,23 @@ When to run it: on save, or from a scheduled job, with `horizon` = the oldest ba
 What I measured and did not change:
 
 - **Run extension on typing** (candidate 1 of the brief) was already in the first version ("typing on" above): an insert directly after the replica's own last char, with that char's originRight, extends the row in place. Disabled in a variant (`... and false`), the full trace replay (local, commit every 5,000 ops, one run each on a dev cluster) makes 182,315 rows instead of 83,253, a 33.7 MB item table instead of 15.5 MB, 3,684 bytes of WAL per op instead of 714, and 1,319 us per op instead of 377. The extension's HOT update is much smaller than a new row with two index entries, and one row per typed char also exhausts the label gaps at the typing spot (more relabels). It cannot help after a backspace: the reference's convention makes the next char's originLeft the visible char before the deleted one, so the new char does not continue the run (Yjs does the same).
-- **Interning replica ids.** Each row holds the replica id three times (`replica`, `ol_replica`, `or_replica`) and the primary key holds it once more. With the trace's `paper` that is 18 bytes per row of 95; with a 36-char UUID id it would be about 110 bytes per row in the heap and 37 more in the index, more than half of a compacted row. A per-document table of replica ids and a `smallint` in the rows would remove that; it touches every query (the YjsMod tie-break compares names), so I left it as a follow-up.
+- **Interning replica ids**: done next, see "Interned replica ids".
 - **fillfactor 90** on the item table leaves 10% of each page free for HOT updates (a split updates the left part, a delete stamps a row); `VACUUM FULL` keeps that free space. Lowering it to 100 would save 10% of the heap and turn those updates into new tuples with index entries.
+
+### Interned replica ids
+
+Rows named replicas by text three times (`replica`, `ol_replica`, `or_replica`), and the primary key once more. `crdt.ydoc_replicas(id integer identity, name text collate "C" unique)` interns them for the whole database: items hold 4-byte integers, and the integer columns sit together after the 8-byte ones (no padding). Names are translated at the boundary only: ops in (`_ydoc_try` interns the run's replica when it integrates, and looks up its origins), ops out (`ops_since`, the ops returned by local edits, `ydoc_version` join the names back), and `ydoc_set`'s base vector (re-keyed by integer once per call). The integer never leaves the database. The YjsMod tie-break compares the **names** (`collate "C"`), looked up for the one row being compared, only when originLeft and originRight both tie, which is rare; the unicode-replica and case-replica fixtures pin it. The buffers (`ydoc_pending`, `ydoc_pending_deletes`) keep names, so input that never becomes ready (forged or far-ahead ids) does not grow `ydoc_replicas`. A replica's first insert in the database writes one row there (and two writers inserting the same new name at once wait on each other once).
+
+Measured on the automerge-paper trace (bench section "Replica id length", two runs of each version, averages; the WAL columns of single runs vary by 30% with relabels and full-page images, so they are left out here):
+
+| replica ids | version | bytes per char | after ydoc_compact | insert 1 char | delete 1 char | value() | replay us per op |
+|---|---|---|---|---|---|---|---|
+| `paper` | text names | 148.7 | 31.8 | 0.35 ms | 0.42 ms | 4.2 ms | 382 |
+| `paper` | interned | 134.5 | 29.0 | 0.37 ms | 0.39 ms | 3.9 ms | 338 |
+| 36-char UUID | text names | 264.5 | 54.5 | 0.36 ms | 0.40 ms | 4.8 ms | 344 |
+| 36-char UUID | interned | 134.5 | 29.0 | 0.40 ms | 0.45 ms | 4.2 ms | 336 |
+
+Kept: storage no longer depends on the length of replica ids (UUIDs: -49%, and -47% after compaction; `paper`: -10%), replay and render are as fast or faster, and single edits cost 0.02-0.05 ms more (the name lookups for the returned op and the interning probe; the writer's own id is not looked up again).
 
 ### Security model
 
@@ -114,7 +130,7 @@ The tables belong to the extension and nobody but their owner has privileges on 
 
 The intended deployment (spec `31_wrapper`):
 
-1. The DBA grants `select, insert, update, delete` on the five `crdt.ydoc_*` tables and `usage` on `crdt.ydoc_ins` and `crdt.ydoc_docs_id_seq` to the role that owns the app's functions (or to a trusted backend role).
+1. The DBA grants `select, insert, update, delete` on the six `crdt.ydoc_*` tables and `usage` on `crdt.ydoc_ins`, `crdt.ydoc_docs_id_seq` and `crdt.ydoc_replicas_id_seq` to the role that owns the app's functions (or to a trusted backend role).
 2. The app's table references the document: `posts.body_doc bigint references crdt.ydoc_docs (id)`.
 3. Untrusted clients call the app's SECURITY DEFINER functions, which check the app's own rule ("may this user edit post X"), then call `crdt.ydoc_apply(doc, ops, <identity>)` with the identity the app trusts (`session_user`, a JWT claim, a users-table lookup). `ydoc_apply` enforces that inserts carry only that identity's ids.
 4. Reads go through an app function too. A view does not work: `crdt.ydoc_value` reads the tables with the caller's privileges, not the view owner's.
@@ -122,6 +138,8 @@ The intended deployment (spec `31_wrapper`):
 Row-level security on the `crdt.ydoc_*` tables would also work (policies that look up the app's table by `doc`), but policies on extension-owned tables are the app's to maintain and run on every row of every scan; the wrapper pattern checks once per call. Nothing assumes a platform: identity is an argument, defaulting to `crdt.current_replica_id()`.
 
 ### What I did not build
+
+- **The causal validation rules (`v`).** The reference's ops now carry the sender's version vector `v` and the reference rejects byzantine ops (`experiments/text-ref/README.md`, V0-V7). `ydoc_apply` and `ydoc_merge` accept the `v` key and ignore it for now. The check that needs the integrate scan, "a row between the origins whose ids `v` covers means forged origins", belongs in the range `(l_ord, r_ord)` that `_ydoc_integrate` already scans (comment there).
 
 - **Tombstone and history compaction.** Deleted text stays in its row, because `ops_since` must send it to a replica that never saw the insert. A GC needs a stable version that every replica has passed.
 - **Automatic compaction.** `ydoc_compact` is a call the app makes. Doing it inside edits would need the horizon on every write; a scheduled job is simpler.
@@ -148,8 +166,8 @@ Without a stored order, render must rebuild the YjsMod order from origins: a tre
 | `31_wrapper` | the deployment model: no privileges for clients (42501), an app SECURITY DEFINER wrapper with its own check, `session_user` identity, reads through an app function |
 | `40_order_keys` | `_ydoc_label` bounds; five adversarial patterns of 2,000 edits that force relabels (backward and forward at one spot, prepend, delete from the left and retype, backspace and retype) against a text model; 4,000 random edits against a model with every invariant every 50 steps; shuffled replay |
 | `45_compact` | two documents with the same 3,000 edits (backspace bursts), one compacted every 200: same text, version and `ops_since` text, fewer rows, invariants; three-way `set` with a base at the horizon equals the twin's result; an older base is refused (22023); the horizon keeps newer tombstones apart |
-| `50_fixtures` | the 57 reference fixtures: shuffled with duplicates, shuffled with `ydoc_compact` every 5 ops, causal, all in one call, and through an `ops_since` round trip; nothing left buffered; invariants |
-| `55_trace` | automerge-paper: local edits generate exactly the reference's ops (first 20,000 patches, with `ydoc_compact` every 2,000); the reference's ops merged give the same text; the whole trace (batched ops) gives the final text (md5) |
+| `50_fixtures` | the 71 reference fixtures (57 honest; 14 malicious, replayed without the ops the reference rejects, since `ydoc_merge` is the trusted path): shuffled with duplicates, shuffled with `ydoc_compact` every 5 ops, causal, all in one call, and through an `ops_since` round trip; nothing left buffered; invariants |
+| `55_trace` | automerge-paper: local edits generate exactly the reference's ops (`i` and `d`) (first 20,000 patches, with `ydoc_compact` every 2,000); the reference's ops merged give the same text; the whole trace (batched ops) gives the final text (md5) |
 | `60_concurrency` | dblink: a waiting writer integrates against the lock holder's version; four sessions x 150 transactions on one doc: every insert once, length adds up, no deadlock, invariants |
 
 Invariants checked by `pg_temp.ydoc_check` (test/lib/helpers.sql): `docs.len` = block sums = `length(value)`; block counters equal their label ranges; block boundaries are row labels; labels unique and in bounds; `len = length(content)`; ids of each replica contiguous from 1.

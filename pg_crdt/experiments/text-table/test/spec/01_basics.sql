@@ -29,7 +29,7 @@ select tap.is(:'op3'::jsonb, '{"i": [["bob", 1, ["alice", 5], ["alice", 6], ","]
 select tap.is(:'op4'::jsonb, '{"i": [], "d": [["alice", 1, 1]]}', 'delete op names the ids');
 select tap.is(:'op5'::jsonb, '{"i": [["bob", 2, null, ["alice", 1], "J"]], "d": []}', 'insert at 0 after a deleted first char: originRight is the tombstone');
 select tap.is(crdt.ydoc_version(:d), '{"alice": 11, "bob": 2}'::jsonb, 'version vector');
-select tap.is((select count(*)::int from crdt.ydoc_items where doc = :d and replica = 'alice'), 3, 'alice''s run split in three rows (deleted H, ello, world)');
+select tap.is((select count(*)::int from crdt.ydoc_items where doc = :d and replica = crdt._ydoc_rid('alice')), 3, 'alice''s run split in three rows (deleted H, ello, world)');
 select tap.is(crdt.ydoc_value(:u), 'aé🎉b', 'non-BMP characters count as one position');
 select tap.is(crdt.ydoc_length(:u), 4, 'length in code points');
 select tap.is(pg_temp.ydoc_check(:u), '', 'invariants hold (unicode)');
