@@ -1,0 +1,68 @@
+-- Goal: differential tests against the JS reference (experiments/text-ref).
+-- Each fixture is a set of ops from several replicas and the text the
+-- reference produces. Every fixture must give exactly that text when its ops
+-- are merged:
+--   1. one by one in a shuffled order with duplicates (needs buffering),
+--   2. one by one in causal order,
+--   3. all in one ydoc_merge call (runs in array order),
+-- and the document must round-trip through ydoc_ops_since into a fresh one
+-- with nothing left buffered (ops_since is causal).
+\i :exp_dir/test/lib/helpers.sql
+\set QUIET on
+\i :exp_dir/../text-ref/fixtures/fixtures.sql
+\set QUIET off
+
+create temp table runs (name text, mode text, doc bigint);
+
+do $$
+declare
+    f record;
+    d bigint;
+begin
+    for f in select * from text_fixtures order by name loop
+        d := crdt.ydoc_create();
+        perform pg_temp.merge_all(d, f.ops);
+        insert into runs values (f.name, 'shuffled', d);
+
+        d := crdt.ydoc_create();
+        perform pg_temp.merge_all(d, f.ops_causal);
+        insert into runs values (f.name, 'causal', d);
+
+        d := crdt.ydoc_create();
+        perform crdt.ydoc_merge(d, jsonb_build_object(
+            'i', coalesce((select jsonb_agg(r order by o.n, r.n) from jsonb_array_elements(f.ops) with ordinality o(op, n),
+                                  jsonb_array_elements(o.op -> 'i') with ordinality r(r, n)), '[]'),
+            'd', coalesce((select jsonb_agg(r order by o.n, r.n) from jsonb_array_elements(f.ops) with ordinality o(op, n),
+                                  jsonb_array_elements(o.op -> 'd') with ordinality r(r, n)), '[]')));
+        insert into runs values (f.name, 'one batch', d);
+    end loop;
+    -- round trip of the shuffled documents
+    for f in select r.name, r.doc from runs r where r.mode = 'shuffled' loop
+        d := crdt.ydoc_create();
+        perform crdt.ydoc_merge(d, crdt.ydoc_ops_since(f.doc, '{}'));
+        insert into runs values (f.name, 'ops_since', d);
+    end loop;
+end;
+$$;
+
+select tap.plan(8);
+select tap.is((select count(*)::int from text_fixtures), 57, 'all 57 fixtures loaded');
+select tap.is((select string_agg(r.name, ', ') from runs r join text_fixtures f using (name)
+               where r.mode = 'shuffled' and crdt.ydoc_value(r.doc) is distinct from f.expected), null,
+              'shuffled delivery with duplicates: every fixture equals the reference');
+select tap.is((select string_agg(r.name, ', ') from runs r join text_fixtures f using (name)
+               where r.mode = 'causal' and crdt.ydoc_value(r.doc) is distinct from f.expected), null,
+              'causal delivery: every fixture equals the reference');
+select tap.is((select string_agg(r.name, ', ') from runs r join text_fixtures f using (name)
+               where r.mode = 'one batch' and crdt.ydoc_value(r.doc) is distinct from f.expected), null,
+              'all ops in one call: every fixture equals the reference');
+select tap.is((select string_agg(r.name, ', ') from runs r join text_fixtures f using (name)
+               where r.mode = 'ops_since' and crdt.ydoc_value(r.doc) is distinct from f.expected), null,
+              'ops_since round trip into a fresh document: every fixture equals the reference');
+select tap.is((select count(*)::int from crdt.ydoc_pending), 0, 'nothing left buffered (inserts)');
+select tap.is((select count(*)::int from crdt.ydoc_pending p join runs r on r.doc = p.doc where r.mode = 'ops_since'), 0,
+              'nothing buffered after applying ops_since output');
+select tap.is((select string_agg(r.name || '/' || r.mode || ': ' || pg_temp.ydoc_check(r.doc), '; ') from runs r
+               where pg_temp.ydoc_check(r.doc) <> ''), null, 'invariants hold in every document');
+
+select * from tap.finish();

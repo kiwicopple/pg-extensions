@@ -1,0 +1,3 @@
+# Large/derived trace data: regenerate with ./regen-traces.sh
+traces/raw/
+traces/*.jsonl

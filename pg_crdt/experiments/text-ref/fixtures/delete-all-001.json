@@ -1,0 +1,11 @@
+{
+"ops": [
+  {"i":[],"d":[["alice",1,13]]},
+  {"i":[["alice",1,null,null,"hello 😀 world"]],"d":[]}
+],
+"ops_causal": [
+  {"i":[["alice",1,null,null,"hello 😀 world"]],"d":[]},
+  {"i":[],"d":[["alice",1,13]]}
+],
+"expected": ""
+}
