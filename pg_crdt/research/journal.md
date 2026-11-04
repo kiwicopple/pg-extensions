@@ -65,3 +65,29 @@ The user reviewed the slice. Guiding principle: pg_crdt is generic Postgres and 
   - The old README's error table missed several SQLSTATEs.
 - Added a hand-written compaction recipe for delta tables: `delete ... returning` folded into a snapshot upsert in one statement. Compaction is not built in yet.
 - The production URL is undecided. The placeholder is `https://pg-crdt.vercel.app` (`site/astro.config.mjs`, `research/navigation.json`).
+
+## Session 5: 2026-11-04 to 11-05 (overnight), collaborative text
+
+The user asked for a way to store text documents, the most common CRDT use case (a blog post body edited by several people). They suggested either a CRDT text column or tables in the `crdt` schema with a link to a document, and left it to run overnight. Brief: `research/text.md`.
+
+- **Plan:** one algorithm, two storage shapes, measured against each other. The algorithm is YjsMod order (equal to FugueMax, no interleaving), with one JSON op format shared by three implementations:
+  - a JS reference (`experiments/text-ref`), which also generates the fixtures and converts the automerge-paper editing trace (259,778 edits);
+  - shape A, a `crdt.yseq` jsonb column (`experiments/text-column`);
+  - shape B, extension-owned tables with a document id (`experiments/text-table`).
+  All three must produce identical text, so the fixtures double as differential tests.
+- **Shape A:** runs stored as `int[]` literals inside jsonb, which parse 4x faster than jsonb arrays. Runs are grouped in chunks of up to 128 (chosen by a sweep). Deleted characters keep no text. Merge became a linked-slot engine: at 100k chars with 1,000 edits per side, merge went from 2.4 s to 74 ms. Storage is 1.2 to 1.6x the plain text, but every keystroke rewrites the whole value: 114 kB of WAL per keystroke at 100 kB.
+- **Shape B:** rows per run, and a server-local bigint order label with relabelling, so render is `order by`.
+  - Fractional bytea keys were tried first. They reached 288 bytes on the trace.
+  - Blocks hold prefix lengths for position lookup: 0.3 ms per insert at 100k, against 3.7 ms with a running sum.
+  - Writes serialize per document on the document row lock.
+  - Compaction merges adjacent runs (trace document: 149 to 26 bytes per char).
+  - Replica ids are interned, which halves storage with UUID ids.
+  - WAL is about 1 to 2 kB per keystroke at any size.
+- **Head-to-head** (`research/benchmarks/text.md`): B is the default. Its cost per edit is flat from 1 kB to 1 MB. It is 10 to 60x cheaper in WAL per keystroke, about 3x faster for three-way saves, 8x faster for batched `apply`, and 2x the same-post throughput. The price is about 4x A's storage and tables the extension owns. A suits small documents saved from a form, where the team wants a plain column.
+- **Things that surprised me:**
+  - **My brief was wrong about `set()`.** Diffing a save against the *current* text reverts whatever other editors did since the form was loaded. So "edits to different paragraphs both survive" was false. Shape B found it. The fix is a three-way `set` against the base the editor loaded: a token in B, the loaded state in A. It took two more review rounds to get right, first for a second save from the same base, then for ops emitted after the writer's own later edits.
+  - **The op format was not safe against untrusted writers.** A reviewer showed that one insert with an originRight that skips a character the writer had seen makes replicas diverge permanently (`aYXbc` against `aXbcY`). The JS reference had the same hole, so it was in the contract, not a porting bug. The fix is that every op carries the sender's version vector, and apply checks rules V0 to V7. The rules: origins covered; seqs contiguous; delete targets covered; the vector causally closed; originLeft before originRight; and no item the sender had seen strictly between the origins. Byzantine fuzz over 3,000+ seeds found 0 divergences, and turning off any of V1 to V5 brings divergence back. Equivocation (the same id with different content) is outside the rules. A single Postgres server settles it with the primary key, so the first arrival wins.
+  - The two adversarial reviews found the same classes of bug in both shapes: uncapped replica-key length, quadratic CPU from one op with thousands of tiny runs, a parked op that blocks a writer forever, and missing `search_path` pins. Correctness fuzzing missed all of them. Each review came with a repro script.
+  - Pinning `search_path` on every PL/pgSQL function costs about 18% on `ydoc_apply`. We kept it, because internal functions must stay executable by API callers.
+  - Shape A's `int[]`-in-jsonb trick parses 4x faster than nested jsonb arrays, and halves the size.
+- **Next:** the user reviews the names (`ydoc_`, `yseq_`), the promotion of `ydoc_` into the extension, and the pg_dump config for extension-owned tables. Not built: tombstone GC beyond compaction, rich text and marks, cursors, undo, a client library (JS clients must convert UTF-16 offsets to code points), and Yjs wire compatibility.
