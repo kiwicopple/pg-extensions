@@ -3,5 +3,42 @@
   "framework": null,
   "installCommand": "npm --prefix site ci",
   "buildCommand": "npm run docs:build",
-  "outputDirectory": "site/dist"
+  "outputDirectory": "site/dist",
+  "redirects": [
+    {
+      "source": "/research/overview",
+      "destination": "https://kiwicopple.github.io/pg-extensions/pg_permissions/",
+      "permanent": true
+    },
+    {
+      "source": "/research/overview/",
+      "destination": "https://kiwicopple.github.io/pg-extensions/pg_permissions/",
+      "permanent": true
+    },
+    {
+      "source": "/research",
+      "destination": "https://kiwicopple.github.io/pg-extensions/pg_permissions/",
+      "permanent": true
+    },
+    {
+      "source": "/research/",
+      "destination": "https://kiwicopple.github.io/pg-extensions/pg_permissions/",
+      "permanent": true
+    },
+    {
+      "source": "/research/:path*",
+      "destination": "https://kiwicopple.github.io/pg-extensions/pg_permissions/:path*",
+      "permanent": true
+    },
+    {
+      "source": "/markdown/research/overview.md",
+      "destination": "https://kiwicopple.github.io/pg-extensions/pg_permissions/",
+      "permanent": true
+    },
+    {
+      "source": "/markdown/research/:path*.md",
+      "destination": "https://kiwicopple.github.io/pg-extensions/pg_permissions/:path*/",
+      "permanent": true
+    }
+  ]
 }
