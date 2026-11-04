@@ -136,17 +136,23 @@ export function sqlTransport(db: Queryable, options: SqlTransportOptions = {}): 
       return run((conn) => call<T>(conn, fn, args, shape))
     },
     withSubject(subject: Subject): Transport<'subject'> {
+      // Capture the identity once. A reused request object must not change
+      // the subject of queued or future calls on this transport.
+      const identity: Subject = { id: subject.id, type: subject.type, role: subject.role }
       // Validate now, so a bad id or role fails at `withSubject()` and not at the first call.
-      if (typeof subject.id !== 'string' || subject.id === '') {
+      if (typeof identity.id !== 'string' || identity.id === '') {
         throw new Error('permissions (sql): withSubject needs a non-empty subject id')
       }
-      if (subject.role !== undefined) quoteRole(subject.role)
+      if (identity.role !== undefined) quoteRole(identity.role)
       return {
         kind: 'subject',
         async rpc<T>(fn: string, args: RpcArgs, shape: Shape): Promise<T> {
+          if (!getFunctionSpec(fn, args, 'subject').public) {
+            throw new Error(`permissions (subject): '${fn}' is an admin function. Use the server's SQL transport.`)
+          }
           // Build first: an unknown function fails before the transaction starts.
           buildCall(schema, fn, args, shape)
-          return inTransaction(subject, (conn) => call<T>(conn, fn, args, shape))
+          return inTransaction(identity, (conn) => call<T>(conn, fn, args, shape))
         },
       }
     },

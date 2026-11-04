@@ -57,7 +57,7 @@ export async function resetDatabase(owner: pg.Pool): Promise<void> {
     declare t text;
     begin
       select string_agg(format('%I.%I', schemaname, tablename), ', ') into t
-      from pg_tables where schemaname = 'permissions';
+      from pg_tables where schemaname = 'permissions' and tablename <> '_cedar_secret';
       if t is not null then
         execute 'truncate ' || t || ' restart identity cascade';
       end if;

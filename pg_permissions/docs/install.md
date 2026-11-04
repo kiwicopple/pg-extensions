@@ -32,10 +32,13 @@ Use these methods when you do not use database.dev. Each method installs the sam
 Run the file once in each database:
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f pg_permissions--0.1.0.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 \
+  -f pg_permissions--0.1.0.sql
 ```
 
 The file creates the schema `permissions` with its tables and functions. The role that you connect as owns all of them.
+
+Install in one transaction. The `-1` option keeps new functions private until the script has applied their final privileges, and rolls everything back if installation fails. In a SQL editor, wrap the file in `begin;` and `commit;`. `CREATE EXTENSION` through pg_tle already runs atomically.
 
 Do not run the file twice in one database. A second run fails with `already exists` errors. To move a database from 0.0.1 to 0.1.0, see [Upgrade from 0.0.1](#upgrade-from-001).
 
@@ -53,7 +56,7 @@ The role owns everything that the file creates. This role is the admin in these 
 psql -U postgres \
   -c "create role app_owner nosuperuser createdb nologin" \
   -c "create database app owner app_owner"
-psql -U postgres -d app -v ON_ERROR_STOP=1 \
+psql -U postgres -d app -v ON_ERROR_STOP=1 -1 \
   -c "set session authorization app_owner" \
   -f pg_permissions--0.1.0.sql
 ```
@@ -93,7 +96,7 @@ cd docker
 docker compose build
 docker compose up -d --wait pg17
 cd ..
-psql -h localhost -p 54317 -U postgres -v ON_ERROR_STOP=1 \
+psql -h localhost -p 54317 -U postgres -v ON_ERROR_STOP=1 -1 \
   -f pg_permissions--0.1.0.sql
 ```
 
@@ -193,7 +196,7 @@ Then install the package:
 2. Run the file in the database. Use `psql`, or the migration tool that you already use:
 
    ```bash
-   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 \
      -f "./migrations/<generated file>"
    ```
 

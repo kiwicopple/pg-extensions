@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest'
 import type { Transport } from '../../src/lib/types'
 import { buildCall, sqlTransport, toPermissionsError } from '../../src/transport/sql'
 import { PermissionsError, PermissionsFetchError } from '../../src/lib/errors'
+import { FUNCTIONS } from '../../src/lib/functions'
 
 type Query = { conn: string; text: string; values: unknown[] | undefined }
 
@@ -83,6 +84,33 @@ describe('buildCall', () => {
 })
 
 describe('sqlTransport', () => {
+  it('captures a subject before another request can mutate the input object', async () => {
+    const { log, conn } = fakeDb()
+    const subject = { id: 'alice', type: 'user', role: 'authenticated' }
+    const alice = sqlTransport(conn('c')).withSubject(subject)
+    const pending = alice.rpc('rbac_has_role', { role: 'viewer' }, 'scalar')
+    subject.id = 'bob'
+    subject.type = 'team'
+    subject.role = 'service_role'
+    await pending
+    await alice.rpc('rbac_has_role', { role: 'viewer' }, 'scalar')
+    expect(log.filter((q) => q.text.startsWith('set local role')).map((q) => q.text)).toEqual([
+      'set local role "authenticated"', 'set local role "authenticated"',
+    ])
+    expect(log.filter((q) => q.text.includes('set_config')).map((q) => q.values)).toEqual([
+      ['alice', 'user'], ['alice', 'user'],
+    ])
+  })
+
+  it('refuses every admin function on a subject transport before opening a transaction', async () => {
+    const { log, conn } = fakeDb()
+    const subject = sqlTransport(conn('c')).withSubject({ id: 'alice' })
+    for (const [fn, spec] of Object.entries(FUNCTIONS)) {
+      if (!spec.public) await expect(subject.rpc(fn, {}, 'scalar')).rejects.toThrow(/admin function/)
+    }
+    expect(log).toEqual([])
+  })
+
   it('reads each shape', async () => {
     const { conn } = fakeDb((text) => {
       if (text.includes('as value')) return { rows: [{ value: true }] }

@@ -108,11 +108,8 @@ describe('sql transport (service_role)', () => {
       '1',
       '2',
     ])
-    // The role is set for the call: authenticated cannot call admin functions.
-    const denied = (await alice
-      .rpc('rbac_user_permissions', { user_id: 'alice' }, 'scalar')
-      .catch((x: unknown) => x)) as PermissionsError
-    expect(denied.code).toBe('42501')
+    // The subject transport rejects admin calls before sending SQL.
+    await expect(alice.rpc('rbac_user_permissions', { user_id: 'alice' }, 'scalar')).rejects.toThrow(/admin function/)
     // The settings end with the transaction.
     expect(await sqlTransport(service).rpc('current_subject_id', {}, 'scalar')).toBeNull()
   })

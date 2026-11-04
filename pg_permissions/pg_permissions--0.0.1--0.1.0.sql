@@ -103,11 +103,25 @@ begin
 end;
 $$;
 
-revoke all on function
-    permissions._ip_canon(text),
-    permissions._ts_canon(text),
-    permissions._duration_ns(text)
-from public;
+-- These are new functions: remove named-role default grants as well as
+-- PUBLIC. Replaced functions below retain their existing explicit grants.
+do $$
+declare a record;
+begin
+    for a in
+        select distinct p.oid::regprocedure as fn, x.grantee
+        from pg_catalog.pg_proc p
+        cross join lateral pg_catalog.aclexplode(coalesce(p.proacl, pg_catalog.acldefault('f', p.proowner))) x
+        where p.oid in ('permissions._ip_canon(text)'::regprocedure,
+                        'permissions._ts_canon(text)'::regprocedure,
+                        'permissions._duration_ns(text)'::regprocedure)
+          and x.grantee <> p.proowner
+    loop
+        execute format('revoke all on function %s from %s', a.fn,
+            case when a.grantee = 0 then 'public' else quote_ident(pg_catalog.pg_get_userbyid(a.grantee)) end);
+    end loop;
+end;
+$$;
 
 create or replace function permissions._fga_cel_convert(t jsonb, v jsonb)
 returns permissions.fga_cel_result
@@ -786,6 +800,14 @@ create table permissions.cedar_entity_parents (
     foreign key (type, id) references permissions.cedar_entities (type, id) on delete cascade
 );
 create index on permissions.cedar_entity_parents (parent_type, parent_id);
+
+-- Coordinate parent additions before checking the graph for cycles. A row
+-- write also causes concurrent REPEATABLE READ / SERIALIZABLE writers with
+-- an old snapshot to fail with 40001; a lock alone would let them validate
+-- different snapshots and commit a cycle. Created lazily on the first write.
+create table permissions._cedar_hierarchy_guard (
+    one boolean primary key check (one)
+);
 
 -- ----------------------------------------------------------------------------
 -- Limits (e-cedar.md section 6), fixed, each well above the corpus maximum
@@ -4236,7 +4258,8 @@ begin
         return not exists (select 1 from jsonb_each(v));
     end if;
     -- the values without a query (jsonb_each would be one per row of a
-    -- policy): a value fails only if the test is false, not null
+    -- policy): every value must pass. A missing entity id makes the test
+    -- NULL, which must fall back to the full validator, not count as valid.
     vals := jsonb_path_query_array(v, '$.*');
     for i in 0 .. jsonb_array_length(vals) - 1 loop
         e := vals -> i;
@@ -4250,7 +4273,7 @@ begin
                                    and jsonb_typeof(e -> '__entity' -> 'id') = 'string'
                                    and jsonb_typeof(e -> '__entity' -> 'type') = 'string'
                                    and permissions._cedar_is_name(e -> '__entity' ->> 'type')
-                else false end) is false then
+                else false end) is not true then
             return false;
         end if;
     end loop;
@@ -4417,8 +4440,6 @@ begin
     end if;
     if not free and not cond then
         return false;
-    elsif free and strpos(split_part(f, chr(30), 1), 'F') = 0 then
-        return true;                        -- a permit without conditions, and no forbid can match
     end if;
     if resource_attrs is not null and resource_attrs <> 'null' then
         if jsonb_typeof(resource_attrs) <> 'object' or resource_attrs ? '__entity' or resource_attrs ? '__extn' then
@@ -4432,6 +4453,9 @@ begin
             end if;
             attrs := x.val;
         end if;
+    end if;
+    if free and strpos(split_part(f, chr(30), 1), 'F') = 0 then
+        return true;                        -- valid input, an unconditional permit, and no forbid
     end if;
     if strpos(split_part(f, chr(30), 1), 'X') > 0 then
         select * into a from permissions._cedar_uid(action, 'action');
@@ -4866,6 +4890,13 @@ begin
     perform permissions._cedar_check_id(template_id, 'template');
     c := permissions._cedar_compile_policy(est, template_id, p_template => true, p_text => cedar_put_template.template is not null);
     want := permissions._cedar_template_slots(est);
+    -- Take the template's write lock before inspecting links. Linkers also
+    -- update this row, so we see their links at READ COMMITTED or reject a
+    -- stale snapshot at REPEATABLE READ / SERIALIZABLE.
+    insert into permissions.cedar_templates as x (template_id, source, est, ast, annotations)
+    values (cedar_put_template.template_id, cedar_put_template.template, est, nullif(c -> 'ast', 'null'), c -> 'annotations')
+    on conflict on constraint cedar_templates_pkey do update
+        set source = excluded.source, est = excluded.est, ast = excluded.ast, annotations = excluded.annotations;
     select string_agg(format('%s (%s)', x.policy_id, (select string_agg(k, ', ' order by k) from jsonb_object_keys(x.slots) k)), ', ' order by x.policy_id)
     into bad
     from permissions.cedar_policies x
@@ -4877,10 +4908,6 @@ begin
             hint => 'Keep the slots of the template, or first delete those links with select permissions.cedar_delete_policy(policy_id => ...).',
             p_detail => format('template_id=%L', template_id));
     end if;
-    insert into permissions.cedar_templates as x (template_id, source, est, ast, annotations)
-    values (cedar_put_template.template_id, cedar_put_template.template, est, nullif(c -> 'ast', 'null'), c -> 'annotations')
-    on conflict on constraint cedar_templates_pkey do update
-        set source = excluded.source, est = excluded.est, ast = excluded.ast, annotations = excluded.annotations;
     for l in select x.policy_id, x.slots from permissions.cedar_policies x where x.template_id = cedar_put_template.template_id loop
         perform permissions._cedar_link(l.policy_id, template_id, est, nullif(c -> 'ast', 'null'), c -> 'annotations', l.slots);
     end loop;
@@ -4911,7 +4938,12 @@ begin
             hint => 'select permissions.cedar_link_template(policy_id => ''alice-docs'', template_id => ''owner-access'', principal => ''User::"alice"'', resource => ''Folder::"docs"'');',
             p_detail => format('argument=%L', case when policy_id is null then 'policy_id' else 'template_id' end));
     end if;
-    select x.est, x.ast, x.annotations into t from permissions.cedar_templates x where x.template_id = cedar_link_template.template_id;
+    -- Serialize linking and replacement on this template. A lock alone is
+    -- insufficient: a repeatable-read replacer could miss this new link.
+    -- A no-op write makes that stale snapshot fail with 40001 instead.
+    update permissions.cedar_templates x set source = x.source
+    where x.template_id = cedar_link_template.template_id
+    returning x.est, x.ast, x.annotations into t;
     if not found then
         perform permissions._cedar_error('unknown_template', format('unknown template %L', template_id),
             hint => permissions._cedar_template_hint(template_id),
@@ -5040,6 +5072,12 @@ begin
            coalesce(array_agg(y ->> 0), '{}'), coalesce(array_agg(y ->> 1), '{}')
     into cts, cis, pts, pis
     from jsonb_array_elements(v) x cross join lateral jsonb_array_elements(x -> 'parents') y;
+    if cardinality(cts) > 0 then
+        -- Only additions can create cycles. Batches with no parents do not
+        -- need this guard. Hold it until the caller's transaction finishes.
+        insert into permissions._cedar_hierarchy_guard as g (one) values (true)
+        on conflict (one) do update set one = excluded.one;
+    end if;
     insert into permissions.cedar_entities as e (type, id, attrs, tags)
     select * from unnest(ts, ids, attrs, tags)
     on conflict (type, id) do update set attrs = excluded.attrs, tags = excluded.tags;
@@ -5221,25 +5259,29 @@ as $$
     select permissions._cedar_uid_text(cedar_uid.type, cedar_uid.id)
 $$;
 
--- Privileges. Every cedar_* function, table and sequence is for the owner and the
--- trusted roles the app grants (e.g. service_role), never PUBLIC, except the
--- two current-subject helpers, cedar_is_authorized_current and
--- cedar_list_resources_current, and cedar_uid, which the Privileges section at the end of
--- each file grants to PUBLIC after this. A fresh install revokes everything
--- from PUBLIC at the end of the file; this does the same for the objects
--- above when the upgrade script adds them.
+-- Newly created Cedar objects start owner-only, regardless of the
+-- installer's global or schema-local default privileges. Revoking only
+-- PUBLIC leaves named-role defaults intact, exposing admin APIs and the
+-- cache secret. Existing RBAC/FGA grants are left alone on upgrades.
+-- The final grant in each script exposes only the current-subject API.
 do $$
 declare
-    f regprocedure;
-    t regclass;
+    a record;
 begin
-    for f in select p.oid::regprocedure from pg_proc p
-             where p.pronamespace = 'permissions'::regnamespace and p.proname ~ '^_?cedar_' loop
-        execute format('revoke all on function %s from public', f);
-    end loop;
-    for t in select c.oid::regclass from pg_class c
-             where c.relnamespace = 'permissions'::regnamespace and c.relkind in ('r', 'S') and c.relname ~ '^_?cedar_' loop
-        execute format('revoke all on table %s from public', t);
+    for a in
+        select distinct 'function' as kind, p.oid::regprocedure::text as obj, x.grantee
+        from pg_catalog.pg_proc p
+        cross join lateral pg_catalog.aclexplode(coalesce(p.proacl, pg_catalog.acldefault('f', p.proowner))) x
+        where p.pronamespace = 'permissions'::regnamespace and p.proname ~ '^_?cedar_' and x.grantee <> p.proowner
+        union all
+        select distinct case c.relkind when 'S' then 'sequence' else 'table' end, c.oid::regclass::text, x.grantee
+        from pg_catalog.pg_class c
+        cross join lateral (select acl.grantee from pg_catalog.aclexplode(c.relacl) acl union select 0::oid) x
+        where c.relnamespace = 'permissions'::regnamespace and c.relkind in ('r', 'S')
+          and c.relname ~ '^_?cedar_' and x.grantee <> c.relowner
+    loop
+        execute format('revoke all on %s %s from %s', a.kind, a.obj,
+            case when a.grantee = 0 then 'public' else quote_ident(pg_catalog.pg_get_userbyid(a.grantee)) end);
     end loop;
 end;
 $$;

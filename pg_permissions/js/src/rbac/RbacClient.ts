@@ -234,14 +234,16 @@ class RbacClientImpl<N extends RbacNames> implements RbacClientMethods<N> {
 
   hasPermission({ permission, scope }: { permission: PermissionName<N>; scope?: Scope }): Promise<Result<boolean>> {
     return toResult(
-      this.transport.rpc<boolean>('rbac_has_permission', { permission, scope: scope ?? undefined }, 'scalar'),
+      this.transport.rpc<boolean>('rbac_has_permission', { permission, scope: scope ?? undefined }, 'scalar')
+        .then((allowed) => allowed === true),
       this.throwOnError,
     )
   }
 
   hasRole({ role, scope }: { role: RoleName<N>; scope?: Scope }): Promise<Result<boolean>> {
     return toResult(
-      this.transport.rpc<boolean>('rbac_has_role', { role, scope: scope ?? undefined }, 'scalar'),
+      this.transport.rpc<boolean>('rbac_has_role', { role, scope: scope ?? undefined }, 'scalar')
+        .then((allowed) => allowed === true),
       this.throwOnError,
     )
   }

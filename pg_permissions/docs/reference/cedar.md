@@ -211,6 +211,8 @@ permissions.cedar_put_entities(
 
 Stores an array of entities, in one transaction. Each entity is `{"uid": {"type", "id"}, "attrs": {}, "parents": [], "tags": {}}`. An entity replaces the stored entity with the same uid, with its attributes, parents and tags. The call rejects a duplicate uid in the array, a value that is not valid, and a hierarchy with a cycle.
 
+Batches containing parent links share a write guard until the transaction ends. Concurrent writes at `REPEATABLE READ` or `SERIALIZABLE` can raise `40001`; retry the transaction. See [The hierarchy](../models/cedar/entities.md#the-hierarchy).
+
 Privileges: admin only. Subject: none. Context: not applicable. Cap: at most 10,000 entities in one call.
 
 Errors: `cedar:invalid_entity` (with the index of the entity, or the uid of a cycle), `cedar:limit_exceeded` and `cedar:null_argument`.

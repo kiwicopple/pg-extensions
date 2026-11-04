@@ -25,6 +25,12 @@ function mockTransport(kind: TransportKind, respond: (fn: string) => unknown = (
 const sqlKind = (m: { transport: Transport }) => m.transport as SqlTransport
 
 describe('RbacClient client methods', () => {
+  it.each([false, null, undefined, 'false', 'true', 0, 1, {}, []].map((value) => [value]))('denies any response other than boolean true: %j', async (value) => {
+    const rbac = new RbacClient({ transport: mockTransport('sql', () => value).transport })
+    expect(await rbac.hasPermission({ permission: 'documents.read' })).toEqual({ data: false, error: null })
+    expect(await rbac.hasRole({ role: 'admin' })).toEqual({ data: false, error: null })
+  })
+
   it('maps hasPermission, hasRole and scopesWithPermission to the right function, shape and arguments', async () => {
     const m = mockTransport('postgrest', (fn) => (fn === 'rbac_scopes_with_permission' ? ['acme'] : true))
     const rbac = new RbacClient({ transport: m.transport })

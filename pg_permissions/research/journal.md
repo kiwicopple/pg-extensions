@@ -1127,3 +1127,42 @@ Two passes over the finished Cedar build, both landed in the working tree uncomm
 - `rbac_has_permission` 21.8 to 12.1 µs (PG 16); 9.3 µs of the old 28 µs was `current_subject_id`.
 - Filter fold: 92 to 215 µs (wrong) to 84 µs (`offset 0`).
 - 263 files, 169,987 assertions, on PG 16, 17 and 18, fresh and upgraded.
+
+## Session 12 (2026-11-03 to 11-04): an independent security review
+
+A second review, done separately from session 11, of the extension and the JavaScript client at `d061c62` (after the session 11 fixes merged). It found two high and two medium issues that session 11 had missed, plus some JavaScript client hardening. The full report is in [`SECURITY_REVIEW.md`](../SECURITY_REVIEW.md).
+
+### 1. Findings and fixes
+
+- **High: default privileges undid the install's revokes.** The install revoked `PUBLIC` but left grants to named roles alone. A database owner who had run `alter default privileges ... grant execute on functions to authenticated` gave `authenticated` every new function, including `cedar_put_policy` and read access to `_cedar_secret`. A client could install a permit-all policy. Session 11's invariant spec checked the grants in our test cluster, which had no default privileges, so it passed. The fix strips grants to every non-owner role from new objects and then grants the intended client functions. The upgrade does the same for new Cedar objects and shared helpers, and leaves explicit grants on existing RBAC and OpenFGA functions alone. Direct-install examples now run in one transaction, so half-installed functions are never visible.
+- **High: a concurrent template link could keep a revoked permit.** One transaction replaced a permit template with a forbid while another linked the old template. Both committed: the template forbade, the new link still permitted. The obvious fix, a shared lock, still let the stale permit through under repeatable read. Postgres's foreign-key key-share lock does not block a non-key update either. What works is a no-op `update` on the template row before linking, and taking the write lock before validating slots when replacing. At read committed the two serialize. At stronger levels the stale snapshot fails with `40001`.
+- **Medium: a NULL counted as valid in Cedar's fast path.** `{"owner":{"__entity":{"type":"Admin"}}}` has no id. The validator returned SQL `NULL`, the fast path treated anything but `false` as success, and `resource.owner is Admin` passed. Separately, an unconditional permit returned before attributes were validated at all. Now validation must return `true`, and it runs before an unconditional allow.
+- **Medium: concurrent hierarchy writes could commit a cycle.** This was already a documented limitation: `A in B` and `B in A` written at the same time each validated against a snapshot without the other. Batches with parent links now update one private coordination row first. This reverses the earlier design choice of no shared write lock: correctness over write concurrency for parent links. Batches with no parent links skip it.
+
+### 2. JavaScript client hardening
+
+- Subject transports copy the id, type and role when they are created, so changing a reused request object cannot change who a check is for.
+- Subject transports refuse admin calls before sending any SQL. Database grants remain the real boundary.
+- RBAC checks treat only boolean `true` as allow, as the OpenFGA and Cedar clients already did. The string `"false"` is truthy in JavaScript.
+- Test cleanup had been truncating the Cedar signing secret, so later integration tests ran the uncached fallback path instead of the normal one.
+
+### 3. Verification
+
+- New tests: 22 SQL assertions (`07_security_default_privileges.sql`, `08_security_cache_rollback.sql`, `58_cedar_security_inputs.sql`), 11 JavaScript unit cases, 13 integration cases (`security.test.ts` drives two real connections and watches the lock waits). Five default-privilege assertions failed before the fix; the template, malformed-input and client cases were also run against implementations that had the bugs.
+- Full SQL suite on PG 16.4: 266 files, 170,009 assertions. Upgrade matrix from 0.0.1 on PG 16.15, 17.11 and 18.6: 76 files, 4,598 assertions each. JS unit 205 tests, integration 88 tests (PG 17, PostgREST 16.5). `npm run check` clean.
+- `write_nest_team` p95 4.08 to 5.37 ms (p50 and throughput flat). It missed the 1 ms budget before and after. Unrelated hierarchies written concurrently will now contend on the shared row; this has not been measured.
+
+### Possible angles for the blog post (session 12 additions)
+
+- **"Our invariant test passed because our test database was too clean."** Session 11's spec checked grants against a cluster with no default privileges. Real databases have them.
+- **"`REVOKE FROM PUBLIC` is not `REVOKE`."** A grant to a named role survives it.
+- **"The lock that looked right."** A shared lock fixes the race at read committed and not at repeatable read. A no-op `update` fixes both.
+- **"NULL is not false."** Three-valued logic turned an invalid entity into a valid one.
+- **"Review the reviewer."** A second, independent pass found two highs the first pass missed, a day after the first pass declared victory.
+
+### Numbers worth quoting (session 12)
+
+- 2 high, 2 medium findings, 4 JS hardening changes.
+- 22 SQL assertions, 11 unit and 13 integration cases added; 5 default-privilege assertions failing before the fix.
+- 266 files, 170,009 assertions (PG 16.4); 4,598 upgrade assertions on each of PG 16, 17, 18.
+- `write_nest_team` p95 4.08 to 5.37 ms.

@@ -140,7 +140,7 @@ select permissions.cedar_put_entities(
 -- HINT:  An entity cannot be its own ancestor (Cedar rejects cycles): remove one of the parent links of the cycle.
 ```
 
-Two puts that run at the same time can make a cycle that neither put sees, because the extension takes no global lock. A check still ends in this case. Do not depend on this: write the entities of one hierarchy from one place.
+Puts that include parent links are serialized until their transactions finish, so concurrent writes cannot introduce a cycle that neither sees. Keep these transactions short. Under `REPEATABLE READ` or `SERIALIZABLE`, a competing write can raise SQLSTATE `40001`; retry the whole transaction. Batches with no parent links do not take this shared write guard.
 
 ## Read entities
 
