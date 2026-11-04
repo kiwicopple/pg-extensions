@@ -1,7 +1,7 @@
 -- Goal: e164 checks the international number structure; country_code,
 -- country_code_alpha3, currency_code and language_code accept exactly the
--- embedded ISO snapshots (249, 249, 177 and 183 codes) in their canonical
--- case.
+-- embedded ISO snapshots (249, 249, 178 and 183 codes, data/README.md) in
+-- their canonical case.
 \ir ../fixtures/cases.sql
 
 insert into cases (fn, input, want, note) values
@@ -52,12 +52,18 @@ insert into cases (fn, input, want, note) values
     ('currency_code', 'XAU', true, 'gold'),
     ('currency_code', 'XTS', true, 'testing code'),
     ('currency_code', 'XCG', true, 'Caribbean guilder (2025)'),
-    ('currency_code', 'SLE', true, null),
+    ('currency_code', 'SLE', true, 'Sierra Leone leone (2022), replaced SLL'),
+    ('currency_code', 'XAD', true, 'Arab Accounting Dinar (Arab Monetary Fund), a fund code'),
+    ('currency_code', 'XDR', true, 'IMF special drawing right'),
+    ('currency_code', 'XXX', true, 'no currency'),
     ('currency_code', 'ZWG', true, null),
     ('currency_code', 'usd', false, 'lowercase'),
     ('currency_code', 'HRK', false, 'historic (Croatia adopted the euro)'),
     ('currency_code', 'CUC', false, 'historic'),
     ('currency_code', 'ZWL', false, 'historic'),
+    ('currency_code', 'ANG', false, 'historic (replaced by XCG, withdrawn 2025-03)'),
+    ('currency_code', 'BGN', false, 'historic (Bulgaria adopted the euro, withdrawn 2026-01)'),
+    ('currency_code', 'SLL', false, 'historic (replaced by SLE, withdrawn 2023-12)'),
     ('currency_code', 'BTC', false, 'not ISO 4217'),
     ('currency_code', 'US', false, null),
     ('currency_code', 'USDT', false, null),
@@ -92,7 +98,7 @@ select tap.is(
 select tap.is(
     (select count(*)::int from generate_series(65, 90) a, generate_series(65, 90) b, generate_series(65, 90) c
      where validate.currency_code(chr(a) || chr(b) || chr(c))),
-    177, 'currency_code accepts the 177 List One codes of the snapshot');
+    178, 'currency_code accepts the 178 List One codes of the snapshot');
 select tap.is(
     (select count(*)::int from generate_series(97, 122) a, generate_series(97, 122) b
      where validate.language_code(chr(a) || chr(b))),

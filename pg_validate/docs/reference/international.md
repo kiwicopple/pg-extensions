@@ -14,13 +14,18 @@ Validators for phone numbers and ISO codes. Each takes `value text` and returns 
 
 The ISO lists are embedded in the function bodies, which is why the functions can be `IMMUTABLE`: they read no table. Each release of the extension carries a snapshot, and a change to a list is a new extension version. A code that ISO adds after the release fails until you upgrade; a code that ISO withdraws keeps passing until you upgrade.
 
-| Function | Codes | Snapshot |
-| --- | --- | --- |
-| `country_code`, `country_code_alpha3` | 249 officially assigned codes | ISO 3166-1, as of 2026 |
-| `currency_code` | 177 List One codes | ISO 4217 List One, as of 2026: includes `XCG` (2025); excludes `ANG`, `BGN`, `CUC`, `HRK`, `SLL`, `ZWL` |
-| `language_code` | 183 codes | ISO 639-1, after the 2021 deprecation of `bh` |
+| Function | Codes | Source | Snapshot |
+| --- | --- | --- | --- |
+| `country_code`, `country_code_alpha3` | 249 officially assigned codes | Debian [iso-codes](https://salsa.debian.org/iso-codes-team/iso-codes) `iso_3166-1.json`, cross-checked with Wikipedia's table of officially assigned codes | Retrieved 2026-11-03 |
+| `currency_code` | 178 List One codes | [SIX](https://www.six-group.com/en/products-services/financial-information/market-reference-data/data-standards.html), the ISO 4217 maintenance agency: `list-one.xml` | List One published 2026-09-17: includes `XAD`, `XCG` and `SLE`; excludes `ANG`, `BGN`, `CUC`, `HRK`, `SLL`, `ZWL` |
+| `language_code` | 183 codes | Debian iso-codes `iso_639-2.json` (its two-letter codes), cross-checked with Wikipedia's list of ISO 639 codes | Retrieved 2026-11-03, after the 2021 deprecation of `bh` |
 
-The test suite counts the accepted codes, so an unintended change to a list fails a test.
+[`data/README.md`](../../data/README.md) records the source URLs, versions and checksums. Before each release, and at least every three months (ISO 4217 changes several times a year), run `data/refresh.py`: it fetches the sources and prints the codes to add and remove. The test suite counts the accepted codes, so an unintended change to a list fails a test.
+
+Known exclusions, by policy:
+
+- `XK` (Kosovo) and other user-assigned codes are not ISO 3166-1 assignments, so `country_code` rejects them, as it rejects exceptionally reserved codes such as `UK` and `EU`. `XK` is a valid IBAN prefix: see [`iban`](financial.md#iban).
+- `currency_code` accepts List One only. Historic codes (List Three) are rejected, including codes withdrawn recently: `ANG` (replaced by `XCG` in 2025), `BGN` (Bulgaria adopted the euro on 2026-01-01) and `SLL` (replaced by `SLE`).
 
 Codes are case-sensitive, in the case the standard uses: uppercase for countries and currencies, lowercase for languages. To accept other cases, normalize in the constraint, for example `check (validate.country_code(upper(country)))`, or better, store the normalized value.
 
@@ -73,7 +78,7 @@ Accepts one of the 249 officially assigned ISO 3166-1 alpha-3 codes, in uppercas
 validate.currency_code(value text) returns boolean
 ```
 
-Accepts an ISO 4217 alphabetic code from List One (current currencies and funds), in uppercase. List One includes fund codes (`BOV`, `CHE`, `USN`), precious metals (`XAU`, `XAG`), `XTS` (reserved for testing) and `XXX` (no currency). Exclude the ones you do not want in the constraint, for example `and currency not in ('XTS', 'XXX')`.
+Accepts an ISO 4217 alphabetic code from List One (current currencies and funds), in uppercase. List One includes fund codes (`BOV`, `CHE`, `USN`, `XAD`), precious metals (`XAU`, `XAG`), `XTS` (reserved for testing) and `XXX` (no currency). Exclude the ones you do not want in the constraint, for example `and currency not in ('XTS', 'XXX')`.
 
 **Guarantees:** the value is a List One code in the snapshot.
 
