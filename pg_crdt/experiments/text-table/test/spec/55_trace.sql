@@ -1,7 +1,8 @@
 -- Goal: differential tests on a real editing trace (automerge-paper, from
 -- josephg/editing-traces, converted by experiments/text-ref). The local API
 -- generates exactly the ops the JS reference generated for the first 20,000
--- patches (same originLeft/originRight convention, same run extension), the
+-- patches (same originLeft/originRight convention, same run extension; with
+-- ydoc_compact every 2,000 patches, which must not change any op), the
 -- reference's ops merged one by one give the same text, and the whole trace
 -- in 2,598 batched ops (100 patches each) gives the trace's final text.
 -- The trace files are generated (gitignored); without them this file SKIPs.
@@ -34,6 +35,7 @@ begin
         if (r.p ->> 1)::int > 0 then op := crdt.ydoc_delete(d, (r.p ->> 0)::int, (r.p ->> 1)::int, 'paper');
         else op := crdt.ydoc_insert(d, (r.p ->> 0)::int, r.p ->> 2, 'paper'); end if;
         if op <> r.want then insert into mismatch values (r.n, op, r.want); end if;
+        if r.n % 2000 = 0 then perform crdt.ydoc_compact(d); end if;
     end loop;
 end $$;
 do $$
@@ -49,7 +51,7 @@ end $$;
 
 select tap.plan(4);
 select tap.is((select count(*)::int from patches), 20000, '20,000 patches loaded');
-select tap.is((select count(*)::int from mismatch), 0, 'local insert/delete by position: every op equals the reference''s op');
+select tap.is((select count(*)::int from mismatch), 0, 'local insert/delete by position, compacted every 2,000 patches: every op equals the reference''s op');
 select tap.is(crdt.ydoc_value(:b), crdt.ydoc_value(:a), 'the reference''s ops merged one by one give the same text');
 select tap.is(md5(crdt.ydoc_value(:c)), 'f6ee9cff45a87f3b7f29d60920bfce10', 'the whole trace (batched ops) gives the trace''s final text (104,852 chars)');
 \else

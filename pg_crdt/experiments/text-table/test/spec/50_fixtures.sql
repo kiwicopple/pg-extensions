@@ -5,6 +5,7 @@
 --   1. one by one in a shuffled order with duplicates (needs buffering),
 --   2. one by one in causal order,
 --   3. all in one ydoc_merge call (runs in array order),
+--   4. shuffled again, with ydoc_compact after every 5 ops,
 -- and the document must round-trip through ydoc_ops_since into a fresh one
 -- with nothing left buffered (ops_since is causal).
 \i :exp_dir/test/lib/helpers.sql
@@ -23,6 +24,14 @@ begin
         d := crdt.ydoc_create();
         perform pg_temp.merge_all(d, f.ops);
         insert into runs values (f.name, 'shuffled', d);
+
+        -- shuffled, with ydoc_compact (horizon = now) after every 5 ops
+        d := crdt.ydoc_create();
+        for k in 1 .. jsonb_array_length(f.ops) loop
+            perform crdt.ydoc_merge(d, f.ops -> (k - 1));
+            if k % 5 = 0 then perform crdt.ydoc_compact(d); end if;
+        end loop;
+        insert into runs values (f.name, 'compacted', d);
 
         d := crdt.ydoc_create();
         perform pg_temp.merge_all(d, f.ops_causal);
@@ -45,11 +54,14 @@ begin
 end;
 $$;
 
-select tap.plan(8);
+select tap.plan(9);
 select tap.is((select count(*)::int from text_fixtures), 57, 'all 57 fixtures loaded');
 select tap.is((select string_agg(r.name, ', ') from runs r join text_fixtures f using (name)
                where r.mode = 'shuffled' and crdt.ydoc_value(r.doc) is distinct from f.expected), null,
               'shuffled delivery with duplicates: every fixture equals the reference');
+select tap.is((select string_agg(r.name, ', ') from runs r join text_fixtures f using (name)
+               where r.mode = 'compacted' and crdt.ydoc_value(r.doc) is distinct from f.expected), null,
+              'shuffled delivery with ydoc_compact every 5 ops: every fixture equals the reference');
 select tap.is((select string_agg(r.name, ', ') from runs r join text_fixtures f using (name)
                where r.mode = 'causal' and crdt.ydoc_value(r.doc) is distinct from f.expected), null,
               'causal delivery: every fixture equals the reference');

@@ -6,7 +6,7 @@ Status: experiment, 2026-11-04. PL/pgSQL and SQL only; loads after `pg_crdt--0.0
 | --- | --- |
 | `impl.sql` | The implementation: tables, internals (`crdt._ydoc_*`), API (`crdt.ydoc_*`), privileges. |
 | `test/run.sh` | Test runner (a throwaway cluster from `test/lib/cluster.sh`; `-v`, name filters, `--impl`). |
-| `test/spec/*.sql` | Ten spec files, 124 assertions (table below). |
+| `test/spec/*.sql` | Eleven spec files, 138 assertions (table below). |
 | `bench.sh` | Benchmarks; prints the Markdown in the "Benchmarks" section. `--quick` skips 1M and most of the trace. |
 | `variants/bytea-keys.sql` | The first version, with byte-string fractional keys instead of bigint labels. Kept for the benchmark comparison only (the tests target `impl.sql`). |
 
@@ -25,6 +25,7 @@ Status: experiment, 2026-11-04. PL/pgSQL and SQL only; loads after `pg_crdt--0.0
 | `ydoc_merge(doc, ops)` | void | volatile | Trusted path: ops from any replica (another server's `ops_since`). |
 | `ydoc_ops_since(doc, vv default '{}')` | ops `jsonb` | stable | Inserts above `vv` in integration order (causal), joined into maximal runs; every delete. |
 | `ydoc_version(doc)` | `jsonb` | stable | `{replica: highest seq}`; one index probe per replica. |
+| `ydoc_compact(doc, horizon default null)` | `integer` | volatile | Maintenance: merges adjacent rows of one run with the same visibility; tombstones stamped at or before `horizon` (default: now) merge. Returns rows removed. See "Compaction". |
 | `ydoc_drop(doc)` | void | volatile | Deletes the document and its rows. |
 
 Positions and lengths count code points (`length()`), not UTF-16 units. Errors: `22004` null argument; `22023` malformed ops, a replica key that is not one, a position outside the text, a base that is not a version of the document, an insert whose originRight is not after its originLeft; `42501` no identity or a forged insert (`ydoc_apply`), or no table privileges (Postgres); `P0002` no such document.
@@ -34,7 +35,7 @@ Positions and lengths count code points (`length()`), not UTF-16 units. Errors: 
 ### Tables
 
 ```
-ydoc_docs(id, len, gen)                         one row per document; the row lock serializes writers
+ydoc_docs(id, len, gen, horizon)                one row per document; the row lock serializes writers
 ydoc_items(doc, ord, ins, seq, ol_seq, or_seq,  one row per run of characters of one replica
            replica, ol_replica, or_replica,     pk (doc, replica, seq); index (doc, ord)
            del_gen, len, content)
@@ -89,6 +90,24 @@ An insert is integrated when both origins and `(replica, seq-1)` are integrated 
 
 Writers to one document serialize on its row lock; writers to different documents do not touch each other. Four dblink sessions running 150 transactions each against one document (inserts, deletes, `set`, `apply`) lost nothing and never deadlocked (`60_concurrency`); a writer that holds the lock in an open transaction makes the next wait, and the next then integrates against its version. A writer never takes two documents' locks, so there is no lock order to get wrong. Under REPEATABLE READ or SERIALIZABLE, a writer that waited on the lock gets `40001` and must retry, as for `pn_merge`.
 
+### Compaction (storage)
+
+Rows only split during editing. The automerge-paper trace ends with 83,253 rows for 104,852 chars, and 77,463 of them are tombstones: every backspace splits the char off its run and stamps it with its own `del_gen`. Most of those tombstones are consecutive ids of one run, adjacent in the order, with the same originRight, so they are one run again, except for their stamps.
+
+`crdt.ydoc_compact(doc, horizon default null)` merges each maximal chain of rows (in `ord` order) that continue one run (same replica, consecutive seqs, the right row's originLeft the left row's last char, the same originRight) and have the same visibility: both visible, both deleted with equal stamps, or both deleted at or before `horizon`. A merged tombstone keeps the latest stamp of its chain, which is still at or before the horizon, so the text at any base at or after the horizon is exact. The horizon is stored per document, and `ydoc_set` refuses a base older than it with `22023` and a hint to re-read (or to save without base, a two-way diff). Refusing is deliberate: a wrong base text widens the diff, which reverts or duplicates other editors' text. Chains do not cross block boundaries (a block's `lo` must stay a row label), a merged row holds at most about twice the run cap (256 chars), and the merged row keeps the smallest `ins`, which keeps `ops_since` causal.
+
+Nothing a reader or a peer sees changes: the text, the ids, the version vector, and the text of `ops_since` (spec `45_compact`). The fixtures still match the reference with a compaction after every 5 ops, and the local replay of the trace still generates the reference's ops op for op with a compaction every 2,000 patches (spec `50_fixtures`, `55_trace`), because origins name ids and never rows.
+
+Effect on the trace document, measured right after the replay: **83,253 rows and 15.6 MB become 12,636 rows and 2.7 MB (149 to 26 bytes per char of text)**. The bench table ("Storage: ydoc_compact") measures after 3,000 extra random edits: 16,399 rows, 32 bytes per char, compaction in 281 ms.
+
+When to run it: on save, or from a scheduled job, with `horizon` = the oldest base an editor may still send (the write counter `g` of `ydoc_base` at the start of the oldest open editing session), or the default (now) when the app does not use three-way `set`. It takes the document's lock like any write, and costs a scan of the document's rows.
+
+What I measured and did not change:
+
+- **Run extension on typing** (candidate 1 of the brief) was already in the first version ("typing on" above): an insert directly after the replica's own last char, with that char's originRight, extends the row in place. Disabled in a variant (`... and false`), the full trace replay (local, commit every 5,000 ops, one run each on a dev cluster) makes 182,315 rows instead of 83,253, a 33.7 MB item table instead of 15.5 MB, 3,684 bytes of WAL per op instead of 714, and 1,319 us per op instead of 377. The extension's HOT update is much smaller than a new row with two index entries, and one row per typed char also exhausts the label gaps at the typing spot (more relabels). It cannot help after a backspace: the reference's convention makes the next char's originLeft the visible char before the deleted one, so the new char does not continue the run (Yjs does the same).
+- **Interning replica ids.** Each row holds the replica id three times (`replica`, `ol_replica`, `or_replica`) and the primary key holds it once more. With the trace's `paper` that is 18 bytes per row of 95; with a 36-char UUID id it would be about 110 bytes per row in the heap and 37 more in the index, more than half of a compacted row. A per-document table of replica ids and a `smallint` in the rows would remove that; it touches every query (the YjsMod tie-break compares names), so I left it as a follow-up.
+- **fillfactor 90** on the item table leaves 10% of each page free for HOT updates (a split updates the left part, a delete stamps a row); `VACUUM FULL` keeps that free space. Lowering it to 100 would save 10% of the heap and turn those updates into new tuples with index entries.
+
 ### Security model
 
 The tables belong to the extension and nobody but their owner has privileges on them. The functions are SECURITY INVOKER (no SECURITY DEFINER, per the conventions), so a call runs with the caller's table privileges, and a role without them gets `42501` from any `ydoc_` function. EXECUTE is granted to public, as for `pn_`; the table privileges are the gate.
@@ -105,7 +124,7 @@ Row-level security on the `crdt.ydoc_*` tables would also work (policies that lo
 ### What I did not build
 
 - **Tombstone and history compaction.** Deleted text stays in its row, because `ops_since` must send it to a replica that never saw the insert. A GC needs a stable version that every replica has passed.
-- **Merging rows.** Rows only ever split (except "typing on"). Backspacing char by char leaves one tombstone row per char: the trace ends with 83,253 rows for 104,852 chars, about 200 bytes of heap and index per row. Adjacent tombstones of one run could merge into one row, but only when their `del_gen` stamps are equal, or the three-way `set` would see a wrong base; merging older than a horizon (the oldest base still in use) would work. A document typed or pasted in order is about one row per 256 chars.
+- **Automatic compaction.** `ydoc_compact` is a call the app makes. Doing it inside edits would need the horizon on every write; a scheduled job is simpler.
 - **A cached plain-text column.** Measured instead ("Cached plain text"): maintaining `body_text` on every edit costs 13-34 times the latency and 6-44 times the WAL of the edit (10k and 100k chars), because the whole text is rewritten (and TOASTed) each time. For full-text search across many posts, keep a cached column refreshed on a timer or on save (`update posts set body_text = crdt.ydoc_value(body_doc)`), not on every keystroke.
 - **Deletes since a version.** `ops_since` sends all deletes. A server-local cursor (`since gen`) would let a client that syncs with one server get only new deletes (`del_gen > g`).
 - **Limits for untrusted writers.** `ydoc_apply` buffers inserts whose dependencies are missing; a hostile client can fill `ydoc_pending` with runs that never become ready (seq far ahead). A cap per document, or rejecting seq gaps for the caller's own replica, would close it.
@@ -117,7 +136,7 @@ Without a stored order, render must rebuild the YjsMod order from origins: a tre
 
 ## Tests
 
-`experiments/text-table/test/run.sh` (Postgres 16.4, Postgres.app): **All passed: 10/10 files, 124/124 assertions.**
+`experiments/text-table/test/run.sh` (Postgres 16.4, Postgres.app): **All passed: 11/11 files, 138/138 assertions.**
 
 | File | Goal |
 | --- | --- |
@@ -128,23 +147,32 @@ Without a stored order, render must rebuild the YjsMod order from origins: a tre
 | `30_apply` | `ydoc_apply`: own ids, device keys, deletes of others; idempotent re-apply; identity from `crdt.current_replica_id()`; 42501 forged/no identity; 22023 for 13 kinds of malformed ops; buffering of missing origins and predecessors; early deletes; partial overlap; `ops_since` order and run joining |
 | `31_wrapper` | the deployment model: no privileges for clients (42501), an app SECURITY DEFINER wrapper with its own check, `session_user` identity, reads through an app function |
 | `40_order_keys` | `_ydoc_label` bounds; five adversarial patterns of 2,000 edits that force relabels (backward and forward at one spot, prepend, delete from the left and retype, backspace and retype) against a text model; 4,000 random edits against a model with every invariant every 50 steps; shuffled replay |
-| `50_fixtures` | the 57 reference fixtures: shuffled with duplicates, causal, all in one call, and through an `ops_since` round trip; nothing left buffered; invariants |
-| `55_trace` | automerge-paper: local edits generate exactly the reference's ops (first 20,000 patches); the reference's ops merged give the same text; the whole trace (batched ops) gives the final text (md5) |
+| `45_compact` | two documents with the same 3,000 edits (backspace bursts), one compacted every 200: same text, version and `ops_since` text, fewer rows, invariants; three-way `set` with a base at the horizon equals the twin's result; an older base is refused (22023); the horizon keeps newer tombstones apart |
+| `50_fixtures` | the 57 reference fixtures: shuffled with duplicates, shuffled with `ydoc_compact` every 5 ops, causal, all in one call, and through an `ops_since` round trip; nothing left buffered; invariants |
+| `55_trace` | automerge-paper: local edits generate exactly the reference's ops (first 20,000 patches, with `ydoc_compact` every 2,000); the reference's ops merged give the same text; the whole trace (batched ops) gives the final text (md5) |
 | `60_concurrency` | dblink: a waiting writer integrates against the lock holder's version; four sessions x 150 transactions on one doc: every insert once, length adds up, no deadlock, invariants |
 
 Invariants checked by `pg_temp.ydoc_check` (test/lib/helpers.sql): `docs.len` = block sums = `length(value)`; block counters equal their label ranges; block boundaries are row labels; labels unique and in bounds; `len = length(content)`; ids of each replica contiguous from 1.
 
 ## Benchmarks
 
-Environment (from `bench.sh`): Postgres 16.4 (Postgres.app), Apple M4, 10 CPU, 24 GB, macOS 27.0.1; throwaway cluster with `fsync=off`, `full_page_writes=on`, `shared_buffers=512MB`. 2026-11-04. Numbers are from one run of `experiments/text-table/bench.sh` on the benchmark machine; the trace section is from `ONLY=trace` after a fix to the script.
+Environment (from `bench.sh`): Postgres 16.4 (Postgres.app), Apple M4, 10 CPU, 24 GB, macOS 27.0.1; throwaway cluster with `fsync=off`, `full_page_writes=on`, `shared_buffers=512MB`. 2026-11-04. Numbers are from one run of `experiments/text-table/bench.sh` on the benchmark machine (after `ydoc_compact` was added).
 
 Reading the numbers:
 
 - **Edits are O(edit).** Insert and delete of one char cost 0.26-0.35 ms from 1k to 100k chars and 0.5-0.6 ms at 1M (the block running sum: 722 blocks), including the client round trip and commit. The WAL *records* of an edit stay at 0.5-1.5 kB at every size (one row insert, one or two HOT updates, two index entries, the block and document counters, the lock); what grows with the document is full-page images, because random positions touch pages that have not been written since the last checkpoint. Shape A rewrites the whole value.
-- **Reads are O(document).** `value()` is a `string_agg` over the rows: 3.4 ms at 100k chars (26k rows), 60 ms at 1M. `set` renders, diffs and edits: 12 ms at 100k. `ops_since` sends every delete, so even "nothing new" costs a scan of the tombstones (7.8 ms at 100k).
+- **Reads are O(document).** `value()` is a `string_agg` over the rows: 3.5 ms at 100k chars (26k rows), 53 ms at 1M. `set` renders, diffs and edits: 12 ms at 100k. `ops_since` sends every delete, so even "nothing new" costs a scan of the tombstones (8.3 ms at 100k).
 - **Concurrency:** writers to one document serialize (about 3,300 inserts per second whatever the number of clients; latency grows with the queue); writers to different documents scale (11,700 per second with 8 clients). No lost insert, no deadlock.
-- **The trace:** 259,778 single-char edits replay locally in 61 s (236 us per edit, 709 bytes of WAL per edit with a commit each); the reference's ops merge in 43 s; the batched ops in 1.5 s. The JS reference replays it in about 4.7 s in memory. Final text identical (md5) in all three.
-- **Storage is the weak point.** About 89 bytes of heap per row plus about 65 bytes of index; the random-insert documents average 4 chars per row (45 times the text), and the real trace leaves 83k rows for 105k chars (18 MB) because each backspaced char becomes its own tombstone row. See "Merging rows" above.
+- **The trace:** 259,778 single-char edits replay locally in 61 s (234 us per edit, 719 bytes of WAL per edit with a commit each); the reference's ops merge in 39 s; the batched ops in 1.2 s. The JS reference replays it in about 4.7 s in memory. Final text identical (md5) in all three.
+- **Storage was the weak point; compaction fixes the common case.** About 89 bytes of heap per row plus about 65 bytes of index. The real trace leaves 83k rows for 105k chars (15.6 MB, 149 bytes per char) because each backspaced char becomes its own tombstone row; `ydoc_compact` folds them (32 bytes per char in the table below, which includes 3,000 pgbench edits made before the compaction; 26 bytes per char right after the replay). It does not help the random-insert documents (45 times the text): their rows are live short runs separated by other runs, and nothing can merge them.
+- **Before and after compaction** (trace document, from "Storage: ydoc_compact"):
+
+| | rows | total bytes | bytes per char | insert 1 char | WAL per insert | delete 1 char | WAL per delete | value() |
+|---|---|---|---|---|---|---|---|---|
+| before | 83,253 | 15,613,952 | 148.9 | 0.366 ms | 3,472 | 0.398 ms | 3,772 | 4.0 ms |
+| after | 16,399 | 3,358,720 | 32.0 | 0.315 ms | 1,993 | 0.360 ms | 1,854 | 1.9 ms |
+
+  Edits get cheaper, not dearer: the WAL records stay at 1.3-1.5 kB, and there are fewer pages to take full-page images of. The compaction itself took 281 ms and 12 MB of WAL (it rewrites the merged rows). For the random 100k document the "after" row is larger than "before" because the measured edits of the "before" row (3,000 of them) land in between and compaction found only 987 rows to remove.
 
 ### Latency and WAL by document size
 
@@ -152,19 +180,19 @@ Document built by random-position inserts of 8-char words from three replicas, o
 
 | size (chars) | rows | tombstone rows | blocks | build ms per row | insert 1 char | delete 1 char | paste 1k | set (300-char paragraph) | value() | version() | ops_since(current) | ops_since({}) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1000 | 261 | 26 | 1 | 0.23 | 0.266 ms | 0.255 ms | 0.589 ms | 1.388 ms | 0.145 ms | 0.162 ms | 0.345 ms | 0.982 ms |
-| 10000 | 2602 | 269 | 8 | 0.13 | 0.272 ms | 0.262 ms | 0.565 ms | 4.036 ms | 0.402 ms | 0.165 ms | 1.002 ms | 8.148 ms |
-| 100000 | 25895 | 2704 | 69 | 0.11 | 0.291 ms | 0.301 ms | 0.623 ms | 11.985 ms | 3.403 ms | 0.179 ms | 7.821 ms | 82.039 ms |
-| 1000000 | 258473 | 26860 | 722 | 0.16 | 0.519 ms | 0.619 ms | 0.895 ms | 109.462 ms | 60.455 ms | 0.225 ms | 72.873 ms | 881.105 ms |
+| 1000 | 261 | 26 | 1 | 0.22 | 0.254 ms | 0.241 ms | 0.523 ms | 1.484 ms | 0.128 ms | 0.174 ms | 0.346 ms | 0.974 ms |
+| 10000 | 2602 | 269 | 8 | 0.12 | 0.274 ms | 0.262 ms | 0.581 ms | 3.628 ms | 0.412 ms | 0.170 ms | 1.017 ms | 8.330 ms |
+| 100000 | 25895 | 2704 | 69 | 0.11 | 0.304 ms | 0.318 ms | 0.637 ms | 12.483 ms | 3.519 ms | 0.177 ms | 8.344 ms | 82.860 ms |
+| 1000000 | 258473 | 26860 | 722 | 0.17 | 0.499 ms | 0.605 ms | 0.878 ms | 115.538 ms | 53.025 ms | 0.224 ms | 75.730 ms | 887.914 ms |
 
 WAL bytes per edit, one transaction each: total (records + full-page images, from pg_waldump). Full-page images are the first change of each page after a checkpoint; random positions in a large document touch many pages, so they dominate there.
 
 | size (chars) | insert 1 char | delete 1 char | paste 1k | set (300-char paragraph) |
 |---|---|---|---|---|
-| 1000 | 714 (689 + 0) | 497 (476 + 1) | 6947 (6577 + 262) | 3780 (3713 + 0) |
-| 10000 | 933 (903 + 0) | 945 (913 + 3) | 6415 (3482 + 2866) | 11299 (10117 + 925) |
-| 100000 | 2098 (985 + 1077) | 2263 (1463 + 759) | 11896 (3842 + 7957) | 29272 (16009 + 12754) |
-| 1000000 | 18348 (1075 + 17171) | 16699 (1065 + 15541) | 28049 (3027 + 24865) | 338773 (15218 + 321986) |
+| 1000 | 723 (698 + 0) | 492 (471 + 0) | 3962 (3472 + 430) | 3859 (3722 + 64) |
+| 10000 | 957 (927 + 0) | 939 (906 + 3) | 5073 (3832 + 1176) | 8602 (8055 + 331) |
+| 100000 | 2210 (979 + 1195) | 2336 (1529 + 765) | 14201 (4184 + 9910) | 26840 (15910 + 10439) |
+| 1000000 | 14700 (947 + 13670) | 16894 (1037 + 15764) | 26748 (2986 + 23611) | 332569 (15016 + 316026) |
 
 Storage of the document as built (VACUUM FULL):
 
@@ -179,10 +207,10 @@ Storage of the document as built (VACUUM FULL):
 
 | size (chars) | variant | insert 1 char | delete 1 char |
 |---|---|---|---|
-| 10000 | blocks | 0.284 ms | 0.263 ms |
-| 10000 | scan | 1.089 ms | 1.367 ms |
-| 100000 | blocks | 0.311 ms | 0.346 ms |
-| 100000 | scan | 3.698 ms | 4.241 ms |
+| 10000 | blocks | 0.288 ms | 0.273 ms |
+| 10000 | scan | 1.017 ms | 1.322 ms |
+| 100000 | blocks | 0.321 ms | 0.346 ms |
+| 100000 | scan | 3.858 ms | 4.156 ms |
 
 ### Render: order key vs pointer chasing (recursive CTE)
 
@@ -190,8 +218,8 @@ A proxy for 'no order key': each row stores the key of its successor, and render
 
 | size (chars) | rows | string_agg order by ord | recursive walk |
 |---|---|---|---|
-| 10000 | 5926 | 0.37 ms | 4.02 ms |
-| 100000 | 29535 | 3.65 ms | 21.59 ms |
+| 10000 | 5941 | 0.40 ms | 4.07 ms |
+| 100000 | 29563 | 3.96 ms | 21.73 ms |
 
 ### Cached plain text in the app's table (for full-text search)
 
@@ -199,10 +227,10 @@ posts(id, body_doc, body_text) with a GIN index on to_tsvector('simple', body_te
 
 | size (chars) | variant | latency | WAL bytes per edit | FTS query on 1 post |
 |---|---|---|---|---|
-| 10000 | render on read | 0.299 ms | 3190 | 3.24 ms |
-| 10000 | cached column | 3.896 ms | 17856 | 2.39 ms |
-| 100000 | render on read | 0.330 ms | 3868 | 8.42 ms |
-| 100000 | cached column | 11.084 ms | 168984 | 4.57 ms |
+| 10000 | render on read | 0.301 ms | 1559 | 3.33 ms |
+| 10000 | cached column | 4.072 ms | 18329 | 2.44 ms |
+| 100000 | render on read | 0.348 ms | 4430 | 8.28 ms |
+| 100000 | cached column | 11.113 ms | 158615 | 4.22 ms |
 
 The FTS column measures one post: the cached query still reads the one row (no use for the GIN index in a one-row table); across many posts, the cached column with a GIN index is the only option that scales, and render on read is not one.
 
@@ -212,10 +240,10 @@ pgbench -c N -j N, 300 transactions per client, 10k-char document. 'one doc': ev
 
 | clients | one doc: tps | one doc: latency | own doc: tps | own doc: latency |
 |---|---|---|---|---|
-| 1 | 3348 | 0.299 ms | 3382 | 0.296 ms |
-| 2 | 3752 | 0.533 ms | 6653 | 0.301 ms |
-| 4 | 3289 | 1.216 ms | 10223 | 0.391 ms |
-| 8 | 3170 | 2.523 ms | 11694 | 0.684 ms |
+| 1 | 2833 | 0.353 ms | 3339 | 0.299 ms |
+| 2 | 3724 | 0.537 ms | 6545 | 0.306 ms |
+| 4 | 3310 | 1.208 ms | 10335 | 0.387 ms |
+| 8 | 3206 | 2.495 ms | 12853 | 0.622 ms |
 
 Every concurrent insert integrated exactly once (the version vector of document 1 counts the 9,000 inserts of the clients, warm-up runs included): t
 
@@ -227,8 +255,8 @@ Two servers share a 10k-char document, then each makes N edits (random-position 
 | N edits per side | ops_since + merge (ms) | ops bytes | converged |
 |---|---|---|---|
 | 100 | 14 | 8100 | t |
-| 1000 | 94 | 47519 | t |
-| 5000 | 443 | 227481 | t |
+| 1000 | 96 | 47519 | t |
+| 5000 | 458 | 227481 | t |
 
 ### Order key: byte-string fractional keys vs bigint labels with relabelling
 
@@ -236,19 +264,33 @@ First 100,000 ops of automerge-paper, local replay (insert/delete by position), 
 
 | variant | us per op | WAL bytes per op | rows | avg key bytes | max key bytes | ord index bytes |
 |---|---|---|---|---|---|---|
-| labels | 183 | 667 | 24899 | 8.0 | 8 | 2048000 |
-| bytea | 179 | 520 | 24899 | 28.1 | 272 | 2367488 |
+| labels | 179 | 681 | 24899 | 8.0 | 8 | 2048000 |
+| bytea | 176 | 509 | 24899 | 28.1 | 272 | 2367488 |
+
+### Storage: ydoc_compact
+
+Before and after crdt.ydoc_compact(doc) (horizon = now). 'trace': the automerge-paper document after a local replay (commit every 5,000 ops). 'random 100k': the 100k-char random-insert document of the size table. Sizes after VACUUM FULL. Latency and WAL per edit as in the size table (pgbench, warm-up run, records + full-page images); value() is the render.
+
+| document | state | rows | tombstone rows | total bytes | bytes per char | insert 1 char | delete 1 char | value() | WAL per insert | WAL per delete |
+|---|---|---|---|---|---|---|---|---|---|---|
+| trace | before | 83253 | 77463 | 15613952 | 148.9 | 0.366 ms | 0.398 ms | 4.015 ms | 3472 (1512 + 1917) | 3772 (1740 + 1982) |
+| trace | after | 16399 | 7854 | 3358720 | 32.0 | 0.315 ms | 0.360 ms | 1.871 ms | 1993 (1406 + 549) | 1854 (1330 + 483) |
+| random_100k | before | 31763 | 8084 | 5586944 | 39.6 | 0.312 ms | 0.329 ms | 4.306 ms | 2553 (1101 + 1416) | 2366 (1372 + 951) |
+| random_100k | after | 34255 | 8267 | 6037504 | 42.8 | 0.307 ms | 0.332 ms | 4.526 ms | 2756 (1108 + 1610) | 3018 (1258 + 1715) |
+
+- trace: ydoc_compact removed 70644 rows in 281 ms, 12 MB of WAL.
+- random_100k: ydoc_compact removed 987 rows in 128 ms, 459 kB of WAL.
 
 ### automerge-paper trace
 
 | replay | calls | total s | us per call | WAL bytes per call | final text md5 ok |
 |---|---|---|---|---|---|
-| local insert/delete by position, commit per op | 259778 | 61.2 | 236 | 709 | t |
-| ydoc_merge of batch, commit per call | 2598 | 1.5 | 579 | 4507 | t |
-| ydoc_merge of ops, commit per call | 259778 | 42.6 | 164 | 763 | t |
+| local insert/delete by position, commit per op | 259778 | 60.7 | 234 | 719 | t |
+| ydoc_merge of batch, commit per call | 2598 | 1.2 | 478 | 3905 | t |
+| ydoc_merge of ops, commit per call | 259778 | 38.5 | 148 | 704 | t |
 
 Document after the trace (document 1, local replay):
 
 | chars | text bytes | rows | tombstone rows | relabels (all three replays) | items + indexes (per doc, approx) |
 |---|---|---|---|---|---|
-| 104852 | 104852 | 83253 | 77463 | 3467 (315223 rows rewritten) | 18 MB |
+| 104852 | 104852 | 83253 | 77463 | 3467 (315223 rows rewritten) | 24 MB |

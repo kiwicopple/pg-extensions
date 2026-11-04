@@ -6,7 +6,7 @@
 #   experiments/text-table/bench.sh --quick    # sizes 1k, 10k, 100k; trace prefix
 #   experiments/text-table/bench.sh --impl x.sql
 #   ONLY=trace,keys experiments/text-table/bench.sh   # some sections only:
-#       sizes pos render cache conc merge keys trace
+#       sizes pos render cache conc merge keys compact trace
 #
 # Throwaway cluster from pg_crdt/test/lib/cluster.sh (temp dir, Unix socket),
 # full_page_writes=on as in bench/pn-counter.sh, so WAL includes full-page
@@ -29,6 +29,7 @@ while [ $# -gt 0 ]; do
 done
 TRACE_DIR="$HERE/../text-ref/traces"
 ONLY=${ONLY:-}
+COMPACT_NOTES=""
 want() { [ -z "$ONLY" ] || [[ ",$ONLY," == *",$1,"* ]]; }
 
 export PG_EXTRA_OPTS="-c full_page_writes=on -c max_connections=40 -c shared_buffers=512MB -c max_wal_size=8GB ${PG_EXTRA_OPTS:-}"
@@ -428,6 +429,65 @@ SQL
     echo
 fi
 
+fi
+
+# --- 6c. storage: ydoc_compact -----------------------------------------------
+if want compact && [ -f "$TRACE_DIR/automerge-paper.patches.jsonl" ]; then
+    echo "### Storage: ydoc_compact"
+    echo
+    echo "Before and after crdt.ydoc_compact(doc) (horizon = now). 'trace': the automerge-paper document after a local replay (commit every 5,000 ops). 'random 100k': the 100k-char random-insert document of the size table. Sizes after VACUUM FULL. Latency and WAL per edit as in the size table (pgbench, warm-up run, records + full-page images); value() is the render."
+    echo
+    echo "| document | state | rows | tombstone rows | total bytes | bytes per char | insert 1 char | delete 1 char | value() | WAL per insert | WAL per delete |"
+    echo "|---|---|---|---|---|---|---|---|---|---|---|"
+    db=b_compact
+    newdb "$db"
+    P -d "$db" <<SQL
+create table bench.patches (n bigserial primary key, p jsonb);
+\copy bench.patches (p) from '$TRACE_DIR/automerge-paper.patches.jsonl' with (format csv, delimiter E'\x01', quote E'\x02')
+create procedure bench.replay() language plpgsql as \$\$
+declare r record; k int := 0;
+begin
+    perform crdt.ydoc_create();
+    for r in select p from bench.patches order by n loop
+        if (r.p ->> 1)::int > 0 then perform crdt.ydoc_delete(1, (r.p ->> 0)::int, (r.p ->> 1)::int, 'paper');
+        else perform crdt.ydoc_insert(1, (r.p ->> 0)::int, r.p ->> 2, 'paper'); end if;
+        k := k + 1;
+        if k % 5000 = 0 then commit; end if;
+    end loop;
+end \$\$;
+call bench.replay();
+drop table bench.patches;
+SQL
+    ensure_doc 100000
+    for pair in "trace b_compact" "random_100k b_100000"; do
+        set -- $pair
+        name=$1; db=$2
+        for state in before after; do
+            if [ $state = after ]; then
+                t0=$(python3 -c 'import time; print(time.time())')
+                l0=$(PT -d "$db" -c "select pg_current_wal_insert_lsn()")
+                removed=$(PT -d "$db" -c "select crdt.ydoc_compact(1)")
+                l1=$(PT -d "$db" -c "select pg_current_wal_insert_lsn()")
+                t1=$(python3 -c 'import time; print(time.time())')
+                cms=$(python3 -c "print(round(($t1 - $t0) * 1000))")
+                cwal=$(PT -d "$db" -c "select pg_size_pretty(pg_wal_lsn_diff('$l1', '$l0'))")
+                COMPACT_NOTES="$COMPACT_NOTES
+- $name: ydoc_compact removed $removed rows in $cms ms, $cwal of WAL."
+            fi
+            P -d "$db" -c "vacuum full crdt.ydoc_items" -c "vacuum full crdt.ydoc_blocks" -c "vacuum full crdt.ydoc_docs" -c "analyze"
+            st=$(PT -d "$db" -F ' ' -c "select (select count(*) from crdt.ydoc_items where doc = 1),
+                (select count(*) from crdt.ydoc_items where doc = 1 and del_gen is not null),
+                pg_total_relation_size('crdt.ydoc_items') + pg_total_relation_size('crdt.ydoc_blocks') + pg_total_relation_size('crdt.ydoc_docs'),
+                crdt.ydoc_length(1)")
+            read -r rows tomb total len <<<"$st"
+            per=$(python3 -c "print(round($total / $len, 1))")
+            read -r lv _ _ _ _ < <(bench_op "$db" "$WORK/value.sql" 20)
+            read -r li wi _ ri fi < <(bench_op "$db" "$WORK/ins1.sql" 500)
+            read -r ld wd _ rd fd < <(bench_op "$db" "$WORK/del1.sql" 500)
+            echo "| $name | $state | $rows | $tomb | $total | $per | $li ms | $ld ms | $lv ms | $wi ($ri + $fi) | $wd ($rd + $fd) |"
+        done
+    done
+    printf '%s\n\n' "$COMPACT_NOTES"
 fi
 
 # --- 6. editing trace --------------------------------------------------------

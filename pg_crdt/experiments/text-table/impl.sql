@@ -34,7 +34,8 @@
 create table crdt.ydoc_docs (
     id  bigint generated always as identity primary key,
     len integer not null default 0,   -- visible code points
-    gen bigint not null default 0     -- +1 per write call; stamps deletes
+    gen bigint not null default 0,    -- +1 per write call; stamps deletes
+    horizon bigint not null default 0 -- ydoc_compact: deletes at or before it may be merged
 );
 
 -- Integration order of rows. Writes to one document are serialized, so per
@@ -1202,6 +1203,14 @@ begin
     end if;
     bg := (base ->> 'g')::bigint;
     bv := base -> 'v';
+    -- Compaction merged tombstones stamped at or before the horizon, so the
+    -- text at an older base cannot be rebuilt. Refuse rather than guess: a
+    -- wrong base text widens the diff and reverts or duplicates text.
+    if bg < (select d.horizon from crdt.ydoc_docs d where d.id = v_doc) then
+        raise exception 'crdt.ydoc_set: base % of document % is older than its last compaction', bg, v_doc
+            using errcode = '22023',
+                  hint = 'Read the text and crdt.ydoc_base(doc) again, or call ydoc_set without base (a two-way diff against the current text).';
+    end if;
     cur := coalesce((
         select string_agg(left(i.content, least(i.len, (bv ->> i.replica)::integer - i.seq + 1)), '' order by i.ord)
         from crdt.ydoc_items i
@@ -1373,6 +1382,89 @@ begin
         select p.replica, p.seq, p.len from crdt.ydoc_pending_deletes p where p.doc = v_doc
     ) u;
     return jsonb_build_object('i', ins, 'd', dels);
+end;
+$$;
+
+-- Maintenance: merges adjacent rows that continue one run (consecutive ids
+-- of one replica, the right row's originLeft the left row's last char, the
+-- same originRight) and have the same visibility: both visible, or both
+-- deleted with equal stamps, or both deleted at or before `horizon` (default:
+-- now). Backspacing leaves one tombstone row per char; this is what folds
+-- them. A merged tombstone keeps the latest of the stamps, so the text at a
+-- base is exact for bases at or after the horizon; ydoc_set refuses older
+-- bases (22023). Rows do not merge across a block boundary, and a merged row
+-- holds at most about twice the run cap. Returns the number of rows removed.
+-- The text, the ids and ops_since's text are unchanged.
+create function crdt.ydoc_compact(doc bigint, horizon bigint default null)
+returns integer
+language plpgsql volatile
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+    v_doc bigint := ydoc_compact.doc;
+    lk record;
+    h bigint;
+    removed integer;
+    cap integer := crdt._ydoc_run_cap();
+begin
+    select * into lk from crdt._ydoc_lock(v_doc, 'ydoc_compact');
+    h := coalesce(horizon, lk.gen);
+    if h < 0 or h > lk.gen then
+        raise exception 'crdt.ydoc_compact: horizon % is outside 0 .. % (the document''s write counter)', h, lk.gen
+            using errcode = '22023';
+    end if;
+    update crdt.ydoc_docs d set horizon = greatest(d.horizon, h) where d.id = v_doc;
+
+    with r as (
+        select i.replica, i.seq, i.ord, i.len, i.del_gen, i.ins, i.content,
+               i.ol_replica, i.ol_seq, i.or_replica, i.or_seq,
+               lag(i.replica) over w as p_r, lag(i.seq + i.len) over w as p_end,
+               lag(i.or_replica) over w as p_orr, lag(i.or_seq) over w as p_ors,
+               lag(i.del_gen) over w as p_del,
+               b.lo is not null as blk_lo
+        from crdt.ydoc_items i
+        left join crdt.ydoc_blocks b on b.doc = v_doc and b.lo = i.ord
+        where i.doc = v_doc
+        window w as (order by i.ord)
+    ), g as (
+        select r.*, sum(case when r.p_r = r.replica and r.p_end = r.seq
+                                  and r.ol_replica = r.replica and r.ol_seq = r.seq - 1
+                                  and r.or_replica is not distinct from r.p_orr and r.or_seq is not distinct from r.p_ors
+                                  and not r.blk_lo
+                                  and ((r.del_gen is null and r.p_del is null)
+                                       or r.del_gen = r.p_del
+                                       or (r.del_gen <= h and r.p_del <= h))
+                             then 0 else 1 end) over (order by r.ord) as grp
+        from r
+    ), gs as (
+        -- cut long groups so a merged row stays under about twice the cap
+        select g.*, (sum(g.len) over (partition by g.grp order by g.ord) - g.len) / cap as sub
+        from g
+    ), a as (
+        select (array_agg(gs.replica order by gs.ord))[1] as r, min(gs.seq) as s, sum(gs.len)::integer as len,
+               string_agg(gs.content, '' order by gs.ord) as content, max(gs.del_gen) as del_gen, min(gs.ins) as ins,
+               (array_agg(gs.seq order by gs.ord))[2:] as rest, min(gs.ord) as first_ord
+        from gs group by gs.grp, gs.sub having count(*) > 1
+    ), u as (
+        update crdt.ydoc_items i set len = a.len, content = a.content, del_gen = a.del_gen, ins = a.ins
+        from a where i.doc = v_doc and i.replica = a.r and i.seq = a.s
+        returning 1
+    ), dl as (
+        delete from crdt.ydoc_items i
+        using (select a.r, unnest(a.rest) as s from a) x
+        where i.doc = v_doc and i.replica = x.r and i.seq = x.s
+        returning 1
+    ), bk as (
+        update crdt.ydoc_blocks k set n = k.n - c.cnt
+        from (select bl.lo, sum(pg_catalog.cardinality(a.rest))::integer as cnt
+              from a cross join lateral (select x.lo from crdt.ydoc_blocks x where x.doc = v_doc and x.lo <= a.first_ord
+                                         order by x.lo desc limit 1) bl
+              group by bl.lo) c
+        where k.doc = v_doc and k.lo = c.lo
+        returning 1
+    )
+    select count(*) into removed from dl;
+    return removed;
 end;
 $$;
 
