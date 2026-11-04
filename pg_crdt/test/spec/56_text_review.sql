@@ -1,6 +1,6 @@
 -- Goal: regressions for the adversarial review of 2026-11-05 (repro
 -- scripts t1-t11 in the review). Each block names the finding.
-\i :exp_dir/test/lib/helpers.sql
+\i :ext_dir/test/lib/text-helpers.sql
 create function pg_temp.why(q text) returns text language plpgsql as $$
 begin
     execute q;
@@ -126,6 +126,10 @@ select dblink_send_query('s1', format($q$do $x$ begin perform crdt.ydoc_merge(%s
 select dblink_send_query('s2', format($q$do $x$ begin perform crdt.ydoc_merge(%s, '{"i": [["n1", 1, null, null, "b"]]}'); end $x$$q$, :x2)) \g /dev/null
 select pg_sleep(0.5) \g /dev/null
 select (select count(*) from dblink_get_result('s1') as r(s text)) + (select count(*) from dblink_get_result('s2') as r(s text)) as got \gset
+-- One more dblink_get_result per connection, for the empty result that ends
+-- the async query (dblink's documented protocol; newer minor versions refuse
+-- the next command on the connection without it).
+select (select count(*) from dblink_get_result('s1') as r(s text)) + (select count(*) from dblink_get_result('s2') as r(s text)) \g /dev/null
 select dblink_exec('s1', 'commit') || dblink_exec('s2', 'commit') as committed \gset
 select dblink_disconnect('s1'), dblink_disconnect('s2') \g /dev/null
 \else

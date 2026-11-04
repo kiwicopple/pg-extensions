@@ -4,7 +4,7 @@
 -- end with the same text. Also: the ops a document returns, applied in a
 -- random order to a fresh document, give the same text; and concurrent runs
 -- typed at one place do not interleave.
-\i :exp_dir/test/lib/helpers.sql
+\i :ext_dir/test/lib/text-helpers.sql
 
 create temp table trial (n int, x bigint, y bigint, z bigint, ok_xy boolean, ok_z boolean);
 

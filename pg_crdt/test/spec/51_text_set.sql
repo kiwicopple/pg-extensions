@@ -4,7 +4,7 @@
 -- spans); with base (crdt.ydoc_base, read with the text) it diffs against the
 -- text the editor started from, and concurrent saves to different
 -- paragraphs both survive.
-\i :exp_dir/test/lib/helpers.sql
+\i :ext_dir/test/lib/text-helpers.sql
 
 select crdt.ydoc_create() as d \gset
 select crdt.ydoc_set(:d, 'The quick brown fox', 'alice') as op1 \gset

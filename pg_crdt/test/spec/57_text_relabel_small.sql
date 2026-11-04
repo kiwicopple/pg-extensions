@@ -4,7 +4,7 @@
 -- must never collide on the (doc, lo) primary key. Random edits against a
 -- text model, with compactions. The constants are redefined before anything
 -- else runs in this database (cached plans would keep the old ones).
-\i :exp_dir/test/lib/helpers.sql
+\i :ext_dir/test/lib/text-helpers.sql
 create or replace function crdt._ydoc_run_cap() returns integer language sql immutable parallel safe return 3;
 create or replace function crdt._ydoc_block_max() returns integer language sql immutable parallel safe return 4;
 create or replace function crdt._ydoc_label_bound() returns bigint language sql immutable parallel safe return 65536;

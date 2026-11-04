@@ -1,5 +1,5 @@
 # pg_crdt extension
-comment = 'CRDTs (conflict-free replicated data types) as jsonb domains, in SQL and PL/pgSQL: PN-Counter.'
+comment = 'CRDTs (conflict-free replicated data types) in SQL and PL/pgSQL: PN-Counter (a jsonb domain) and collaborative text (tables).'
 default_version = '0.0.1'
 relocatable = false
 schema = crdt

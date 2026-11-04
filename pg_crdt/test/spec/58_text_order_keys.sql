@@ -6,7 +6,7 @@
 -- force relabels, and the text still equals a plain-text model, with unique
 -- labels and correct blocks. Thousands of random edits match the model at
 -- every check, and the same ops replayed shuffled give the same text.
-\i :exp_dir/test/lib/helpers.sql
+\i :ext_dir/test/lib/text-helpers.sql
 
 -- 1. _ydoc_label
 create temp table lb (lo bigint, hi bigint, k bigint);

@@ -1,14 +1,20 @@
 # Shape B: table-backed text documents (`ydoc_`)
 
-Status: experiment, 2026-11-04. PL/pgSQL and SQL only; loads after `pg_crdt--0.0.1.sql` with `psql -f` and needs nothing pg_tle cannot install. Contract: [`research/text.md`](../../research/text.md).
+> **Promoted, 2026-11-05.** `ydoc_` is now part of the extension: the section "ydoc_: collaborative text" of [`pg_crdt--0.0.1.sql`](../../pg_crdt--0.0.1.sql), with user docs in [`docs/types/collaborative-text.md`](../../docs/types/collaborative-text.md). `impl.sql` moved there (its last experiment version is in git history: commit `e1eff4e`, `pg_crdt/experiments/text-table/impl.sql`). The spec files moved to [`test/spec/`](../../test/spec/) as `50_text_*` to `62_text_*` (the experiment's `02_security` was folded into the extension's `02_security`), `test/lib/helpers.sql` to `test/lib/text-helpers.sql`, and they run with the main suite (`./test/run.sh text`). This file stays as the design record; the file and test names below are the experiment's.
+>
+> | Experiment | Now |
+> | --- | --- |
+> | `impl.sql` | `pg_crdt--0.0.1.sql`, section `ydoc_` |
+> | `test/spec/01_basics`, `10_set`, `20_convergence`, `30_apply`, `31_wrapper`, `35_validate`, `36_review`, `37_relabel_small`, `40_order_keys`, `45_compact`, `50_fixtures`, `55_trace`, `60_concurrency` | `test/spec/50_text_basics`, `51_text_set`, `52_text_convergence`, `53_text_apply`, `54_text_wrapper`, `55_text_validate`, `56_text_review`, `57_text_relabel_small`, `58_text_order_keys`, `59_text_compact`, `60_text_fixtures`, `61_text_trace`, `62_text_concurrency` |
+> | `test/spec/02_security` | `test/spec/02_security` (the extension's, extended) |
+> | `bench.sh`, `variants/` | here; `bench.sh` loads the extension file, and a variant loads after the extension file without its `ydoc_` section |
+
+Status (before promotion): experiment, 2026-11-04. PL/pgSQL and SQL only; loads after `pg_crdt--0.0.1.sql` with `psql -f` and needs nothing pg_tle cannot install. Contract: [`research/text.md`](../../research/text.md).
 
 | File | What |
 | --- | --- |
-| `impl.sql` | The implementation: tables, internals (`crdt._ydoc_*`), API (`crdt.ydoc_*`), privileges. |
-| `test/run.sh` | Test runner (a throwaway cluster from `test/lib/cluster.sh`; `-v`, name filters, `--impl`). |
-| `test/spec/*.sql` | Fourteen spec files, 195 assertions (table below). |
 | `bench.sh` | Benchmarks; prints the Markdown in the "Benchmarks" section. `--quick` skips 1M and most of the trace. |
-| `variants/bytea-keys.sql` | The first version, with byte-string fractional keys instead of bigint labels. Kept for the benchmark comparison only (the tests target `impl.sql`). |
+| `variants/bytea-keys.sql` | The first version, with byte-string fractional keys instead of bigint labels. Kept for the benchmark comparison only. |
 
 ## API
 

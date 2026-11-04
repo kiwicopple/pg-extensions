@@ -19,6 +19,11 @@
       "label": "Architecture"
     },
     {
+      "src": "text.md",
+      "route": "text",
+      "label": "Text CRDT design"
+    },
+    {
       "src": "runtimes.md",
       "route": "runtimes",
       "label": "Runtimes: pg_tle and PL/pgSQL"
@@ -44,6 +49,11 @@
       "label": "PN-Counter benchmarks"
     },
     {
+      "src": "benchmarks/text.md",
+      "route": "benchmarks/text",
+      "label": "Text CRDT benchmarks"
+    },
+    {
       "src": "journal.md",
       "route": "journal",
       "label": "Build journal"
@@ -61,6 +71,10 @@
     {
       "label": "Architecture",
       "slug": "architecture"
+    },
+    {
+      "label": "Text CRDT design",
+      "slug": "text"
     },
     {
       "label": "Background",
@@ -90,6 +104,10 @@
         {
           "label": "PN-Counter benchmarks",
           "slug": "benchmarks/pn-counter"
+        },
+        {
+          "label": "Text CRDT benchmarks",
+          "slug": "benchmarks/text"
         }
       ]
     },

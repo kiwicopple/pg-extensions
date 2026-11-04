@@ -15,6 +15,16 @@ Every error that `pg_crdt` raises, with its SQLSTATE, and the errors from Postgr
 | `23514` | `check_violation` | The `crdt.pn` domain, so any function that takes or returns one | A value is not a `crdt.pn` envelope: not an object, other keys than `t`, `v`, `p`, `n`, `t` not `"pn"`, `v` not 1, or `p` or `n` not an object. |
 | `42501` | `insufficient_privilege` | `pn_apply_delta` | `replica` is null (no identity), or an entry of the delta belongs to another replica. |
 | `42501` | `insufficient_privilege` | The install script | The schema `crdt` is owned by another non-superuser role, or another role has `CREATE` on it. |
+| `22004` | `null_value_not_allowed` | `ydoc_insert`, `ydoc_delete`, `ydoc_set` | `replica`, a position, a length or the text is null. |
+| `22023` | `invalid_parameter_value` | `ydoc_insert`, `ydoc_delete`, `ydoc_set` | A position or range outside the text; `replica` is not an entry key or is longer than 256 bytes; a `base` that is not a version of the document, or is older than its last compaction. |
+| `22023` | `invalid_parameter_value` | `ydoc_apply`, `ydoc_merge` | A malformed op; for `ydoc_apply`, an op without `v`, or one that breaks a causal rule (the message names it, `V0` to `V6`); the same ids sent again with other text or origins. `ydoc_apply` also: `replica` is not a replica id. |
+| `22023` | `invalid_parameter_value` | `ydoc_ops_since`, `ydoc_compact` | `vv` is not an object of whole numbers from 0; `horizon` outside 0 to the document's write counter. |
+| `42501` | `insufficient_privilege` | `ydoc_apply` | `replica` is null (no identity), or an insert carries another writer's key. |
+| `42501` | `insufficient_privilege` | Any `ydoc_` function (Postgres) | The caller has no privileges on the `crdt.ydoc_*` tables (`permission denied for table ydoc_docs`). This is the intended result for a client role: see [Collaborative text for a blog post](../guides/collaborative-text.md#set-up-the-roles-and-grants). |
+| `54000` | `program_limit_exceeded` | `ydoc_apply` | A quota of the untrusted path: more than 256 runs in one op, more than 16 device keys per owner and document, origins too far apart to check (250,000 rows), or too many waiting ops for the writer (100 ops or 256 kB). |
+| `54000` | `program_limit_exceeded` | Any `ydoc_` write | The order labels of a document ran out (`document ... has too many rows`). Not reachable at realistic sizes. |
+| `P0002` | `no_data_found` | Every `ydoc_` function that writes, and `ydoc_ops_since` | The document does not exist. The readers `ydoc_value`, `ydoc_length` and `ydoc_base` return null instead, and `ydoc_version` returns `{}`. |
+| `XX000` | `internal_error` | `ydoc_` internals | An invariant of a document's rows is broken (`no row labelled ...`, `... is not inside the run`). It means a bug, or a direct write to the tables: report it. |
 
 Several rows share a SQLSTATE for different reasons. Tell them apart with the message.
 
@@ -35,8 +45,19 @@ Text that is written by the extension, as Postgres reports it:
 | `42501` | `schema crdt is owned by role other, not by the installing role app_owner` |
 | `42501` | `another role has CREATE on schema crdt` |
 | `23514` | `value for domain crdt.pn violates check constraint "pn_check"` (Postgres) |
+| `22023` | `crdt.ydoc_insert: position 99 is outside the document (length 11)` |
+| `22023` | `crdt.ydoc_set: base is not a version of document 1` |
+| `22023` | `crdt.ydoc_set: base 3 of document 1 is older than its last compaction` |
+| `22023` | `crdt.ydoc_apply: V0: ops carry no version vector "v"` |
+| `22023` | `crdt.ydoc_apply: V2: insert bob:3 does not follow "v" (expected seq 1)` |
+| `22023` | `crdt.ydoc: insert bob:1 reuses ids with other content or origins` |
+| `42501` | `crdt.ydoc_apply: the writer has no replica id` |
+| `42501` | `crdt.ydoc_apply: replica 'dave' cannot insert characters of replica 'erin'` |
+| `42501` | `permission denied for table ydoc_docs` (Postgres) |
+| `54000` | `crdt.ydoc_apply: replica 'bob' has too many ops waiting in document 1` |
+| `P0002` | `crdt.ydoc_insert: document 99 does not exist` |
 
-`pn_decrement` raises the same messages with its own name. The messages that name an entry show the map (`p` or `n`) and the key.
+`pn_decrement` raises the same messages with its own name. The messages that name an entry show the map (`p` or `n`) and the key. The `ydoc_` messages name the function, and an id as `key:seq`.
 
 ## Errors from Postgres
 
@@ -44,7 +65,9 @@ Text that is written by the extension, as Postgres reports it:
 | --- | --- | --- |
 | `40001` | A merge under REPEATABLE READ or SERIALIZABLE, when the row changed and committed after your snapshot (`could not serialize access due to concurrent update`). | Run the whole transaction again. See [Update safely](../guides/safe-updates.md#isolation-levels-and-retries). |
 | `22P02` | `crdt.current_replica_id()`, when `request.jwt.claims` is set to text that is not valid JSON. | Fix whatever sets the setting. |
-| `2BP01` | `drop extension pg_crdt`, while a column, default or index uses the type. | Copy your data out first. See [Uninstall](../install.md#uninstall). |
+| `2BP01` | `drop extension pg_crdt`, while a column, default or index uses the type, or a foreign key references `crdt.ydoc_docs`. | Copy your data out first. See [Uninstall](../install.md#uninstall). |
+| `23503` | `crdt.ydoc_drop`, while a row of your table references the document. | Delete your row first, in the same transaction. |
+| `40001` | A `ydoc_` write under REPEATABLE READ or SERIALIZABLE that waited for another write to the same document. | Run the whole transaction again. |
 | `42501` | An `update` of a column the role has no privilege on. | This is the intended result for a writer without access. See [Accept writes from untrusted clients](../guides/security.md). |
 
 ## Which errors mean what
@@ -54,3 +77,7 @@ Text that is written by the extension, as Postgres reports it:
 - **`23514`** means the value is not a counter at all: a wrong `t` or `v`, or a missing key.
 - **`40001`** is expected under the stricter isolation levels and is safe to retry.
 - **`22003`** means a total reached the 64-bit limit. See [Limits](limits.md).
+- **`42501` from a `ydoc_` function** is either the identity check of `ydoc_apply` (a forged insert, or no identity: reject the request) or Postgres refusing a role without table privileges (call through your wrapper).
+- **`22023` from `ydoc_apply`** means the op is malformed or breaks a causal rule. An honest client running the same algorithm does not cause it; a client with a bug does. Resync it with `ydoc_ops_since`.
+- **`22023` from `ydoc_set` with `base ... is older than its last compaction`** means the form is older than the compaction horizon. Reopen the document and apply the change again.
+- **`54000` from `ydoc_apply`** is a quota. A writer with too many waiting ops is sending ops whose dependencies never arrive: send the missing ops first.

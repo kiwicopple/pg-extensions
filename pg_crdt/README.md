@@ -2,7 +2,10 @@
 
 CRDTs (conflict-free replicated data types) for Postgres, written in SQL and PL/pgSQL only. A CRDT is a value that several writers can change independently and merge later, in any order, any number of times, and still agree on the result.
 
-Version 0.0.1 has one type, the **PN-Counter**: a counter that can go up and down, where every writer (replica) keeps its own running totals. Use it for likes, votes, stock levels or quotas that are updated from several devices, regions or offline clients.
+Version 0.0.1 has two types:
+
+- the **PN-Counter**: a counter that can go up and down, where every writer (replica) keeps its own running totals. Use it for likes, votes, stock levels or quotas that are updated from several devices, regions or offline clients;
+- **collaborative text** (`ydoc_`): a plain-text document that several people edit at once, from forms or live editors, stored in the extension's tables and referenced by id from yours. See [Collaborative text for a blog post](docs/guides/collaborative-text.md).
 
 pg_crdt is plain Postgres. It works with any client, driver or API layer, needs no superuser and no C, and assumes no identity provider or platform roles. It runs on Postgres 16, 17 and 18.
 
@@ -48,7 +51,7 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
 
 [Install](docs/install.md) also covers pg_tle (RDS, Aurora, Supabase), the extension directory with `create extension`, and the schema guard.
 
-> **Warning: dropping the extension drops your data.** `crdt.pn` is a type that belongs to the extension. `drop extension pg_crdt cascade` **drops every column that uses it**, with its data. Read [Uninstall](docs/install.md#uninstall) first.
+> **Warning: dropping the extension drops your data.** `crdt.pn` is a type that belongs to the extension. `drop extension pg_crdt cascade` **drops every column that uses it**, with its data. The text documents are in the extension's tables: `drop extension pg_crdt` **drops every document**. Read [Uninstall](docs/install.md#uninstall) first.
 
 ## Documentation
 
@@ -63,9 +66,11 @@ Start with the [documentation map](docs/README.md), or the [quickstart](docs/get
 | Accept deltas from untrusted clients | [Security](docs/guides/security.md) |
 | Index the value, keep counters as deltas, WAL and merge benchmarks | [Storage and performance](docs/guides/storage-and-performance.md) |
 | The state, merge and the `crdt.pn` domain | [PN-Counter](docs/types/pn-counter.md) |
-| Look up a function, an error or a limit | [Shared](docs/reference/shared.md), [PN-Counter functions](docs/reference/pn.md), [Errors](docs/reference/errors.md), [Limits](docs/reference/limits.md) |
+| Edit a blog post with several people: form saves, live ops, search, compaction | [Collaborative text for a blog post](docs/guides/collaborative-text.md) |
+| How text documents merge, and what they cannot do | [Collaborative text](docs/types/collaborative-text.md) |
+| Look up a function, an error or a limit | [Shared](docs/reference/shared.md), [PN-Counter functions](docs/reference/pn.md), [Collaborative text functions](docs/reference/ydoc.md), [Errors](docs/reference/errors.md), [Limits](docs/reference/limits.md) |
 
-The design and the decisions behind it are in [`research/architecture.md`](research/architecture.md). Benchmarks: [`research/benchmarks/pn-counter.md`](research/benchmarks/pn-counter.md). What changed: the [changelog](CHANGELOG.md).
+The design and the decisions behind it are in [`research/architecture.md`](research/architecture.md) and, for text, [`research/text.md`](research/text.md). Benchmarks: [`research/benchmarks/pn-counter.md`](research/benchmarks/pn-counter.md), [`research/benchmarks/text.md`](research/benchmarks/text.md). What changed: the [changelog](CHANGELOG.md).
 
 ## Tests
 

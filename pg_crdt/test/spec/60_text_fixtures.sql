@@ -9,9 +9,9 @@
 --   4. shuffled again, with ydoc_compact after every 5 ops,
 -- and the document must round-trip through ydoc_ops_since into a fresh one
 -- with nothing left buffered (ops_since is causal).
-\i :exp_dir/test/lib/helpers.sql
+\i :ext_dir/test/lib/text-helpers.sql
 \set QUIET on
-\i :exp_dir/../text-ref/fixtures/fixtures.sql
+\i :ext_dir/experiments/text-ref/fixtures/fixtures.sql
 \set QUIET off
 
 create temp table runs (name text, mode text, doc bigint);

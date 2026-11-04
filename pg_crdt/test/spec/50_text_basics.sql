@@ -2,7 +2,7 @@
 -- version; positions in code points (non-BMP characters count as one); the
 -- ops each edit returns; errors for bad positions, null and malformed replicas,
 -- and missing documents.
-\i :exp_dir/test/lib/helpers.sql
+\i :ext_dir/test/lib/text-helpers.sql
 
 select crdt.ydoc_create() as d \gset
 select crdt.ydoc_insert(:d, 0, 'Hello', 'alice') as op1 \gset

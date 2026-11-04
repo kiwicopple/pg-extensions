@@ -70,6 +70,8 @@ pg_crdt/experiments/text-ref/      JS reference, fuzz fixtures, editing-trace co
 pg_crdt/experiments/text-column/   shape A: impl.sql, test/, bench.sh, NOTES.md (agent A)
 pg_crdt/experiments/text-table/    shape B: impl.sql, test/, bench.sh, NOTES.md (agent B)
 ```
+Update, 2026-11-05: shape B (`ydoc_`) was promoted into the extension file under its experiment name, with its tests in `test/spec/50_text_*` to `62_text_*` ([`benchmarks/text.md`](benchmarks/text.md) recommends it as the default for collaborative text). Shape A (`yseq_`) stays an experiment.
+
 Each `impl.sql` loads after `pg_crdt--0.0.1.sql` into the same `crdt` schema and follows `STYLE.md` and the conventions in the extension file: pinned `search_path`, no SECURITY DEFINER, `revoke from public` then explicit grants, IMMUTABLE/PARALLEL SAFE where true, and errors with the existing SQLSTATEs. When the experiment is promoted, it gets pasted into the extension file.
 
 Prefixes (provisional): shape A `text_` (domain `crdt.text`)? No. Names must say the algorithm (architecture.md, section 1). Shape A is **`yseq_`** for now (YjsMod sequence, column) and shape B is **`ydoc_`** (table-backed). Rename at promotion time if a better name appears.

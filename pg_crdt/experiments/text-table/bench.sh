@@ -4,9 +4,13 @@
 #
 #   experiments/text-table/bench.sh            # sizes 1k, 10k, 100k, 1M + trace
 #   experiments/text-table/bench.sh --quick    # sizes 1k, 10k, 100k; trace prefix
-#   experiments/text-table/bench.sh --impl x.sql
+#   experiments/text-table/bench.sh --impl x.sql   # another build of pg_crdt--0.0.1.sql
 #   ONLY=trace,keys experiments/text-table/bench.sh   # some sections only:
 #       sizes pos render cache conc merge keys compact replica trace
+#
+# ydoc_ was promoted into the extension (pg_crdt--0.0.1.sql, section "ydoc_");
+# this loads the extension file. variants/*.sql are ydoc_-only builds: they
+# load after the extension file with its ydoc_ section cut out.
 #
 # Throwaway cluster from pg_crdt/test/lib/cluster.sh (temp dir, Unix socket),
 # full_page_writes=on as in bench/pn-counter.sh, so WAL includes full-page
@@ -18,7 +22,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 EXT_DIR=$(cd "$HERE/../.." && pwd)
 . "$EXT_DIR/test/lib/cluster.sh"
 
-IMPL="$HERE/impl.sql"
+IMPL="$EXT_DIR/pg_crdt--0.0.1.sql"
 QUICK=0
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -40,9 +44,21 @@ trap 'rm -rf "$WORK"; stop_cluster' EXIT
 P() { "$PGBIN/psql" -X -q -v ON_ERROR_STOP=1 "$@"; }
 PT() { "$PGBIN/psql" -X -q -tA -v ON_ERROR_STOP=1 "$@"; }
 
-newdb() {  # newdb name [impl]
+# The extension file without its ydoc_ section: the base for variants/*.sql.
+python3 - "$IMPL" "$WORK/pn-base.sql" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+a = s.rindex('-- ====', 0, s.index('-- ydoc_: collaborative text'))
+b = s.rindex('-- ====', 0, s.index('-- Privileges'))
+open(sys.argv[2], 'w').write(s[:a] + s[b:])
+PY
+
+newdb() {  # newdb name [impl]: a complete build of the extension file, or a variant
     psql_admin -c "drop database if exists $1" -c "create database $1 encoding 'UTF8' template template0"
-    P -d "$1" -f "$EXT_DIR/pg_crdt--0.0.1.sql" -f "${2:-$IMPL}"
+    case "${2:-$IMPL}" in
+        "$HERE/variants/"*) P -d "$1" -f "$WORK/pn-base.sql" -f "$2" ;;
+        *) P -d "$1" -f "${2:-$IMPL}" ;;
+    esac
     P -d "$1" <<'SQL'
 create schema bench;
 -- Grow document 1 by random-position inserts of 8-char words from three

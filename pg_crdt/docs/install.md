@@ -2,7 +2,7 @@
 
 Install `pg_crdt` with `create extension` when the extension files are on the server, through pg_tle when they are not, or by running its SQL file directly. The database owner can do any of these: the extension needs no superuser and no C code.
 
-> **Warning: dropping the extension drops your data.** `crdt.pn` is a type that belongs to the extension. `drop extension pg_crdt` fails while any column uses it, and `drop extension pg_crdt cascade` **drops those columns**, with their data. Read [Uninstall](#uninstall) before you remove the extension from a database that has data in it. The same holds for `drop schema crdt cascade` after a direct install.
+> **Warning: dropping the extension drops your data.** `crdt.pn` is a type that belongs to the extension. `drop extension pg_crdt` fails while any column uses it, and `drop extension pg_crdt cascade` **drops those columns**, with their data. The collaborative text documents live in the extension's own tables (`crdt.ydoc_*`), so **dropping the extension drops every document**, even without `cascade`, unless a foreign key of yours points at them. Read [Uninstall](#uninstall) before you remove the extension from a database that has data in it. The same holds for `drop schema crdt cascade` after a direct install.
 
 ## Choose a method
 
@@ -12,7 +12,7 @@ Install `pg_crdt` with `create extension` when the extension files are on the se
 | [pg_tle](#pg_tle) | You cannot touch the server's files, but pg_tle is loaded (for example Amazon RDS, Aurora or Supabase). |
 | [Create extension](#create-extension) | You can copy files into the server's extension directory. |
 
-Use one method per database. Each creates the schema `crdt` with the type, the functions and the aggregate.
+Use one method per database. Each creates the schema `crdt` with the type, the functions, the aggregate, and the tables and sequences that hold collaborative text documents.
 
 ## Requirements
 
@@ -39,7 +39,7 @@ The file creates the schema `crdt` itself. The role you connect as owns every ob
 
 Without an extension object, two things differ:
 
-- `pg_dump` dumps the functions, the domain and the aggregate as ordinary objects. Restoring into an empty database works.
+- `pg_dump` dumps the functions, the domain, the aggregate and the `crdt.ydoc_*` tables, with their documents, as ordinary objects. Restoring into an empty database works.
 - There is no upgrade path. To reinstall, run `drop schema crdt cascade;`. That drops the domain, and with it every column of type `crdt.pn`, with its data.
 
 ## pg_tle
@@ -82,6 +82,12 @@ create extension pg_crdt;
 
 Do not add `with schema`: the control file fixes the schema to `crdt`. Any role with `CREATE` on the database can run this, because `superuser = false`. The role becomes the owner of the objects.
 
+## Backups
+
+With `create extension` (pg_tle or the control file), `pg_dump` writes `create extension pg_crdt` instead of the objects. The collaborative text tables and their sequences are marked as the extension's configuration (`pg_extension_config_dump`), so the dump still contains every document, and a restore sets the sequences after them: new documents get new ids. Restoring needs the extension available on the target server (the files, or pg_tle with the extension registered). After a direct install, the tables are ordinary tables and are dumped like yours.
+
+Include the schema `crdt` in your dumps: a dump of only `public` (`pg_dump -n public`) has rows that point at documents it does not contain.
+
 ## Check the install
 
 ```sql
@@ -97,7 +103,9 @@ If a query fails with `schema "crdt" does not exist`, the install did not run in
 
 ## Privileges after install
 
-The install removes the default grants from every function in `crdt`, then grants `EXECUTE` on the whole API and `USAGE` on the schema to `public`. Every function is pure or reads only the caller's own settings, so none needs privileges of its own. Who may write which rows is your decision: see [Accept writes from untrusted clients](guides/security.md).
+The install removes the default grants (and the installing role's default privileges) from every function, table and sequence in `crdt`, then grants `EXECUTE` on the whole API and `USAGE` on the schema to `public`. The PN-Counter functions are pure or read only the caller's own settings, so none needs privileges of its own. Who may write which rows is your decision: see [Accept writes from untrusted clients](guides/security.md).
+
+The `crdt.ydoc_*` tables and sequences have no grants at all. The `ydoc_` functions run with the caller's privileges, so they fail with `42501` until you grant the tables to the role that owns your wrapper functions. See [Set up the roles and grants](guides/collaborative-text.md#set-up-the-roles-and-grants).
 
 ## Always qualify names
 
@@ -105,10 +113,12 @@ Call every function as `crdt.pn_merge(...)` and write the column type as `crdt.p
 
 ## Uninstall
 
-Dropping the extension removes the type, so Postgres refuses while a column, default, generated column, index or constraint uses it. Do this per table first:
+Dropping the extension removes the type and the collaborative text tables. Postgres refuses while a column, default, generated column, index or constraint uses the type, or while a foreign key references `crdt.ydoc_docs`. It does not refuse because the tables hold documents: **a plain `drop extension pg_crdt` drops every document** when nothing of yours references them. Copy out the text you want to keep first, for example into a `text` column with `update posts set body = crdt.ydoc_value(body_doc)`.
+
+Then, per table:
 
 1. Copy the state to plain `jsonb`. The values do not change; only the column type does.
-2. Remove the objects that call a `crdt` function: column defaults, generated columns, expression indexes and check constraints.
+2. Remove the objects that call a `crdt` function: column defaults, generated columns, expression indexes and check constraints, and foreign keys to `crdt.ydoc_docs`.
 3. Drop the extension.
 
 This is a fragment: replace the table and column names with your own.
@@ -122,6 +132,6 @@ drop extension pg_crdt;
 
 `drop extension` leaves the empty schema `crdt` behind, because `create extension` created the schema before it ran the script. Remove it with `drop schema crdt;` when you no longer need it.
 
-A direct install has no extension object. After steps 1 and 2, `drop schema crdt cascade;` removes the functions, the aggregate and the type. It drops nothing of yours, because nothing depends on them any more.
+A direct install has no extension object. After steps 1 and 2, `drop schema crdt cascade;` removes the functions, the aggregate, the type and the document tables. It drops nothing of yours, because nothing depends on them any more.
 
-Do not use `cascade` before you have copied the data: it drops the columns. A plain `drop extension` is a safety check. It fails with SQLSTATE `2BP01` and names the dependent column, default or index.
+Do not use `cascade` before you have copied the data: it drops the columns, and the foreign keys to the documents along with the documents. A plain `drop extension` is a safety check for your columns: it fails with SQLSTATE `2BP01` and names the dependent column, default, index or foreign key.

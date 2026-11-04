@@ -7,7 +7,7 @@
 -- rows) still match a model. Three-way ydoc_set: a base at or after the
 -- horizon gives the same result as on the uncompacted twin; an older base is
 -- refused (22023). A horizon keeps newer tombstones apart.
-\i :exp_dir/test/lib/helpers.sql
+\i :ext_dir/test/lib/text-helpers.sql
 
 select crdt.ydoc_create() as c, crdt.ydoc_create() as t \gset
 select set_config('ydoc.c', :'c', false), set_config('ydoc.t', :'t', false) \g /dev/null

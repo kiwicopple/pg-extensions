@@ -45,7 +45,9 @@ ensure_roles
 export PATH="$PGBIN:$PATH"
 
 TEMPLATE=pgcrdt_template
-psql_admin -c "drop database if exists $TEMPLATE" -c "create database $TEMPLATE"
+# UTF8 whatever the cluster's default: the text specs (5x, 6x) use non-BMP
+# characters and count code points.
+psql_admin -c "drop database if exists $TEMPLATE" -c "create database $TEMPLATE encoding 'UTF8' template template0"
 "$PGBIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$TEMPLATE" -f "$HERE/lib/tap.sql" >/dev/null
 if ! load_out=$("$PGBIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$TEMPLATE" -f "$IMPL" 2>&1 >/dev/null); then
     echo "${RED}error: failed to install ${IMPL#$EXT_DIR/}${RESET}" >&2
@@ -69,7 +71,7 @@ for f in "$HERE"/spec/*.sql; do
 
     db="pgcrdt_t_${name}"
     psql_admin -c "drop database if exists \"$db\"" -c "create database \"$db\" template $TEMPLATE"
-    out=$("$PGBIN/psql" -X -q -tA -v ON_ERROR_STOP=0 -v impl_path="$IMPL" -v ext_dir="$EXT_DIR" -d "$db" -f "$f" 2>&1 || true)
+    out=$(PGCLIENTENCODING=UTF8 "$PGBIN/psql" -X -q -tA -v ON_ERROR_STOP=0 -v impl_path="$IMPL" -v ext_dir="$EXT_DIR" -d "$db" -f "$f" 2>&1 || true)
     psql_admin -c "drop database if exists \"$db\" with (force)" 2>/dev/null || true
 
     planned=$(printf '%s\n' "$out" | sed -n 's/^1\.\.\([0-9][0-9]*\)$/\1/p' | head -1)
@@ -101,7 +103,7 @@ for f in "$HERE"/spec/*.sql; do
             printf '%s\n' "$out" | grep -E '^(ok|not ok|#)|ERROR:' | sed 's/^/        /' || true
         else
             printf '%s\n' "$out" | grep -E -A3 '^not ok ' | grep -E '^(not ok|#)' | head -20 | sed 's/^/        /' || true
-            printf '%s\n' "$out" | grep 'ERROR:' | head -3 | sed 's/^psql:[^:]*:/        line /' || true
+            printf '%s\n' "$out" | grep -E -A2 'ERROR:' | head -9 | sed 's/^psql:[^:]*:/        line /' || true
         fi
     fi
 done

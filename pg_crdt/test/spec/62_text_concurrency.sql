@@ -8,7 +8,7 @@
 --      the same document at once: every insert is integrated exactly once,
 --      the length adds up, invariants hold.
 -- Needs dblink (contrib). Without it the file passes with SKIP assertions.
-\i :exp_dir/test/lib/helpers.sql
+\i :ext_dir/test/lib/text-helpers.sql
 
 select exists (select 1 from pg_available_extensions where name = 'dblink') as has_dblink \gset
 

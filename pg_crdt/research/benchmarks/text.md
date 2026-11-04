@@ -2,7 +2,7 @@
 
 2026-11-05. Script: [`bench/text-compare.sh`](../../bench/text-compare.sh). It loads `pg_crdt--0.0.1.sql` and both `impl.sql` files into one database of one throwaway cluster (the two shapes use different prefixes and coexist) and runs the same workloads on both, so every row here comes from one run on one machine. The per-shape numbers in the two `NOTES.md` files come from different runs and settings; where they differ from this page, this page is the comparison.
 
-Design: [`research/text.md`](../text.md). Shape A is `experiments/text-column` (a `crdt.yseq` jsonb column, with `compression lz4`). Shape B is `experiments/text-table` (table-backed documents; the app's table holds `body_doc bigint`). Both use the YjsMod order and the causal rules V0 to V7 on the untrusted path.
+Design: [`research/text.md`](../text.md). Shape A is `experiments/text-column` (a `crdt.yseq` jsonb column, with `compression lz4`). Shape B is `experiments/text-table` (table-backed documents; the app's table holds `body_doc bigint`), since promoted into the extension (`pg_crdt--0.0.1.sql`; `bench/text-compare.sh` now loads it from there). Both use the YjsMod order and the causal rules V0 to V7 on the untrusted path.
 
 ## Setup
 

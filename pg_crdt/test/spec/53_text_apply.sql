@@ -5,7 +5,7 @@
 -- deletes of unseen ids apply when the insert arrives. Then the deployment
 -- model: no table privileges for clients, an app-owned SECURITY DEFINER
 -- wrapper that checks access and passes the identity.
-\i :exp_dir/test/lib/helpers.sql
+\i :ext_dir/test/lib/text-helpers.sql
 
 select crdt.ydoc_create() as d \gset
 select crdt.ydoc_apply(:d, '{"v": {}, "i": [["alice", 1, null, null, "Hello"]], "d": []}', 'alice');
