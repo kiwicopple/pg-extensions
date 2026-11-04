@@ -1,6 +1,6 @@
 # Errors and limits
 
-This guide is now organized into smaller pages. Start with [Errors](reference/errors.md).
+Start with [Errors](reference/errors.md).
 
 ## Error format
 

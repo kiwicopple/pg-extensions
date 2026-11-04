@@ -31,6 +31,39 @@ An entity attribute, a tag or the context holds an extension value in this JSON 
 
 This policy lets a user download from the office network, `10.0.0.0/8`. The client address comes in the request context:
 
+```js tab="JavaScript"
+const office = `permit (
+  principal,
+  action == Action::"download",
+  resource
+)
+when { context.ip.isInRange(ip("10.0.0.0/8")) };`
+const savedOffice = await permissions.cedar.admin.putPolicy({
+  policyId: 'ip-office',
+  policy: office,
+})
+if (savedOffice.error) throw savedOffice.error
+const request = {
+  principal: { type: 'user', id: 'alice' },
+  action: 'Action::"download"',
+  resource: 'Document::"q3"',
+}
+const { data: inside } = await permissions.cedar.admin.isAuthorized({
+  ...request,
+  context: {
+    ip: { __extn: { fn: 'ip', arg: '10.1.2.3' } },
+  },
+})
+// allow, reason: ['ip-office']
+const { data: outside } = await permissions.cedar.admin.isAuthorized({
+  ...request,
+  context: {
+    ip: { __extn: { fn: 'ip', arg: '192.168.1.1' } },
+  },
+})
+// deny, reason: []
+```
+
 ```sql tab="SQL"
 select permissions.cedar_put_policy(
   policy_id => 'ip-office',
@@ -61,41 +94,32 @@ select permissions.cedar_is_authorized(
 -- {"errors": [], "reasons": [], "decision": "deny"}
 ```
 
-```ts tab="JavaScript"
-const office = `permit (
-  principal,
-  action == Action::"download",
-  resource
-)
-when { context.ip.isInRange(ip("10.0.0.0/8")) };`
-await permissions.cedar.admin.putPolicy({
-  policyId: 'ip-office',
-  policy: office,
-})
-const request = {
-  principal: { type: 'user', id: 'alice' },
-  action: 'Action::"download"',
-  resource: 'Document::"q3"',
-}
-const { data: inside } = await permissions.cedar.admin.isAuthorized({
-  ...request,
-  context: {
-    ip: { __extn: { fn: 'ip', arg: '10.1.2.3' } },
-  },
-})
-// allow, reason: ['ip-office']
-const { data: outside } = await permissions.cedar.admin.isAuthorized({
-  ...request,
-  context: {
-    ip: { __extn: { fn: 'ip', arg: '192.168.1.1' } },
-  },
-})
-// deny, reason: []
-```
-
 ## Compare decimals
 
 Use a decimal for a score or a price. Compare it with a method:
+
+```js tab="JavaScript"
+const score = `permit (
+  principal,
+  action == Action::"rate",
+  resource
+)
+when { context.score.greaterThanOrEqual(decimal("2.50")) };`
+const savedScore = await permissions.cedar.admin.putPolicy({
+  policyId: 'score',
+  policy: score,
+})
+if (savedScore.error) throw savedScore.error
+const { data } = await permissions.cedar.admin.isAuthorized({
+  principal: { type: 'user', id: 'alice' },
+  action: 'Action::"rate"',
+  resource: 'Document::"q3"',
+  context: {
+    score: { __extn: { fn: 'decimal', arg: '3.2' } },
+  },
+})
+// allow, reason: ['score']
+```
 
 ```sql tab="SQL"
 select permissions.cedar_put_policy(
@@ -118,31 +142,57 @@ select permissions.cedar_is_authorized(
 -- {"errors": [], "reasons": ["score"], "decision": "allow"}
 ```
 
-```ts tab="JavaScript"
-const score = `permit (
-  principal,
-  action == Action::"rate",
-  resource
-)
-when { context.score.greaterThanOrEqual(decimal("2.50")) };`
-await permissions.cedar.admin.putPolicy({
-  policyId: 'score',
-  policy: score,
-})
-const { data } = await permissions.cedar.admin.isAuthorized({
-  principal: { type: 'user', id: 'alice' },
-  action: 'Action::"rate"',
-  resource: 'Document::"q3"',
-  context: {
-    score: { __extn: { fn: 'decimal', arg: '3.2' } },
-  },
-})
-// allow, reason: ['score']
-```
-
 ## Compare dates and durations
 
 A datetime has a value in time. A duration is a length of time. Store a datetime as an attribute of an entity, and send the current time in the context. This policy lets a user open a document during the first 7 days after it is published:
+
+```js tab="JavaScript"
+const storedLaunch = await permissions.cedar.admin.putEntities([
+  {
+    uid: { type: 'Document', id: 'launch' },
+    attrs: {
+      level: 'internal',
+      publish_at: {
+        __extn: { fn: 'datetime', arg: '2026-12-01' },
+      },
+    },
+  },
+])
+if (storedLaunch.error) throw storedLaunch.error
+const firstWeek = `permit (
+  principal,
+  action == Action::"open",
+  resource
+)
+when {
+  context.now >= resource.publish_at &&
+  context.now.durationSince(resource.publish_at) < duration("7d")
+};`
+const savedFirstWeek = await permissions.cedar.admin.putPolicy({
+  policyId: 'first-week',
+  policy: firstWeek,
+})
+if (savedFirstWeek.error) throw savedFirstWeek.error
+const launchRequest = {
+  principal: { type: 'user', id: 'alice' },
+  action: 'Action::"open"',
+  resource: 'Document::"launch"',
+}
+const { data: early } = await permissions.cedar.admin.isAuthorized({
+  ...launchRequest,
+  context: {
+    now: { __extn: { fn: 'datetime', arg: '2026-12-03T10:00:00Z' } },
+  },
+})
+// allow, reason: ['first-week']
+const { data: late } = await permissions.cedar.admin.isAuthorized({
+  ...launchRequest,
+  context: {
+    now: { __extn: { fn: 'datetime', arg: '2026-12-09T00:00:00Z' } },
+  },
+})
+// deny, reason: []
+```
 
 ```sql tab="SQL"
 select permissions.cedar_put_entities(
@@ -192,52 +242,6 @@ select permissions.cedar_is_authorized(
   }'
 );
 -- {"errors": [], "reasons": [], "decision": "deny"}
-```
-
-```ts tab="JavaScript"
-await permissions.cedar.admin.putEntities([
-  {
-    uid: { type: 'Document', id: 'launch' },
-    attrs: {
-      level: 'internal',
-      publish_at: {
-        __extn: { fn: 'datetime', arg: '2026-12-01' },
-      },
-    },
-  },
-])
-const firstWeek = `permit (
-  principal,
-  action == Action::"open",
-  resource
-)
-when {
-  context.now >= resource.publish_at &&
-  context.now.durationSince(resource.publish_at) < duration("7d")
-};`
-await permissions.cedar.admin.putPolicy({
-  policyId: 'first-week',
-  policy: firstWeek,
-})
-const request = {
-  principal: { type: 'user', id: 'alice' },
-  action: 'Action::"open"',
-  resource: 'Document::"launch"',
-}
-const { data: early } = await permissions.cedar.admin.isAuthorized({
-  ...request,
-  context: {
-    now: { __extn: { fn: 'datetime', arg: '2026-12-03T10:00:00Z' } },
-  },
-})
-// allow, reason: ['first-week']
-const { data: late } = await permissions.cedar.admin.isAuthorized({
-  ...request,
-  context: {
-    now: { __extn: { fn: 'datetime', arg: '2026-12-09T00:00:00Z' } },
-  },
-})
-// deny, reason: []
 ```
 
 [`cedar_read_entities`](entities.md#read-entities) writes a datetime in its canonical text, `2026-12-01T00:00:00.000Z`.

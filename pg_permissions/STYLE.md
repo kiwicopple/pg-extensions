@@ -35,7 +35,7 @@ Do not turn historical measurements into performance guarantees. Keep the enviro
 7. Show expected results when they establish behavior. Keep exact result and error text unchanged.
 8. Break long shell commands with a trailing `\` and put flag groups on separate lines.
 9. In JavaScript, construct complex values in named constants before passing them to a method.
-10. Show equivalent SQL and JavaScript in adjacent fences, separated only by blank lines. Use `tab="SQL"` and `tab="JavaScript"`, in that order. GitHub shows both; the site renders synchronized language tabs.
+10. Lead application examples with JavaScript. Put equivalent calls in adjacent fences separated only by blank lines. Put `tab="JavaScript"` first, any other supported client libraries next, and `tab="SQL"` last. Use the same label for a library across guides so the site remembers the reader's choice. GitHub and Markdown exports display every example in source order. Use a plain fence when an operation has only one form.
 11. Keep database policy definitions in SQL. Explain who enforces a check's result: a trusted backend, database function, or optional RLS policy. A browser check alone does not enforce access.
 12. Use transaction-local subject settings in application examples. State the setup when a standalone diagnostic uses session state.
 

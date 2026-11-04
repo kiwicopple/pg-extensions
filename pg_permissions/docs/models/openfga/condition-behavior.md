@@ -38,8 +38,39 @@ The functions `fga_check_current`, `fga_list_objects_current` and `fga_list_obje
 
 In the first example, the tuple of Bob needs `user_ip` from the request. The function denies it. The tuple of Fay stores both parameters, so the function grants it:
 
+```js tab="JavaScript"
+const asBob = permissions.as({ id: 'bob' })
+const { data: bobCan } = await asBob.fga.check({
+  relation: 'viewer',
+  object: 'document:roadmap',
+})
+// false: the condition needs user_ip
+
+const writes = [
+  {
+    user: 'user:fay',
+    relation: 'viewer',
+    object: 'document:lab',
+    condition: {
+      name: 'in_office_network',
+      context: { cidr: '10.0.0.0/8', user_ip: '10.1.2.3' },
+    },
+  },
+]
+const grantedFay = await permissions.fga.admin.write({ writes })
+if (grantedFay.error) throw grantedFay.error
+
+const asFay = permissions.as({ id: 'fay' })
+const { data: fayCan } = await asFay.fga.check({
+  relation: 'viewer',
+  object: 'document:lab',
+})
+// true: the tuple holds every parameter
+```
+
 ```sql tab="SQL"
-select set_config('permissions.subject_id', 'bob', false);
+begin;
+select set_config('permissions.subject_id', 'bob', true);
 select permissions.fga_check_current(
   relation => 'viewer',
   object => 'document:roadmap'
@@ -62,42 +93,13 @@ select permissions.fga_write(
     }
   ]'
 );
-select set_config('permissions.subject_id', 'fay', false);
+select set_config('permissions.subject_id', 'fay', true);
 select permissions.fga_check_current(
   relation => 'viewer',
   object => 'document:lab'
 );
 -- true: the tuple holds every parameter
-select set_config('permissions.subject_id', '', false);
-```
-
-```ts tab="JavaScript"
-const asBob = permissions.as({ id: 'bob' })
-const { data: bobCan } = await asBob.fga.check({
-  relation: 'viewer',
-  object: 'document:roadmap',
-})
-// false: the condition needs user_ip
-
-const writes = [
-  {
-    user: 'user:fay',
-    relation: 'viewer',
-    object: 'document:lab',
-    condition: {
-      name: 'in_office_network',
-      context: { cidr: '10.0.0.0/8', user_ip: '10.1.2.3' },
-    },
-  },
-]
-await permissions.fga.admin.write({ writes })
-
-const asFay = permissions.as({ id: 'fay' })
-const { data: fayCan } = await asFay.fga.check({
-  relation: 'viewer',
-  object: 'document:lab',
-})
-// true: the tuple holds every parameter
+commit;
 ```
 
 To pass trusted request values such as the current time, your backend can call `fga_check` with admin privileges and supply the context. If you need the same behavior in RLS, a carefully scoped `security definer` wrapper can supply those values. See [Application checks](../../integrations/checks.md#trusted-request-context-and-resource-attributes) and [RLS integration](../../rls/policies.md).
@@ -105,6 +107,106 @@ To pass trusted request values such as the current time, your backend can call `
 ## More expressions
 
 This example uses a list parameter and a time zone. The model has two conditions. The condition `in_region` takes a list. The condition `office_hours` reads the hour in Paris:
+
+```js tab="JavaScript"
+const model = {
+  schema_version: '1.1',
+  type_definitions: [
+    { type: 'user' },
+    {
+      type: 'folder',
+      relations: { viewer: { this: {} } },
+      metadata: {
+        relations: {
+          viewer: {
+            directly_related_user_types: [
+              { type: 'user', condition: 'in_region' },
+              { type: 'user', condition: 'office_hours' },
+            ],
+          },
+        },
+      },
+    },
+  ],
+  conditions: {
+    in_region: {
+      name: 'in_region',
+      expression: 'region in allowed',
+      parameters: {
+        region: { type_name: 'TYPE_NAME_STRING' },
+        allowed: {
+          type_name: 'TYPE_NAME_LIST',
+          generic_types: [{ type_name: 'TYPE_NAME_STRING' }],
+        },
+      },
+    },
+    office_hours: {
+      name: 'office_hours',
+      expression:
+        'current_time.getHours("Europe/Paris") >= 9 && ' +
+        'current_time.getHours("Europe/Paris") < 17',
+      parameters: {
+        current_time: { type_name: 'TYPE_NAME_TIMESTAMP' },
+      },
+    },
+  },
+}
+const savedModel = await permissions.fga.admin.writeAuthorizationModel(model)
+if (savedModel.error) throw savedModel.error
+
+const regionalGrants = [
+  {
+    user: 'user:gus',
+    relation: 'viewer',
+    object: 'folder:eu',
+    condition: {
+      name: 'in_region',
+      context: { allowed: ['eu', 'uk'] },
+    },
+  },
+  {
+    user: 'user:hana',
+    relation: 'viewer',
+    object: 'folder:eu',
+    condition: { name: 'office_hours' },
+  },
+]
+const grantedRegions = await permissions.fga.admin.write({ writes: regionalGrants })
+if (grantedRegions.error) throw grantedRegions.error
+
+const inEu = { region: 'eu' }
+const { data: gusEu } = await permissions.fga.admin.check({
+  user: 'user:gus',
+  relation: 'viewer',
+  object: 'folder:eu',
+  context: inEu,
+})
+// true
+const inUs = { region: 'us' }
+const { data: gusUs } = await permissions.fga.admin.check({
+  user: 'user:gus',
+  relation: 'viewer',
+  object: 'folder:eu',
+  context: inUs,
+})
+// false
+const morning = { current_time: '2026-01-15T10:00:00Z' }
+const { data: hanaMorning } = await permissions.fga.admin.check({
+  user: 'user:hana',
+  relation: 'viewer',
+  object: 'folder:eu',
+  context: morning,
+})
+// true: 11:00 in Paris
+const evening = { current_time: '2026-01-15T20:00:00Z' }
+const { data: hanaEvening } = await permissions.fga.admin.check({
+  user: 'user:hana',
+  relation: 'viewer',
+  object: 'folder:eu',
+  context: evening,
+})
+// false: 21:00 in Paris
+```
 
 ```sql tab="SQL"
 select permissions.fga_write_authorization_model(
@@ -198,102 +300,4 @@ select permissions.fga_check(
   context => '{"current_time": "2026-01-15T20:00:00Z"}'
 );
 -- false: 21:00 in Paris
-```
-
-```ts tab="JavaScript"
-const model = {
-  schema_version: '1.1',
-  type_definitions: [
-    { type: 'user' },
-    {
-      type: 'folder',
-      relations: { viewer: { this: {} } },
-      metadata: {
-        relations: {
-          viewer: {
-            directly_related_user_types: [
-              { type: 'user', condition: 'in_region' },
-              { type: 'user', condition: 'office_hours' },
-            ],
-          },
-        },
-      },
-    },
-  ],
-  conditions: {
-    in_region: {
-      name: 'in_region',
-      expression: 'region in allowed',
-      parameters: {
-        region: { type_name: 'TYPE_NAME_STRING' },
-        allowed: {
-          type_name: 'TYPE_NAME_LIST',
-          generic_types: [{ type_name: 'TYPE_NAME_STRING' }],
-        },
-      },
-    },
-    office_hours: {
-      name: 'office_hours',
-      expression:
-        'current_time.getHours("Europe/Paris") >= 9 && ' +
-        'current_time.getHours("Europe/Paris") < 17',
-      parameters: {
-        current_time: { type_name: 'TYPE_NAME_TIMESTAMP' },
-      },
-    },
-  },
-}
-await permissions.fga.admin.writeAuthorizationModel(model)
-
-const writes = [
-  {
-    user: 'user:gus',
-    relation: 'viewer',
-    object: 'folder:eu',
-    condition: {
-      name: 'in_region',
-      context: { allowed: ['eu', 'uk'] },
-    },
-  },
-  {
-    user: 'user:hana',
-    relation: 'viewer',
-    object: 'folder:eu',
-    condition: { name: 'office_hours' },
-  },
-]
-await permissions.fga.admin.write({ writes })
-
-const inEu = { region: 'eu' }
-const { data: gusEu } = await permissions.fga.admin.check({
-  user: 'user:gus',
-  relation: 'viewer',
-  object: 'folder:eu',
-  context: inEu,
-})
-// true
-const inUs = { region: 'us' }
-const { data: gusUs } = await permissions.fga.admin.check({
-  user: 'user:gus',
-  relation: 'viewer',
-  object: 'folder:eu',
-  context: inUs,
-})
-// false
-const morning = { current_time: '2026-01-15T10:00:00Z' }
-const { data: hanaMorning } = await permissions.fga.admin.check({
-  user: 'user:hana',
-  relation: 'viewer',
-  object: 'folder:eu',
-  context: morning,
-})
-// true: 11:00 in Paris
-const evening = { current_time: '2026-01-15T20:00:00Z' }
-const { data: hanaEvening } = await permissions.fga.admin.check({
-  user: 'user:hana',
-  relation: 'viewer',
-  object: 'folder:eu',
-  context: evening,
-})
-// false: 21:00 in Paris
 ```

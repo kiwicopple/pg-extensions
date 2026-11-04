@@ -1,6 +1,6 @@
 # The OpenFGA model
 
-This guide is now organized into smaller pages. Start with [the model overview](models/openfga/overview.md).
+Start with [the model overview](models/openfga/overview.md).
 
 ## Use from JavaScript
 

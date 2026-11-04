@@ -24,7 +24,7 @@ The extension refuses these parts of CEL when you write the model, with error `o
 Some details are different from OpenFGA:
 
 - `matches` supports a subset of [RE2 patterns](https://github.com/google/re2/wiki/Syntax). A dot excludes a newline; a leading `(?s)` makes it match newlines. Anchors, ordinary character classes and ranges, capturing and noncapturing groups, alternation, and common quantifiers work. Word boundaries (`\b`, `\B`) and shorthand classes such as `\w` use ASCII rules.
-- Patterns are limited to 4,096 bytes and bounded repetitions to 255. Lookaround, backreferences, POSIX bracket classes, Unicode property escapes and inline flags other than a leading `(?s)` are unsupported. An invalid or unsupported pattern produces a condition evaluation error (`openfga:2000` if it determines the result). Earlier builds passed patterns directly to Postgres; check existing conditions that use its regex syntax.
+- Patterns are limited to 4,096 bytes and bounded repetitions to 255. Lookaround, backreferences, POSIX bracket classes, Unicode property escapes and inline flags other than a leading `(?s)` are unsupported. An invalid or unsupported pattern produces a condition evaluation error (`openfga:2000` if it determines the result).
 - A timestamp has microsecond precision. Numeric offsets through ±23:59 are accepted. The resulting UTC instant must fall in years 0001–9999, including for typed context parameters; outside that range the condition reports an error.
 - An integer overflow or a division by zero is an error. A `double` overflow or a division by zero is also an error. CEL gives infinity there.
 - In a value of type `any`, and in a list or map literal of mixed types, a number is a `double`.

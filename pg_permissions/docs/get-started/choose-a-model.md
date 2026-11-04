@@ -15,11 +15,11 @@ Choose the model that describes how your application grants access. Every model 
 
 ## Start with roles, add sharing when needed
 
-RBAC is the shortest path when roles describe your access rules. Its `rbac_*` functions manage roles, permissions, and assignments. A user can hold a role app-wide or in one scope. Those assignments are separate: an app-wide role does not automatically apply within a tenant.
+RBAC is the shortest path when roles describe your access rules. Use `permissions.rbac` to manage roles, permissions, and assignments. A user can hold a role app-wide or in one scope. Those assignments are separate: an app-wide role does not automatically apply within a tenant.
 
-OpenFGA uses `fga_*` functions to manage authorization models and relationship tuples. Use it for individual shares, nested teams, and access inherited from folders. Conditions are part of this model and use a CEL expression on a tuple.
+Use `permissions.fga` to manage authorization models and relationship tuples. Use it for individual shares, nested teams, and access inherited from folders. Conditions are part of this model and use a CEL expression on a tuple.
 
-Cedar uses `cedar_*` functions to manage policies and entities. Policies permit or forbid actions on resources, with conditions on attributes or trusted request context. Use it for rules expressed as policy text, including attribute checks, nested groups and explicit denies. A Cedar `forbid` overrides every matching `permit` in Cedar.
+Use `permissions.cedar` to manage policies and entities. Policies permit or forbid actions on resources, with conditions on attributes or trusted request context. Use it for rules expressed as policy text, including attribute checks, nested groups and explicit denies. A Cedar `forbid` overrides every matching `permit` in Cedar.
 
 Request context is available to the admin check. The current-subject functions accept no request context; they use stored entities and can receive resource attributes from your backend or an RLS policy. See [Check access](../models/cedar/checks.md#check-for-the-current-subject).
 
@@ -36,8 +36,8 @@ To add sharing to an existing RBAC application, keep the roles and add OpenFGA t
 | Attributes | No | On a relationship, with CEL conditions | On entities, on the resource and in the context |
 | Deny behavior | No explicit deny; a missing grant returns false | `but not` excludes access through that relation | `forbid` overrides Cedar permits |
 | Groups | Role inheritance | Teams and nested teams | Any hierarchy of entities |
-| The check for the current user | `rbac_has_permission` | `fga_check_current` | `cedar_is_authorized_current` |
-| A list of accessible scopes or resources | `rbac_scopes_with_permission` | `fga_list_object_ids_current` | `cedar_list_resources_current` |
+| JavaScript check for the current user | `rbac.hasPermission()` | `fga.check()` | `cedar.isAuthorized()` |
+| List accessible scopes or resources | `rbac.scopesWithPermission()` | `fga.listObjects()` | `cedar.listResources()` |
 | How you represent a share | A role assignment in an object scope | A tuple | Entity data used by a policy, or a template link |
 
 Denies within OpenFGA or Cedar do not automatically override another model's answer. Apply a deny across models in your backend's combined decision, or use a restrictive policy if you choose RLS.

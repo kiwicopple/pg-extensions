@@ -1,6 +1,6 @@
 # RBAC: roles and permissions
 
-This guide is now organized into smaller pages. Start with [the model overview](models/rbac/overview.md).
+Start with [the model overview](models/rbac/overview.md).
 
 ## Use from JavaScript
 

@@ -5,6 +5,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { pages, sidebar } from '../navigation.mjs';
+import { convertTabs } from './code-tabs.mjs';
 
 const docs = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dist = path.join(docs, 'dist');
@@ -15,6 +16,35 @@ const ids = (route) => new Set([...fs.readFileSync(path.join(dist, route, 'index
   .matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]));
 let anchors = 0;
 let links = 0;
+let languageGroups = 0;
+
+// A new client needs only an adjacent fence. Its label, code and position
+// must survive the conversion, alongside the first and last alternatives.
+const sample = [['ts', 'JavaScript'], ['cs', 'C#'], ['sql', 'SQL']];
+const fixture = sample.map(([lang, label]) =>
+  [`~~~${lang} tab="${label}"`, `example in ${label}`, '~~~'].join('\n')).join('\n\n');
+const converted = convertTabs(fixture, 'three-language fixture');
+assert.equal(converted.groups, 1);
+assert.deepEqual([...converted.body.matchAll(/<TabItem label="([^"]+)">\s*~~~(\S+)\n([^\n]+)\n~~~/g)]
+  .map(([, label, lang, code]) => [label, lang, code]), sample.map(([lang, label]) => [label, lang, `example in ${label}`]));
+
+function checkLanguageTabs(route, sourceLabels) {
+  const html = fs.readFileSync(path.join(dist, route, 'index.html'), 'utf8');
+  const labels = [];
+  for (const [, content] of html.matchAll(/<starlight-tabs\b[^>]*\bdata-sync-key="lang"[^>]*>([\s\S]*?)<\/starlight-tabs>/g)) {
+    const tabs = [...content.matchAll(/<a\b([^>]*\brole="tab"[^>]*)>([^<]+)<\/a>/g)];
+    assert.ok(tabs.length >= 2, `Missing tab alternatives: ${route}`);
+    if (tabs.some(([, , label]) => label === 'JavaScript')) {
+      assert.equal(tabs[0][2], 'JavaScript', `JavaScript must be the first tab: ${route}`);
+    }
+    assert.match(tabs[0][1], /\baria-selected="true"/, `First tab must be selected by default: ${route}`);
+    labels.push(...tabs.map(([, , label]) => label));
+    languageGroups++;
+  }
+  if (sourceLabels) assert.deepEqual(labels, sourceLabels, `Rendered tabs differ from the Markdown: ${route}`);
+}
+
+checkLanguageTabs(''); // The homepage is hand-authored MDX.
 for (const page of pages) {
   assert.ok(!seenSources.has(page.src), `Duplicate source: ${page.src}`);
   assert.ok(!seenRoutes.has(page.route), `Duplicate route: ${page.route}`);
@@ -22,8 +52,11 @@ for (const page of pages) {
   const file = path.join(dist, 'markdown', page.route + '.md');
   const source = fs.readFileSync(path.resolve(docs, '..', page.src), 'utf8');
   const exported = fs.readFileSync(file, 'utf8');
-  const code = (text) => [...text.matchAll(/^```[^\n]*\n([\s\S]*?)^```/gm)].map((m) => m[1]);
+  // Keep the fence metadata too: exported examples need their language labels.
+  const code = (text) => [...text.matchAll(/^([ \t]*)(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1\2[ \t]*$/gm)].map(([block]) => block);
   assert.deepEqual(code(exported), code(source), `Code changed in Markdown export: ${page.route}`);
+  const sourceLabels = [...source.matchAll(/^\s*(?:`{3,}|~{3,})\S+[^\n]*\btab="([^"]+)"/gm)].map((match) => match[1]);
+  checkLanguageTabs(page.route, sourceLabels);
   // Strip fences and code spans before interpreting Markdown links.
   const prose = exported.replace(/^```[^\n]*\n[\s\S]*?^```/gm, '');
   for (const match of prose.matchAll(/\[[^\]]+\]\(([^)\s]+)\)/g)) {
@@ -67,4 +100,4 @@ const functions = [...reference.matchAll(/^### `([^`]+)`/gm)].map((m) => m[1]);
 assert.equal(functions.length, 40, 'The SQL reference must cover all 40 public functions');
 assert.equal(new Set(functions).size, 40, 'Each SQL function must have one canonical entry');
 assert.ok(fs.existsSync(path.join(dist, 'llms.txt')), 'Missing agent index');
-console.log(`check-content: ${pages.length} Markdown exports, ${links} links, ${anchors} legacy anchors, and 40 SQL functions verified`);
+console.log(`check-content: ${pages.length} Markdown exports, ${languageGroups} language tab groups, ${links} links, ${anchors} legacy anchors, and 40 SQL functions verified`);

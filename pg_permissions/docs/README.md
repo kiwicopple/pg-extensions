@@ -1,6 +1,6 @@
 # pg_permissions documentation
 
-Use `pg_permissions` as your application's authorization store and check engine in Postgres. Manage roles, relationships and policies through SQL or JavaScript, then check access from your backend. Row level security (RLS) is an optional integration for enforcing access on tables. The extension is pure SQL and runs on Postgres 16, 17, and 18.
+Use `pg_permissions` as your application's authorization store and check engine in Postgres. Manage roles, relationships and policies with the JavaScript client or SQL, then check access from your backend. Row level security (RLS) is an optional integration for enforcing access on tables. The extension is pure SQL and runs on Postgres 16, 17, and 18.
 
 New to the project? Read the [overview](overview.md), [install the extension](install.md), and [run your first permission check](get-started/quickstart.md). The quickstart assigns a role and compares two users' access before showing an optional RLS example.
 
@@ -35,7 +35,7 @@ Use the [model chooser](get-started/choose-a-model.md) to find the right startin
 
 ## Reference and research
 
-Look up [shared SQL functions](reference/shared.md), [RBAC functions](reference/rbac.md), [OpenFGA functions](reference/openfga.md), [Cedar functions](reference/cedar.md), or [JavaScript methods](reference/javascript.md). [Errors](reference/errors.md), [limits](reference/limits.md), and [CEL support](reference/cel.md) have their own reference pages.
+Start with [JavaScript methods](reference/javascript.md), or look up [shared functions](reference/shared.md), [RBAC functions](reference/rbac.md), [OpenFGA functions](reference/openfga.md), or [Cedar functions](reference/cedar.md). [Errors](reference/errors.md), [limits](reference/limits.md), and [CEL support](reference/cel.md) have their own reference pages.
 
 [Benchmarks](benchmarks.md) has the current latency numbers for each model at 10 thousand, 100 thousand and 1 million documents.
 
@@ -45,7 +45,7 @@ Look up [shared SQL functions](reference/shared.md), [RBAC functions](reference/
 
 ## Example conventions
 
-SQL examples use named arguments and lowercase keywords. JavaScript equivalents appear alongside SQL. Each task page states its prerequisites; run its steps in order unless a block is marked as a fragment or an expected error.
+Choose JavaScript or SQL when a guide offers both. The site remembers your selection. JavaScript examples use the `permissions` client. SQL examples use named arguments and lowercase keywords. Each task page states its prerequisites; run its steps in order unless a block is marked as a fragment or an expected error.
 
 The examples call the extension owner the admin. Functions that change roles, models, tuples, Cedar policies or entities run as that role or an explicitly authorized backend. Policy tests switch to the application's database role so that RLS applies.
 

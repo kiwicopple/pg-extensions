@@ -9,7 +9,6 @@
 The extension is pure SQL. It needs no other extension and no C code. It runs on Postgres 16, 17 and 18.
 
 - Source: https://github.com/kiwicopple/pg-extensions/tree/main/pg_permissions
-- database.dev (dbdev): https://database.dev/kiwicopple/pg_permissions (not yet published)
 
 ## Features
 
@@ -35,9 +34,7 @@ Then follow [Check permissions](docs/get-started/quickstart.md). It assigns Alic
 
 [Check access in your application](docs/integrations/checks.md) shows how a backend uses these results. If you are replacing another authorization tool, review the model compatibility notes and map your integration to the extension's SQL or JavaScript API.
 
-Already running 0.0.1? Use the [upgrade script](docs/install.md#upgrade-from-001) to add Cedar while keeping your existing permission data.
-
-[Install](docs/install.md) covers non-superuser installation, pg_tle, and Docker. The database.dev package is not published yet. The extension creates the `permissions` schema itself; do not add `with schema`.
+[Install](docs/install.md) covers non-superuser installation, pg_tle, and Docker. The extension creates the `permissions` schema itself; do not add `with schema`.
 
 ## Documentation
 
@@ -60,26 +57,31 @@ Start with the [documentation map](docs/README.md) or [choose a permission model
 
 The npm package [`permissions`](js/README.md) is the JavaScript client for the extension. `createServerClient` calls every function over SQL on a server. `createClient` calls the client functions over PostgREST or Supabase in a browser.
 
-```bash
-npm install permissions
+Install the client and the Node driver:
+
+```sh
+npm install permissions pg
 ```
 
-```ts
-import { createClient } from 'permissions'
+After the [quickstart](docs/get-started/quickstart.md) has assigned Alice the viewer role in Acme, you can run this check from your backend:
 
-const permissions = createClient(
-  'https://your-project.supabase.co',
-  'your-anon-key'
-)
-const { data: canEdit } = await permissions.rbac.hasPermission({
-  permission: 'documents.edit',
-  scope: 'acme'
-})
+```js
+import pg from 'pg'
+import { createServerClient } from 'permissions'
+
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL })
+const permissions = createServerClient(pool, { throwOnError: true })
+const { data: canRead } = await permissions
+  .as({ id: 'alice' })
+  .rbac.hasPermission({ permission: 'documents.read', scope: 'acme' })
+
+console.log(canRead) // true
+await pool.end()
 ```
 
-See [JavaScript client: setup](docs/integrations/javascript.md) for the methods and the errors. The RBAC, OpenFGA and Cedar pages show each call next to the SQL.
+See [JavaScript client: setup](docs/integrations/javascript.md) for the methods and the errors. The RBAC, OpenFGA and Cedar guides show JavaScript examples alongside SQL.
 
-`permissions` 0.3.0 adds Cedar and needs `pg_permissions` 0.1.0 for Cedar. RBAC and OpenFGA work with 0.0.1 or 0.1.0. See [Install](docs/integrations/javascript.md#install).
+For release notes and upgrade instructions, see the [changelog](CHANGELOG.md).
 
 ## Development scripts
 
@@ -104,7 +106,7 @@ The file `package.json` in this directory is the entry point for the whole folde
 | `docs:dev` | Starts the site locally with hot reload. |
 | `docs:build` | Syncs, builds the site into `site/dist`, and checks links and content. |
 | `docs:preview` | Serves the built site locally. |
-| `docs:check:quickstart` | Runs the quickstart SQL on a temporary Postgres. Needs the Postgres binaries. |
+| `docs:check:quickstart` | Builds the JavaScript client and runs the JavaScript and SQL quickstarts on temporary Postgres. Needs the client dependencies and Postgres binaries. |
 | `docs:publish` | Deploys the site to Vercel production with `npx vercel deploy --prod`. Needs your Vercel login. |
 | `check` | Runs `js:check` and `docs:build`. Needs no Docker and no Postgres. |
 

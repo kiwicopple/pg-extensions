@@ -8,6 +8,27 @@ First complete the [RBAC setup](overview.md), using the same roles, IDs and app-
 
 This scenario uses the same roles, but assigns them for each organization. Alice is an admin of `acme`. Bob is an editor of `acme` and a viewer of `globex`. Assign the roles with a scope:
 
+```js tab="JavaScript"
+const assignedAcmeAdmin = await permissions.rbac.admin.assignRole({
+  userId: alice,
+  role: 'admin',
+  scope: acme,
+})
+if (assignedAcmeAdmin.error) throw assignedAcmeAdmin.error
+const assignedAcmeEditor = await permissions.rbac.admin.assignRole({
+  userId: bob,
+  role: 'editor',
+  scope: acme,
+})
+if (assignedAcmeEditor.error) throw assignedAcmeEditor.error
+const assignedGlobexViewer = await permissions.rbac.admin.assignRole({
+  userId: bob,
+  role: 'viewer',
+  scope: globex,
+})
+if (assignedGlobexViewer.error) throw assignedGlobexViewer.error
+```
+
 ```sql tab="SQL"
 select permissions.rbac_assign_role(
   user_id => :'alice',
@@ -26,27 +47,37 @@ select permissions.rbac_assign_role(
 );
 ```
 
-```ts tab="JavaScript"
-await permissions.rbac.admin.assignRole({
-  userId: alice,
-  role: 'admin',
-  scope: acme,
-})
-await permissions.rbac.admin.assignRole({
-  userId: bob,
-  role: 'editor',
-  scope: acme,
-})
-await permissions.rbac.admin.assignRole({
-  userId: bob,
-  role: 'viewer',
-  scope: globex,
-})
-```
-
 ## Check scoped permissions
 
-Ask the questions of the scenario as Bob. Run each statement in a transaction that sets the subject:
+Check as Bob, passing the organization ID with each request. The SQL example sets his subject for the transaction.
+
+```js tab="JavaScript"
+const asBob = permissions.as({ id: bob })
+
+const { data: editAcme } = await asBob.rbac.hasPermission({
+  permission: 'documents.edit',
+  scope: acme,
+})
+// true
+const { data: editGlobex } = await asBob.rbac.hasPermission({
+  permission: 'documents.edit',
+  scope: globex,
+})
+// false
+const { data: readGlobex } = await asBob.rbac.hasPermission({
+  permission: 'documents.read',
+  scope: globex,
+})
+// true
+const { data: readScopes } = await asBob.rbac.scopesWithPermission({
+  permission: 'documents.read',
+})
+// [acme, globex], as IDs
+const { data: editScopes } = await asBob.rbac.scopesWithPermission({
+  permission: 'documents.edit',
+})
+// [acme]
+```
 
 ```sql tab="SQL"
 begin;
@@ -77,50 +108,9 @@ select permissions.rbac_scopes_with_permission(
 commit;
 ```
 
-```ts tab="JavaScript"
-const asBob = permissions.as({ id: bob })
-
-const { data: editAcme } = await asBob.rbac.hasPermission({
-  permission: 'documents.edit',
-  scope: acme,
-})
-// true
-const { data: editGlobex } = await asBob.rbac.hasPermission({
-  permission: 'documents.edit',
-  scope: globex,
-})
-// false
-const { data: readGlobex } = await asBob.rbac.hasPermission({
-  permission: 'documents.read',
-  scope: globex,
-})
-// true
-const { data: readScopes } = await asBob.rbac.scopesWithPermission({
-  permission: 'documents.read',
-})
-// [acme, globex], as IDs
-const { data: editScopes } = await asBob.rbac.scopesWithPermission({
-  permission: 'documents.edit',
-})
-// [acme]
-```
-
 For Carol, who holds a role app-wide only, `rbac_scopes_with_permission(permission => 'documents.read')` returns `{}`. The admin can ask about any user:
 
-```sql tab="SQL"
-select permissions.rbac_user_permissions(
-  user_id => :'bob',
-  scope => :'globex'
-);
--- {documents.read}: what can Bob do in globex?
-select * from permissions.rbac_users_with_role(
-  role => 'admin',
-  scope => :'acme'
-);
--- Alice: who are the admins of acme?
-```
-
-```ts tab="JavaScript"
+```js tab="JavaScript"
 const bobInGlobex = await permissions.rbac.admin.userPermissions({
   userId: bob,
   scope: globex,
@@ -135,6 +125,19 @@ const admins = await permissions.rbac.admin.usersWithRole({
 // Who are the admins of acme?
 ```
 
+```sql tab="SQL"
+select permissions.rbac_user_permissions(
+  user_id => :'bob',
+  scope => :'globex'
+);
+-- {documents.read}: what can Bob do in globex?
+select * from permissions.rbac_users_with_role(
+  role => 'admin',
+  scope => :'acme'
+);
+-- Alice: who are the admins of acme?
+```
+
 ## Rules
 
 - **Scopes are separate.** `rbac_has_permission(permission => p)` looks only at app-wide roles. With a `scope` argument, it looks only at that scope. No inheritance links them. To let app-wide roles work in a scope, write both checks. See [App-wide or scoped checks](../../rls/policies.md#app-wide-or-scoped-checks).
@@ -146,35 +149,7 @@ const admins = await permissions.rbac.admin.usersWithRole({
 
 Examples of the answers, for Carol (a viewer) and Bob (an editor):
 
-```sql tab="SQL"
-begin;
-select set_config('permissions.subject_id', :'carol', true);
-select permissions.rbac_has_permission(permission => 'documents.read');
--- true
-select permissions.rbac_has_permission(permission => 'documents.edit');
--- false
-select permissions.rbac_has_permission(
-  permission => 'documents.nonexistent'
-);
--- false, not an error
-select permissions.rbac_has_role(role => 'viewer');
--- true
-select permissions.rbac_has_role(role => 'documents.read');
--- false: a permission name is not a role
-select permissions.rbac_has_role(role => 'nonexistent');
--- false
-commit;
-
-begin;
-select set_config('permissions.subject_id', :'bob', true);
-select permissions.rbac_has_role(role => 'viewer');
--- true: inherited through editor
-select permissions.rbac_has_role(role => 'admin');
--- false
-commit;
-```
-
-```ts tab="JavaScript"
+```js tab="JavaScript"
 const asCarol = permissions.as({ id: carol })
 
 const { data: canRead } = await asCarol.rbac.hasPermission({
@@ -202,7 +177,6 @@ const { data: isNone } = await asCarol.rbac.hasRole({
 })
 // false
 
-const asBob = permissions.as({ id: bob })
 
 const { data: bobViewer } = await asBob.rbac.hasRole({
   role: 'viewer',
@@ -212,6 +186,34 @@ const { data: bobAdmin } = await asBob.rbac.hasRole({
   role: 'admin',
 })
 // false
+```
+
+```sql tab="SQL"
+begin;
+select set_config('permissions.subject_id', :'carol', true);
+select permissions.rbac_has_permission(permission => 'documents.read');
+-- true
+select permissions.rbac_has_permission(permission => 'documents.edit');
+-- false
+select permissions.rbac_has_permission(
+  permission => 'documents.nonexistent'
+);
+-- false, not an error
+select permissions.rbac_has_role(role => 'viewer');
+-- true
+select permissions.rbac_has_role(role => 'documents.read');
+-- false: a permission name is not a role
+select permissions.rbac_has_role(role => 'nonexistent');
+-- false
+commit;
+
+begin;
+select set_config('permissions.subject_id', :'bob', true);
+select permissions.rbac_has_role(role => 'viewer');
+-- true: inherited through editor
+select permissions.rbac_has_role(role => 'admin');
+-- false
+commit;
 ```
 
 ## Optional: enforce access with RLS

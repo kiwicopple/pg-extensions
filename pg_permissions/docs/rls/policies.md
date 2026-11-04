@@ -30,13 +30,26 @@ The examples use these IDs. `:'alice'` is the ID of Alice:
 \set diary  'd0000000-0000-0000-0000-000000000005'
 ```
 
-The examples need the Supabase role names. Create them on plain Postgres, and then create two roles:
+The examples need the Supabase role names. Create them on plain Postgres, before creating the permission roles:
 
 ```sql
 create role anon nologin;
 create role authenticated nologin;
 create role service_role nologin;
+```
 
+Create the two application roles. For the JavaScript examples on these RLS pages, connect a [server client](../integrations/javascript.md) named `permissions` to the same database with `throwOnError: true`. Keep the psql session open for the table and policy definitions.
+
+```js tab="JavaScript"
+await permissions.rbac.admin.createRole({
+  role: 'viewer', permissions: ['documents.read'],
+})
+await permissions.rbac.admin.createRole({
+  role: 'editor', permissions: ['documents.edit'], inherits: ['viewer'],
+})
+```
+
+```sql tab="SQL"
 select permissions.rbac_create_role(
   role => 'viewer',
   permissions => '{documents.read}'
@@ -264,7 +277,14 @@ The principal of a policy is the current subject, `current_subject_type()::"curr
 
 The two policies below need one more Cedar policy. It lets the owner of a document view it:
 
-```sql
+```js tab="JavaScript"
+await permissions.cedar.admin.putPolicy({
+  policyId: 'owner-view',
+  policy: 'permit (principal, action == Action::"view", resource) when { resource.owner == principal };',
+})
+```
+
+```sql tab="SQL"
 select permissions.cedar_put_policy(
   policy_id => 'owner-view',
   policy => 'permit (

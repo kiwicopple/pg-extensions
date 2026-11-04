@@ -2,14 +2,16 @@
 
 Identify the subject before a permission check or a query protected by RLS. All three permission models use the same identity functions. Identity works independently of RLS; it tells the check whose access to evaluate.
 
-The SQL examples use psql variables `alice` and `bob` for user IDs. Set them before running the examples:
+Create a [server client](javascript.md) for the JavaScript examples, or open psql for the SQL examples. Use these sample IDs for Alice and Bob.
 
-```sql
+```js tab="JavaScript"
+const alice = '11111111-1111-1111-1111-111111111111'
+```
+
+```sql tab="SQL"
 \set alice '11111111-1111-1111-1111-111111111111'
 \set bob   '22222222-2222-2222-2222-222222222222'
 ```
-
-JavaScript snippets assume you have created a [client](javascript.md). The request-handler example is a fragment: use your own pool, database role, and authenticated user ID.
 
 ## Identity
 
@@ -24,16 +26,7 @@ The ID comes from the first nonempty source:
 2. The configuration parameter `permissions.subject_id`. Plain Postgres uses this source.
 3. If neither source has a value, the ID is null. Then each check returns false.
 
-```sql tab="SQL"
-select permissions.current_subject_id();
--- null: no JWT, no parameter
-select permissions.current_subject_type();
--- user
-select permissions.rbac_has_permission(permission => 'documents.read');
--- false: no subject, no access
-```
-
-```ts tab="JavaScript"
+```js tab="JavaScript"
 const { data: id } = await permissions.currentSubjectId()
 // null: no JWT, no parameter
 const { data: type } = await permissions.currentSubjectType()
@@ -44,11 +37,28 @@ const { data: canRead } = await permissions.rbac.hasPermission({
 // false: no subject, no access
 ```
 
+```sql tab="SQL"
+select permissions.current_subject_id();
+-- null: no JWT, no parameter
+select permissions.current_subject_type();
+-- user
+select permissions.rbac_has_permission(permission => 'documents.read');
+-- false: no subject, no access
+```
+
 ### Plain Postgres
 
-Set `permissions.subject_id` at the start of each request, in the transaction that serves the request:
+Use the server client to run a call as the authenticated user. In SQL, set `permissions.subject_id` inside the transaction that serves the request.
 
-```sql
+```js tab="JavaScript"
+const asAlice = permissions.as({ id: alice })
+const { data: subject } = await asAlice.currentSubjectId()
+// subject === alice
+const { data: outside } = await permissions.currentSubjectId()
+// outside === null on a connection with no JWT or subject setting
+```
+
+```sql tab="SQL"
 begin;
 select set_config('permissions.subject_id', :'alice', true);
 -- true: local to this transaction
@@ -61,7 +71,7 @@ select permissions.current_subject_id();
 
 Do not set the third argument of `set_config` to `false`. The value then stays for the whole session. Behind a pooler in transaction mode, the next client gets the same server connection and acts as the previous user. A transaction-local value disappears at commit or rollback.
 
-In an application, add one statement at the start of the transaction. This example uses node-postgres:
+To include other queries in the same transaction, take one connection from your pool. This node-postgres fragment assumes `userId` comes from an authenticated request and `app_user` is its database role.
 
 ```js
 const client = await pool.connect();
@@ -109,14 +119,21 @@ select permissions.current_subject_id();
 commit;
 ```
 
-The JWT wins on purpose. Nothing else in the session can change the subject of a request that has a JWT. If the JWT has no `sub` claim (for example the `anon` role), the extension uses `permissions.subject_id`. If that is also empty, there is no subject.
+When a verified JWT supplies `sub`, changing `permissions.subject_id` does not override it. A role that can execute arbitrary SQL can also change the claims setting. Only a trusted backend or a gateway that verifies tokens should establish identity this way. If the JWT has no `sub` claim (for example the `anon` role), the extension uses `permissions.subject_id`. If that is also empty, there is no subject.
 
 ### Subject type
 
 `permissions.current_subject_type()` returns `'user'`, unless the configuration parameter `permissions.subject_type` has another value:
 
-```sql
+```js tab="JavaScript"
+const service = permissions.as({ id: 'worker', type: 'service' })
+const { data: subjectType } = await service.currentSubjectType()
+// 'service'
+```
+
+```sql tab="SQL"
 begin;
+select set_config('permissions.subject_id', 'worker', true);
 select set_config('permissions.subject_type', 'service', true);
 select permissions.current_subject_type();                    -- service
 commit;

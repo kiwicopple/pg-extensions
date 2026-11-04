@@ -2,11 +2,24 @@
 
 Create policies that permit or forbid access, then update or delete them as your rules change. Each policy has a stable id; writing to the same id replaces it.
 
-Install the extension in a fresh database and connect as its owner. For JavaScript, create the [server client](overview.md#use-from-javascript). The later pages use the policies from this page. The admin role runs every call here. A client role cannot call these functions (see [Privileges](../../integrations/privileges.md#cedar-functions)).
+Use the [server client](overview.md#use-from-javascript) with an [admin connection](../../integrations/privileges.md#cedar-functions) to a fresh database with the extension installed. The later pages check access against the policies you create here.
 
 ## Put a policy in Cedar text
 
-`cedar_put_policy` takes a policy id and one policy. The policy is Cedar text, as in the [Cedar documentation](https://docs.cedarpolicy.com/policies/syntax-policy.html). Engineers in the team `eng` can view the documents in the folder `reports`:
+Give `putPolicy` a stable ID and the rule in [Cedar text](https://docs.cedarpolicy.com/policies/syntax-policy.html). This rule lets engineers on the `eng` team view documents in the `reports` folder.
+
+```js tab="JavaScript"
+const policy = `permit (
+  principal in Team::"eng",
+  action == Action::"view",
+  resource in Folder::"reports"
+);`
+const savedTeamPolicy = await permissions.cedar.admin.putPolicy({
+  policyId: 'eng-view-reports',
+  policy,
+})
+if (savedTeamPolicy.error) throw savedTeamPolicy.error
+```
 
 ```sql tab="SQL"
 select permissions.cedar_put_policy(
@@ -19,21 +32,17 @@ select permissions.cedar_put_policy(
 );
 ```
 
-```ts tab="JavaScript"
-const policy = `permit (
-  principal in Team::"eng",
-  action == Action::"view",
-  resource in Folder::"reports"
-);`
-await permissions.cedar.admin.putPolicy({
-  policyId: 'eng-view-reports',
-  policy,
-})
-```
-
 Writing to an existing policy id replaces that policy. The function checks syntax and reports the line and column of an error. It does not validate against a Cedar schema:
 
-```sql
+```js tab="JavaScript"
+const broken = await permissions.cedar.admin.putPolicy({
+  policyId: 'broken',
+  policy: 'permit (principal, action, resource) when {',
+})
+// broken.error.details: cedar:parse_error line=1 column=44
+```
+
+```sql tab="SQL"
 select permissions.cedar_put_policy(
   policy_id => 'broken',
   policy => 'permit (principal, action, resource) when {'
@@ -51,6 +60,20 @@ A `when` condition must be true for the policy to apply. An `unless` condition m
 
 This policy lets the owner of a document edit it. The attribute `owner` of the document is an entity:
 
+```js tab="JavaScript"
+const ownerEdit = `permit (
+  principal,
+  action == Action::"edit",
+  resource
+)
+when { resource.owner == principal };`
+const savedOwnerPolicy = await permissions.cedar.admin.putPolicy({
+  policyId: 'owner-edit',
+  policy: ownerEdit,
+})
+if (savedOwnerPolicy.error) throw savedOwnerPolicy.error
+```
+
 ```sql tab="SQL"
 select permissions.cedar_put_policy(
   policy_id => 'owner-edit',
@@ -63,24 +86,38 @@ when { resource.owner == principal };'
 );
 ```
 
-```ts tab="JavaScript"
-const ownerEdit = `permit (
-  principal,
-  action == Action::"edit",
-  resource
-)
-when { resource.owner == principal };`
-await permissions.cedar.admin.putPolicy({
-  policyId: 'owner-edit',
-  policy: ownerEdit,
-})
-```
-
 ## Put a policy in JSON
 
 Cedar also has a [JSON policy format](https://docs.cedarpolicy.com/policies/json-format.html). Use `policy_json` for a policy that a program writes, or one that the Cedar CLI translated. The extension stores the JSON as you give it. It rejects JSON with an unknown key, a wrong `op`, or a wrong shape, and the error names the path.
 
 This `forbid` policy denies every action on a document with the level `confidential`:
+
+```js tab="JavaScript"
+const noConfidential = {
+  effect: 'forbid',
+  principal: { op: 'All' },
+  action: { op: 'All' },
+  resource: { op: 'All' },
+  conditions: [
+    {
+      kind: 'when',
+      body: {
+        '==': {
+          left: {
+            '.': { left: { Var: 'resource' }, attr: 'level' },
+          },
+          right: { Value: 'confidential' },
+        },
+      },
+    },
+  ],
+}
+const savedForbid = await permissions.cedar.admin.putPolicy({
+  policyId: 'no-confidential',
+  policyJson: noConfidential,
+})
+if (savedForbid.error) throw savedForbid.error
+```
 
 ```sql tab="SQL"
 select permissions.cedar_put_policy(
@@ -110,37 +147,11 @@ select permissions.cedar_put_policy(
 );
 ```
 
-```ts tab="JavaScript"
-const noConfidential = {
-  effect: 'forbid' as const,
-  principal: { op: 'All' },
-  action: { op: 'All' },
-  resource: { op: 'All' },
-  conditions: [
-    {
-      kind: 'when',
-      body: {
-        '==': {
-          left: {
-            '.': { left: { Var: 'resource' }, attr: 'level' },
-          },
-          right: { Value: 'confidential' },
-        },
-      },
-    },
-  ],
-}
-await permissions.cedar.admin.putPolicy({
-  policyId: 'no-confidential',
-  policyJson: noConfidential,
-})
-```
-
-Pass exactly one of `policy` and `policy_json`. A call with both is the error `cedar:invalid_argument`. A call with neither is the error `cedar:null_argument`. A policy that has a slot (`?principal` or `?resource`) is a template. See [Templates](templates.md).
+Pass either `policy` for text or `policyJson` for JSON (`policy_json` in SQL). A call with both is the error `cedar:invalid_argument`. A call with neither is the error `cedar:null_argument`. A policy that has a slot (`?principal` or `?resource`) is a template. See [Templates](templates.md).
 
 ## The policy id
 
-The `policy_id` argument names the policy. It is the id that `cedar_is_authorized` returns in `reasons`.
+The `policyId` argument names the policy. An admin check returns that ID in `data.diagnostics.reason` (`reasons` in the SQL response).
 
 An `@id("...")` annotation in the text does not name the policy. It stays an annotation, and it does not have to agree with `policy_id`. The JSON format has no id field, so an id always comes from the call. Cedar's own call for one policy, `Policy::parse`, also takes the id as an argument.
 
@@ -151,6 +162,22 @@ Static policies, template links and templates share one set of ids. A put can re
 ## Annotations
 
 An annotation is metadata on a policy. It has no effect on a decision. A JSON value of `null` is the same as `""`. Use annotations for notes, owners or ticket numbers. The put stores them, and `cedar_policies` returns them:
+
+```js tab="JavaScript"
+const notes = `@id("old-name")
+@advice("Ask the security team first.")
+forbid (principal, action, resource)
+when { context.maintenance };`
+const savedNotes = await permissions.cedar.admin.putPolicy({
+  policyId: 'notes',
+  policy: notes,
+})
+if (savedNotes.error) throw savedNotes.error
+const { data: annotatedPolicies } = await permissions.cedar.admin.policies()
+const found = annotatedPolicies?.find((p) => p.policyId === 'notes')
+// found?.annotations:
+//   { id: 'old-name', advice: 'Ask the security team first.' }
+```
 
 ```sql tab="SQL"
 select permissions.cedar_put_policy(
@@ -168,24 +195,18 @@ where policy_id = 'notes';
 -- notes | {"id": "old-name", "advice": "Ask the security team first."}
 ```
 
-```ts tab="JavaScript"
-const notes = `@id("old-name")
-@advice("Ask the security team first.")
-forbid (principal, action, resource)
-when { context.maintenance };`
-await permissions.cedar.admin.putPolicy({
-  policyId: 'notes',
-  policy: notes,
-})
-const { data: policies } = await permissions.cedar.admin.policies()
-const found = policies?.find((p) => p.policyId === 'notes')
-// found?.annotations:
-//   { id: 'old-name', advice: 'Ask the security team first.' }
-```
-
 ## List policies
 
-`cedar_policies` returns every policy, ordered by id. Each row includes its effect, original Cedar text (when supplied), JSON representation (`est`), annotations, and template details for a linked policy:
+Use `policies()` to list every policy, ordered by ID. Each row includes its effect, original Cedar text (when supplied), JSON representation (`est`), annotations, and template details for a linked policy:
+
+```js tab="JavaScript"
+const { data: policies } = await permissions.cedar.admin.policies()
+// [
+//   { policyId: 'eng-view-reports', effect: 'permit', ... },
+//   { policyId: 'no-confidential', effect: 'forbid', ... },
+//   ...
+// ]
+```
 
 ```sql tab="SQL"
 select
@@ -199,32 +220,31 @@ from permissions.cedar_policies();
 -- owner-edit       | permit | (null)
 ```
 
-```ts tab="JavaScript"
-const { data: policies } = await permissions.cedar.admin.policies()
-// [
-//   { policyId: 'eng-view-reports', effect: 'permit', ... },
-//   { policyId: 'no-confidential', effect: 'forbid', ... },
-//   ...
-// ]
-```
-
 `source` is `null` for a policy that you put as JSON. `est` always holds the policy in the JSON format, so you can read a text policy as JSON.
 
 ## Delete a policy
 
-`cedar_delete_policy` deletes a policy or a template link. An unknown id is an error, and its hint lists the ids that exist:
+Use `deletePolicy` to remove a policy or a template link by ID. An unknown ID returns an error with a hint listing the IDs that exist.
+
+```js tab="JavaScript"
+const removedNotes = await permissions.cedar.admin.deletePolicy({ policyId: 'notes' })
+if (removedNotes.error) throw removedNotes.error
+```
 
 ```sql tab="SQL"
 select permissions.cedar_delete_policy(policy_id => 'notes');
 ```
 
-```ts tab="JavaScript"
-await permissions.cedar.admin.deletePolicy({ policyId: 'notes' })
-```
-
 The policy is gone, so a second delete fails:
 
-```sql
+```js tab="JavaScript"
+const deletedAgain = await permissions.cedar.admin.deletePolicy({
+  policyId: 'notes',
+})
+// deletedAgain.error.details: cedar:unknown_policy policy_id='notes'
+```
+
+```sql tab="SQL"
 select permissions.cedar_delete_policy(policy_id => 'notes');
 -- ERROR:  unknown policy 'notes'
 -- DETAIL:  cedar:unknown_policy policy_id='notes'

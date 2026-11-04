@@ -1,9 +1,9 @@
 ---
 title: pg_permissions
-description: An authorization store and check engine for Postgres. Manage roles, relationships and policies through SQL or JavaScript, with optional RLS enforcement.
+description: An authorization store and check engine for Postgres. Check access from your application with JavaScript or SQL.
 template: splash
 hero:
-  tagline: Your authorization store and check engine, inside Postgres. Roles, relationships and policies through SQL or JavaScript.
+  tagline: Store permissions in Postgres. Check access from your application.
   actions:
     - text: Check your first permission
       link: ./get-started/quickstart/
@@ -13,14 +13,44 @@ hero:
       variant: minimal
 ---
 
-import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+import { CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
 import LatestPost from '../../components/LatestPost.astro';
 
 <span id="what-it-is" />
 
-`pg_permissions` is a pure SQL extension for Postgres 16, 17, and 18. Use it as an alternative to a separate authorization service: store permissions in Postgres and call its check and list functions from your backend. You can also use row level security (RLS) to enforce access on tables.
+`pg_permissions` stores roles, sharing relationships and Cedar policies alongside your application data. Your backend can ask Postgres who can do what without calling a separate authorization service. If you want the database to enforce the same rules on a table, use row level security (RLS).
 
-Read the [documentation overview](./overview/) for the project's purpose, goals, and how it fits into your application.
+## Check access from your backend
+
+Can Alice read documents in Acme? With a [server client](./integrations/javascript/), set the subject and ask for the permission in that organization. The [quickstart](./get-started/quickstart/) walks through assigning the role and checking two users.
+
+<Tabs syncKey="lang">
+<TabItem label="JavaScript">
+
+```js
+const { data: allowed, error } = await permissions
+  .as({ id: 'alice' })
+  .rbac.hasPermission({ permission: 'documents.read', scope: 'acme' })
+
+if (error) throw error
+if (!allowed) throw new Error('Forbidden')
+```
+
+</TabItem>
+<TabItem label="SQL">
+
+```sql
+begin;
+select set_config('permissions.subject_id', 'alice', true);
+select permissions.rbac_has_permission(
+  permission => 'documents.read',
+  scope => 'acme'
+);
+commit;
+```
+
+</TabItem>
+</Tabs>
 
 <LatestPost />
 
@@ -32,22 +62,22 @@ Read the [documentation overview](./overview/) for the project's purpose, goals,
   <LinkCard title="Roles and permissions" description="Give users roles across your application or within each organization. Roles can inherit permissions." href="./models/rbac/overview/" />
   <LinkCard title="Relationships and sharing" description="Share individual objects, nest teams, and inherit access from folders with the OpenFGA model." href="./models/openfga/overview/" />
   <LinkCard title="Policies with Cedar" description="Write rules on users, resources and their attributes. Use explicit forbids to override Cedar permits." href="./models/cedar/overview/" />
-  <LinkCard title="Check access in your application" description="Use SQL or JavaScript to authorize backend operations. Store permission data and check access without RLS." href="./integrations/checks/" />
+  <LinkCard title="Check access in your application" description="Check the signed-in user’s permission before serving a request." href="./integrations/checks/" />
   <LinkCard title="Optional: enforce access with RLS" description="Apply your authorization rules to table reads and writes using Postgres policies." href="./rls/policies/" />
-  <LinkCard title="Connect your application" description="Set request identity, connect a JavaScript client, and separate client checks from admin operations." href="./integrations/identity/" />
+  <LinkCard title="Connect your application" description="Set request identity, connect a JavaScript client, and separate client checks from admin operations." href="./integrations/javascript/" />
 </CardGrid>
 
-## Try it in a database
+<span id="try-it-in-a-database" />
 
-[Install the SQL file](./install/), then follow the [quickstart](./get-started/quickstart/). You will create a permission, assign a role, and check access for two users. An optional section adds RLS to a table. The database.dev package is not published yet; direct installation is available.
+## Connect to Postgres
 
-Cedar is included in version 0.1.0. Existing 0.0.1 databases can [upgrade](./install/#upgrade-from-001) without recreating their permission data. The [Cedar walkthrough](./models/cedar/overview/) covers policies, entities, templates and access checks.
+[Install the extension](./install/) in Postgres 16, 17 or 18, then [connect your application](./integrations/javascript/). The [overview](./overview/) explains why we built it and how each model fits into an application.
 
-For an existing application, use the [documentation map](./guide/) to find a task. Model guides keep SQL and JavaScript examples together. [Identity and request context](./integrations/identity/) covers direct Postgres connections, Supabase, and PostgREST.
+<span id="look-up-a-function" />
 
-## Look up a function
+## API reference
 
-The SQL reference covers [shared functions](./reference/shared/), [RBAC](./reference/rbac/), [OpenFGA](./reference/openfga/), and [Cedar](./reference/cedar/). The [JavaScript reference](./reference/javascript/) maps client methods to those functions and explains results and errors.
+Look up a method in the [JavaScript client reference](./reference/javascript/), or browse the [shared](./reference/shared/), [RBAC](./reference/rbac/), [OpenFGA](./reference/openfga/) and [Cedar](./reference/cedar/) APIs.
 
 [OpenFGA compatibility](./models/openfga/compatibility/), [Cedar compatibility](./models/cedar/compatibility/), [API limits](./reference/limits/), and [CEL support](./reference/cel/) describe the boundaries of the implementation. A check returns a decision for your backend to enforce. If you add RLS, standalone checks do not include any extra rules defined only in those table policies.
 
@@ -56,8 +86,8 @@ The SQL reference covers [shared functions](./reference/shared/), [RBAC](./refer
 
 ## Design and evidence
 
-The extension has separate APIs for RBAC, OpenFGA and Cedar, with shared identity and RLS integration. [Current architecture](https://kiwicopple.github.io/pg-extensions/pg_permissions/architecture/) explains the design and how future models can fit. The [Cedar design record](https://kiwicopple.github.io/pg-extensions/pg_permissions/designs/e-cedar/) has the oracle results and the measurements of the Cedar model.
+The [architecture guide](https://kiwicopple.github.io/pg-extensions/pg_permissions/architecture/) explains how the three models share identity while keeping their rules separate. The [Cedar design record](https://kiwicopple.github.io/pg-extensions/pg_permissions/designs/e-cedar/) describes how we compare decisions against Cedar’s own tests.
 
-The test suite includes OpenFGA cases and Cedar's own integration tests, and runs on Postgres 16, 17, and 18, including pg_tle installation in Docker. [Benchmark reports](https://kiwicopple.github.io/pg-extensions/pg_permissions/benchmarks/overview/) distinguish the current implementation from historical prototypes and describe the limits of the measurements. Hosted installation and broader production workloads remain unverified in that research.
+For latency and throughput measurements, see the [benchmarks](./benchmarks/). Each workload includes the data size and test conditions.
 
-For agents and other tools, the [Markdown index](./llms.txt) links to plain-text versions of the documentation, including both example languages.
+For agents and other tools, the [Markdown index](./llms.txt) links to plain-text versions of the documentation, including every language example.
