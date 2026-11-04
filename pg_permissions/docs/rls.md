@@ -1,6 +1,6 @@
 # RLS policies
 
-This guide is now organized into smaller pages. Start with [Read and write policies](rls/policies.md).
+Start with [Read and write policies](rls/policies.md).
 
 ## Before you start
 

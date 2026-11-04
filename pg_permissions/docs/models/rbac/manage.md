@@ -8,7 +8,28 @@ The examples continue [tenant-scoped roles](tenants.md). Use the same database a
 
 Role definitions are immutable. To change the permissions of a role, drop the role and create it again. Then assign it again, because `rbac_drop_role` removes the assignments of the role. Manage role definitions through your backend or database migrations.
 
-`rbac_assign_role` has no effect if the user already holds the role in that scope. `rbac_unassign_role` has no effect if the user does not hold the role. To remove a scoped assignment, pass the same `scope`. An app-wide unassignment does not remove the same role in a scope.
+You can repeat `assignRole` or `unassignRole` for the same user, role, and scope. To remove a scoped assignment, pass the same `scope`. An app-wide unassignment does not remove the same role in a scope.
+
+```js tab="JavaScript"
+const assignedBob = await permissions.rbac.admin.assignRole({
+  userId: bob,
+  role: 'editor',
+})
+if (assignedBob.error) throw assignedBob.error
+// already held: no change
+const removedEditor = await permissions.rbac.admin.unassignRole({
+  userId: dave,
+  role: 'editor',
+})
+if (removedEditor.error) throw removedEditor.error
+// Dave does not hold the role: no change
+const removedUnknown = await permissions.rbac.admin.unassignRole({
+  userId: dave,
+  role: 'nonexistent',
+})
+if (removedUnknown.error) throw removedUnknown.error
+// no change, no error
+```
 
 ```sql tab="SQL"
 select permissions.rbac_assign_role(
@@ -28,25 +49,38 @@ select permissions.rbac_unassign_role(
 -- no change, no error
 ```
 
-```ts tab="JavaScript"
-await permissions.rbac.admin.assignRole({
-  userId: bob,
-  role: 'editor',
-})
-// already held: no change
-await permissions.rbac.admin.unassignRole({
-  userId: dave,
-  role: 'editor',
-})
-// Dave does not hold the role: no change
-await permissions.rbac.admin.unassignRole({
-  userId: dave,
-  role: 'nonexistent',
-})
-// no change, no error
-```
-
 You cannot drop a role that another role inherits. When you drop a role, the extension deletes its assignments. You can reuse the name of a dropped role at once.
+
+```js tab="JavaScript"
+const createdAuditor = await permissions.rbac.admin.createRole({
+  role: 'auditor',
+  permissions: ['audit.read'],
+  inherits: ['viewer'],
+})
+if (createdAuditor.error) throw createdAuditor.error
+const assignedDave = await permissions.rbac.admin.assignRole({
+  userId: dave,
+  role: 'auditor',
+})
+if (assignedDave.error) throw assignedDave.error
+const before = await permissions.rbac.admin.userPermissions({
+  userId: dave,
+})
+// before.data: ['audit.read', 'documents.read']
+
+const inUse = await permissions.rbac.admin.dropRole({
+  role: 'viewer',
+})
+// inUse.error.message:
+//   role 'viewer' is inherited by 'auditor', 'editor'
+
+const droppedAuditor = await permissions.rbac.admin.dropRole({ role: 'auditor' })
+if (droppedAuditor.error) throw droppedAuditor.error
+const after = await permissions.rbac.admin.userPermissions({
+  userId: dave,
+})
+// after.data: []: the assignment went with the role
+```
 
 ```sql tab="SQL"
 select permissions.rbac_create_role(
@@ -69,46 +103,18 @@ select permissions.rbac_user_permissions(user_id => :'dave');
 -- {}: the assignment went with the role
 ```
 
-```ts tab="JavaScript"
-await permissions.rbac.admin.createRole({
-  role: 'auditor',
-  permissions: ['audit.read'],
-  inherits: ['viewer'],
-})
-await permissions.rbac.admin.assignRole({
-  userId: dave,
-  role: 'auditor',
-})
-const before = await permissions.rbac.admin.userPermissions({
-  userId: dave,
-})
-// before.data: ['audit.read', 'documents.read']
+Use `usersWithRole` to list user IDs. This includes users who inherited the role.
 
-const inUse = await permissions.rbac.admin.dropRole({
-  role: 'viewer',
-})
-// inUse.error.message:
-//   role 'viewer' is inherited by 'auditor', 'editor'
-
-await permissions.rbac.admin.dropRole({ role: 'auditor' })
-const after = await permissions.rbac.admin.userPermissions({
-  userId: dave,
-})
-// after.data: []: the assignment went with the role
-```
-
-`rbac_users_with_role` lists user IDs. It includes users who hold the role through a role that inherits it:
-
-```sql tab="SQL"
-select * from permissions.rbac_users_with_role(role => 'editor');
--- Alice (through admin) and Bob
-```
-
-```ts tab="JavaScript"
+```js tab="JavaScript"
 const { data: editors } = await permissions.rbac.admin.usersWithRole({
   role: 'editor',
 })
 // [alice, bob]: Alice (through admin) and Bob
+```
+
+```sql tab="SQL"
+select * from permissions.rbac_users_with_role(role => 'editor');
+-- Alice (through admin) and Bob
 ```
 
 ## Errors
@@ -127,44 +133,7 @@ The RBAC functions raise these errors. Each error has a `DETAIL` code and a `HIN
 | `rbac_drop_role` | The role does not exist | `rbac:unknown_role` | `22023` |
 | `rbac_drop_role` | Another role inherits the role | `rbac:role_in_use` | `2BP01` |
 
-```sql tab="SQL"
-select permissions.rbac_create_role(
-  role => 'viewer',
-  permissions => '{documents.read}'
-);
--- ERROR:  role 'viewer' already exists
--- DETAIL:  rbac:role_exists role='viewer'
-select permissions.rbac_create_role(
-  role => 'reviewer',
-  permissions => '{audit.read}',
-  inherits => '{nonexistent}'
-);
--- ERROR:  unknown role 'nonexistent' in inherits of role 'reviewer'
--- DETAIL:  rbac:unknown_role role='nonexistent'
-select permissions.rbac_create_role(
-  role => 'documents.read',
-  permissions => '{x.y}'
-);
--- ERROR:  role and permission names must not overlap: 'documents.read' is already a permission
--- DETAIL:  rbac:name_overlap
-select permissions.rbac_create_role(
-  role => 'moderator',
-  permissions => '{viewer}'
-);
--- ERROR:  role and permission names must not overlap: 'viewer' is already a role
--- DETAIL:  rbac:name_overlap
-select permissions.rbac_assign_role(
-  user_id => :'bob',
-  role => 'nonexistent'
-);
--- ERROR:  unknown role 'nonexistent'
--- DETAIL:  rbac:unknown_role role='nonexistent'
-select permissions.rbac_drop_role(role => 'nonexistent');
--- ERROR:  unknown role 'nonexistent'
--- DETAIL:  rbac:unknown_role role='nonexistent'
-```
-
-```ts tab="JavaScript"
+```js tab="JavaScript"
 const exists = await permissions.rbac.admin.createRole({
   role: 'viewer',
   permissions: ['documents.read'],
@@ -204,4 +173,41 @@ const noDrop = await permissions.rbac.admin.dropRole({
   role: 'nonexistent',
 })
 // noDrop.error.details: rbac:unknown_role role='nonexistent'
+```
+
+```sql tab="SQL"
+select permissions.rbac_create_role(
+  role => 'viewer',
+  permissions => '{documents.read}'
+);
+-- ERROR:  role 'viewer' already exists
+-- DETAIL:  rbac:role_exists role='viewer'
+select permissions.rbac_create_role(
+  role => 'reviewer',
+  permissions => '{audit.read}',
+  inherits => '{nonexistent}'
+);
+-- ERROR:  unknown role 'nonexistent' in inherits of role 'reviewer'
+-- DETAIL:  rbac:unknown_role role='nonexistent'
+select permissions.rbac_create_role(
+  role => 'documents.read',
+  permissions => '{x.y}'
+);
+-- ERROR:  role and permission names must not overlap: 'documents.read' is already a permission
+-- DETAIL:  rbac:name_overlap
+select permissions.rbac_create_role(
+  role => 'moderator',
+  permissions => '{viewer}'
+);
+-- ERROR:  role and permission names must not overlap: 'viewer' is already a role
+-- DETAIL:  rbac:name_overlap
+select permissions.rbac_assign_role(
+  user_id => :'bob',
+  role => 'nonexistent'
+);
+-- ERROR:  unknown role 'nonexistent'
+-- DETAIL:  rbac:unknown_role role='nonexistent'
+select permissions.rbac_drop_role(role => 'nonexistent');
+-- ERROR:  unknown role 'nonexistent'
+-- DETAIL:  rbac:unknown_role role='nonexistent'
 ```

@@ -6,7 +6,7 @@ First complete [Write policies](policies.md). The checks on the next pages use t
 
 ## Put entities
 
-`cedar_put_entities` takes a JSON array of entities. This is Cedar's [entity JSON format](https://docs.cedarpolicy.com/auth/entities-syntax.html), with `uid` as an object. An entity has these keys:
+Pass an array of entities to `permissions.cedar.admin.putEntities`. This is Cedar's [entity JSON format](https://docs.cedarpolicy.com/auth/entities-syntax.html), with `uid` as an object. An entity has these keys:
 
 | Key | Content |
 | --- | --- |
@@ -16,6 +16,44 @@ First complete [Write policies](policies.md). The checks on the next pages use t
 | `tags` | The tags, a JSON object. The default is `{}`. |
 
 This call stores two teams, three users, a folder and two documents. The team `design` is in the team `eng`. Carol is in `design`. Alice is in `eng`:
+
+```js tab="JavaScript"
+const entities = [
+  { uid: { type: 'Team', id: 'eng' } },
+  {
+    uid: { type: 'Team', id: 'design' },
+    parents: [{ type: 'Team', id: 'eng' }],
+  },
+  {
+    uid: { type: 'user', id: 'alice' },
+    parents: [{ type: 'Team', id: 'eng' }],
+  },
+  { uid: { type: 'user', id: 'bob' } },
+  {
+    uid: { type: 'user', id: 'carol' },
+    parents: [{ type: 'Team', id: 'design' }],
+  },
+  { uid: { type: 'Folder', id: 'reports' } },
+  {
+    uid: { type: 'Document', id: 'q3' },
+    attrs: {
+      owner: { __entity: { type: 'user', id: 'bob' } },
+      level: 'internal',
+    },
+    parents: [{ type: 'Folder', id: 'reports' }],
+    tags: { region: 'eu' },
+  },
+  {
+    uid: { type: 'Document', id: 'salaries' },
+    attrs: {
+      owner: { __entity: { type: 'user', id: 'alice' } },
+      level: 'confidential',
+    },
+  },
+]
+const storedEntities = await permissions.cedar.admin.putEntities(entities)
+if (storedEntities.error) throw storedEntities.error
+```
 
 ```sql tab="SQL"
 select permissions.cedar_put_entities(
@@ -55,43 +93,6 @@ select permissions.cedar_put_entities(
 );
 ```
 
-```ts tab="JavaScript"
-const entities = [
-  { uid: { type: 'Team', id: 'eng' } },
-  {
-    uid: { type: 'Team', id: 'design' },
-    parents: [{ type: 'Team', id: 'eng' }],
-  },
-  {
-    uid: { type: 'user', id: 'alice' },
-    parents: [{ type: 'Team', id: 'eng' }],
-  },
-  { uid: { type: 'user', id: 'bob' } },
-  {
-    uid: { type: 'user', id: 'carol' },
-    parents: [{ type: 'Team', id: 'design' }],
-  },
-  { uid: { type: 'Folder', id: 'reports' } },
-  {
-    uid: { type: 'Document', id: 'q3' },
-    attrs: {
-      owner: { __entity: { type: 'user', id: 'bob' } },
-      level: 'internal',
-    },
-    parents: [{ type: 'Folder', id: 'reports' }],
-    tags: { region: 'eu' },
-  },
-  {
-    uid: { type: 'Document', id: 'salaries' },
-    attrs: {
-      owner: { __entity: { type: 'user', id: 'alice' } },
-      level: 'confidential',
-    },
-  },
-]
-await permissions.cedar.admin.putEntities(entities)
-```
-
 Each supplied entity replaces the stored entity with the same uid, including its attributes, parents and tags. Entities omitted from the array stay unchanged. A call stores up to 10,000 entities in one transaction.
 
 Subjects are entities of the subject type. The user `alice` above is the entity `user::"alice"`. This is the principal when the current subject is `alice` (see [the overview](overview.md#the-subject-is-the-principal)). A user does not need a stored entity to be a principal. A policy that tests `principal in Team::"eng"` or `principal.level` needs the stored entity.
@@ -126,7 +127,17 @@ Store direct parents in `parents`; the evaluator follows the hierarchy. The expr
 
 This put makes a cycle, and it fails:
 
-```sql
+```js tab="JavaScript"
+const cycle = await permissions.cedar.admin.putEntities([
+  {
+    uid: { type: 'Team', id: 'eng' },
+    parents: [{ type: 'Team', id: 'design' }],
+  },
+])
+// cycle.error.details: cedar:invalid_entity uid='Team::"design"'
+```
+
+```sql tab="SQL"
 select permissions.cedar_put_entities(
   entities => '[
     {
@@ -144,7 +155,15 @@ Puts that include parent links are serialized until their transactions finish, s
 
 ## Read entities
 
-`cedar_read_entities` returns the stored entities as a JSON array, in the same format as a put. Pass `type` to read one type, and `ids` to read some of its entities. `ids` needs `type`:
+`readEntities` returns an array in the same format as `putEntities`. Pass `type` to read one type, and `ids` to read some of its entities. `ids` needs `type`:
+
+```js tab="JavaScript"
+const { data: docs } = await permissions.cedar.admin.readEntities({
+  type: 'Document',
+  ids: ['q3'],
+})
+// docs[0].parents: [{ type: 'Folder', id: 'reports' }]
+```
 
 ```sql tab="SQL"
 select permissions.cedar_read_entities(
@@ -164,19 +183,18 @@ select permissions.cedar_read_entities(
 -- ]
 ```
 
-```ts tab="JavaScript"
-const { data: docs } = await permissions.cedar.admin.readEntities({
-  type: 'Document',
-  ids: ['q3'],
-})
-// docs[0].parents: [{ type: 'Folder', id: 'reports' }]
-```
-
 An extension value comes back in its canonical text, which can differ from the text that you put (`"1.5"` comes back as `"1.5000"`). A put of the output changes nothing.
 
 ## Delete entities
 
-`cedar_delete_entities` takes an array of uids and returns the number of entities that it deleted. An unknown uid is not an error:
+Pass an array of UIDs to `deleteEntities`. It returns the number of entities removed and skips unknown UIDs.
+
+```js tab="JavaScript"
+const { data: deleted } = await permissions.cedar.admin.deleteEntities([
+  { type: 'Document', id: 'salaries' },
+])
+// deleted: 1
+```
 
 ```sql tab="SQL"
 select permissions.cedar_delete_entities(
@@ -185,18 +203,24 @@ select permissions.cedar_delete_entities(
 -- 1
 ```
 
-```ts tab="JavaScript"
-const { data: deleted } = await permissions.cedar.admin.deleteEntities([
-  { type: 'Document', id: 'salaries' },
-])
-// deleted: 1
-```
-
 A delete removes the entity and its own parent links. It keeps the links of other entities that name it as a parent, as Cedar allows a parent that does not exist. To forget a user in every model, use [`delete_subject`](../../integrations/cleanup.md). It also removes the links that name the user as a parent.
 
 Put the entity again to restore it for the next pages:
 
-```sql
+```js tab="JavaScript"
+const restored = await permissions.cedar.admin.putEntities([
+  {
+    uid: { type: 'Document', id: 'salaries' },
+    attrs: {
+      owner: { __entity: { type: 'user', id: 'alice' } },
+      level: 'confidential',
+    },
+  },
+])
+if (restored.error) throw restored.error
+```
+
+```sql tab="SQL"
 select permissions.cedar_put_entities(
   entities => '[
     {

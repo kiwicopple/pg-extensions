@@ -1,6 +1,6 @@
 # Delete users and clean up permissions
 
-Call `delete_subject` when your application deletes a user. The extension has no users table of its own.
+When your application deletes a user, call `permissions.admin.deleteSubject({ type, id })` on its server client. The SQL equivalent is `permissions.delete_subject`. The extension has no users table of its own.
 
 The example below continues the [RBAC walkthrough](../models/rbac/overview.md). Run its app-wide and tenant scenarios first; they define the IDs and assignments used here. The trigger is a fragment to adapt to your own users table.
 
@@ -12,26 +12,7 @@ The extension does not track your users table. When you delete a user, the role 
 
 Cleanup does not disable an identity. A static Cedar policy that names the deleted principal can still match a future request for that id, even without a stored entity. Your authentication system must stop issuing requests for a deleted user. Review any static policies that name the user, and avoid reusing subject ids.
 
-```sql tab="SQL"
-select permissions.rbac_assign_role(
-  user_id => :'frank',
-  role => 'viewer'
-);
-select permissions.rbac_assign_role(
-  user_id => :'frank',
-  role => 'viewer',
-  scope => :'acme'
-);
-select permissions.delete_subject(
-  subject_type => 'user',
-  subject_id => :'frank'
-);
--- 2
-select permissions.rbac_user_permissions(user_id => :'frank');
--- {}
-```
-
-```ts tab="JavaScript"
+```js tab="JavaScript"
 await permissions.rbac.admin.assignRole({
   userId: frank,
   role: 'viewer',
@@ -52,7 +33,26 @@ const { data: left } = await permissions.rbac.admin.userPermissions({
 // []
 ```
 
-Call `delete_subject` from a trigger on your users table. `delete_subject` is admin-only, so the trigger function is `security definer`:
+```sql tab="SQL"
+select permissions.rbac_assign_role(
+  user_id => :'frank',
+  role => 'viewer'
+);
+select permissions.rbac_assign_role(
+  user_id => :'frank',
+  role => 'viewer',
+  scope => :'acme'
+);
+select permissions.delete_subject(
+  subject_type => 'user',
+  subject_id => :'frank'
+);
+-- 2
+select permissions.rbac_user_permissions(user_id => :'frank');
+-- {}
+```
+
+To tie cleanup to deletion of a database row in the same transaction, call `delete_subject` from a trigger on your users table. `delete_subject` is admin-only, so the trigger function is `security definer`:
 
 ```sql
 create table public.users (id uuid primary key);

@@ -53,14 +53,15 @@ Use site-relative Markdown links such as `/models/cedar/overview/`. `markdown-ba
 
 | Path | Source | Tracked? |
 | --- | --- | --- |
-| `src/content/docs/**/*.md` | Canonical Markdown listed in `navigation.mjs` | No |
-| Guide directories under `src/content/docs/` (`models`, `integrations`, `reference`, `rls`, `get-started`) | Generated `.md` or `.mdx` when a page uses tabs | No |
+| Generated `.md` and `.mdx` under `src/content/docs/` | Canonical Markdown listed in `navigation.mjs`. Pages with language tabs generate MDX. | No |
 | `src/content/docs/index.mdx` | Hand-written site components | Yes |
 | `public/markdown/**/*.md`, `public/llms.txt` | Plain Markdown exports and an agent index | No |
 
-Every generated site page has a marker and an edit link to its canonical source. The sync step removes stale generated pages. New directories with generated MDX need an entry in `.gitignore`; keep hand-authored MDX outside those directories.
+Every generated site page has a marker and an edit link to its canonical source. The sync step removes stale generated pages. Git ignores generated Markdown and MDX under `src/content/docs/`. The homepage is the hand-authored exception.
 
-Adjacent fenced blocks with `tab="SQL"` and `tab="JavaScript"` become synchronized Starlight tabs. GitHub and plain Markdown exports retain both blocks. Do not hand-copy a second language version into another guide.
+Adjacent code fences with a `tab="…"` label become a single Starlight language switcher. Put JavaScript first, other supported clients next, and SQL last. Starlight shows the first tab on a new visit and remembers the reader's choice across examples that offer it. GitHub and plain Markdown exports keep every block in that same order.
+
+To add a client library, place its equivalent example in the group with a unique language label and the appropriate syntax-highlighting language on the fence. Use the label consistently across pages. Blank lines can separate alternatives. Prose or an untagged fence ends the group. Leave examples with one language untagged.
 
 ## Sync and deployment
 
@@ -70,13 +71,13 @@ Sync runs before development and build. It adds page metadata, rewrites relative
 
 Set `DOCS_REPO_URL` and `DOCS_REPO_REF` for source and edit links. The defaults are `kiwicopple/pg-extensions` and the `main` branch. Set `DOCS_SITE` to the deployment origin and `DOCS_BASE` when hosting below a path, for example `/pg-extensions`. Markdown and index links honor the same base.
 
-The plain Markdown exports preserve the source code fences without tab markup. `llms.txt` lists canonical pages and their descriptions; compatibility pages are exported for old links but omitted from that index. The homepage links to the index. Historical records retain their status notes.
+The plain Markdown exports preserve the source fences and their language labels. `llms.txt` lists canonical pages and their descriptions. Compatibility pages are exported for old links and omitted from that index. The homepage links to the index.
 
 ## Validation
 
-`npm run build` checks rendered links and fragments, Markdown export links and code preservation, old inbound anchors, sidebar routes, and coverage of all 40 public SQL functions.
+`npm run build` checks rendered links and fragments, the default language tab and its alternatives, Markdown export links and code preservation, old inbound anchors, sidebar routes, and coverage of all 40 public SQL functions.
 
-`npm run check:quickstart` runs the SQL fences directly from the quickstart in an isolated Postgres cluster. It verifies direct permission checks before any application table exists, then checks the optional RLS example and transaction-local identity. It needs Postgres binaries (`PGBIN` can select them). The existing usage specs cover the longer walkthroughs:
+`npm run check:quickstart` runs the JavaScript and SQL examples in separate databases on a temporary Postgres cluster. It checks each user's permission and exercises the optional RLS policy and transaction-local identity. Install the client dependencies with `npm run js:install` from `pg_permissions/` and make the Postgres binaries available (`PGBIN` can select them). The existing usage specs cover the longer walkthroughs.
 
 ```bash
 cd .. && ./test/run.sh usage

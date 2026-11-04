@@ -8,7 +8,25 @@ First complete [Combine permission models](combine-models.md), including the pol
 
 In an OpenFGA call, a misspelled relation or type is an error. It is not a silent "no access". This is also true in policies. The error needs a subject, because a call with no subject returns false first:
 
-```sql
+```js tab="JavaScript"
+import { isFgaError } from 'permissions'
+
+const bob = permissions.as({ id: '22222222-2222-2222-2222-222222222222' })
+try {
+  await bob.fga.check({ relation: 'editr', object: 'document:x' })
+} catch (error) {
+  if (!isFgaError(error, 2000)) throw error
+  console.log(error.hint) // Did you mean 'editor'? ...
+}
+try {
+  await bob.fga.listObjects({ type: 'documnt', relation: 'viewer', idsOnly: true })
+} catch (error) {
+  if (!isFgaError(error, 2000)) throw error
+  console.log(error.message) // type 'documnt' not found
+}
+```
+
+```sql tab="SQL"
 begin;
 select set_config('permissions.subject_id', :'bob', true);
 select permissions.fga_check_current(
@@ -33,9 +51,19 @@ rollback;
 
 RBAC works the other way. An unknown permission gives false. A policy that names a dropped permission denies access, and does not break each query:
 
-```sql
+```js tab="JavaScript"
+const { data: allowed } = await bob.rbac.hasPermission({
+  permission: 'documents.reed',
+})
+// false
+```
+
+```sql tab="SQL"
+begin;
+select set_config('permissions.subject_id', :'bob', true);
 select permissions.rbac_has_permission(permission => 'documents.reed');
 -- false
+commit;
 ```
 
 ## Row attributes that only RLS sees
@@ -81,7 +109,27 @@ In this example, RLS includes an extra draft rule that the standalone check does
 
 If a check must use the attribute, pass the attribute in. The model has the relations `published` and `reader`. A backend sends the status of the row as a contextual tuple. The extension never writes a contextual tuple:
 
-```sql
+```js tab="JavaScript"
+// Load the row from the application's trusted database connection.
+const rowId = 'd0000000-0000-0000-0000-000000000003'
+const { rows: [doc] } = await pool.query(
+  'select id, status from public.documents where id = $1',
+  [rowId],
+)
+if (!doc) throw new Error('Document not found')
+const object = 'document:' + doc.id
+const { data: mayRead } = await permissions.fga.admin.check({
+  user: 'user:22222222-2222-2222-2222-222222222222',
+  relation: 'reader',
+  object,
+  contextualTuples: doc.status === 'published'
+    ? [{ user: 'user:*', relation: 'published', object }]
+    : [],
+})
+// true for the published notes
+```
+
+```sql tab="SQL"
 select permissions.fga_check(
   subject => 'user:' || :'bob',
   relation => 'reader',

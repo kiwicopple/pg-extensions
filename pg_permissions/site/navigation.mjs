@@ -168,22 +168,22 @@ export const pages = [
   {
     "src": "docs/reference/shared.md",
     "route": "reference/shared",
-    "label": "Shared functions"
+    "label": "Shared API"
   },
   {
     "src": "docs/reference/rbac.md",
     "route": "reference/rbac",
-    "label": "RBAC functions"
+    "label": "RBAC API"
   },
   {
     "src": "docs/reference/openfga.md",
     "route": "reference/openfga",
-    "label": "OpenFGA functions"
+    "label": "OpenFGA API"
   },
   {
     "src": "docs/reference/cedar.md",
     "route": "reference/cedar",
-    "label": "Cedar functions"
+    "label": "Cedar API"
   },
   {
     "src": "docs/reference/javascript.md",
@@ -204,6 +204,11 @@ export const pages = [
     "src": "docs/reference/cel.md",
     "route": "reference/cel",
     "label": "CEL support"
+  },
+  {
+    "src": "CHANGELOG.md",
+    "route": "changelog",
+    "label": "Changelog"
   },
   {
     "src": "docs/benchmarks.md",
@@ -301,16 +306,16 @@ export const sidebar = [
     "collapsed": true,
     "items": [
       {
+        "label": "JavaScript setup",
+        "slug": "integrations/javascript"
+      },
+      {
         "label": "Check access in your application",
         "slug": "integrations/checks"
       },
       {
         "label": "Identity and request context",
         "slug": "integrations/identity"
-      },
-      {
-        "label": "JavaScript setup",
-        "slug": "integrations/javascript"
       },
       {
         "label": "Client and admin privileges",
@@ -453,30 +458,30 @@ export const sidebar = [
     "collapsed": true,
     "items": [
       {
-        "label": "SQL functions",
+        "label": "JavaScript client",
+        "slug": "reference/javascript"
+      },
+      {
+        "label": "Model and shared APIs",
         "collapsed": true,
         "items": [
           {
-            "label": "Shared functions",
+            "label": "Shared API",
             "slug": "reference/shared"
           },
           {
-            "label": "RBAC functions",
+            "label": "RBAC API",
             "slug": "reference/rbac"
           },
           {
-            "label": "OpenFGA functions",
+            "label": "OpenFGA API",
             "slug": "reference/openfga"
           },
           {
-            "label": "Cedar functions",
+            "label": "Cedar API",
             "slug": "reference/cedar"
           }
         ]
-      },
-      {
-        "label": "JavaScript client",
-        "slug": "reference/javascript"
       },
       {
         "label": "Errors",
@@ -491,6 +496,10 @@ export const sidebar = [
         "slug": "reference/cel"
       }
     ]
+  },
+  {
+    "label": "Changelog",
+    "slug": "changelog"
   },
   {
     "label": "Contributing",

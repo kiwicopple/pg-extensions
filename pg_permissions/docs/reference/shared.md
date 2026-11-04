@@ -1,16 +1,14 @@
-# Shared SQL functions
+# Shared API
 
-Identity and cleanup functions are shared by the permission models. Each entry gives its signature, behavior, errors, and JavaScript equivalent.
+Identity and cleanup functions are shared by the permission models. Use these calls to inspect the identity attached to a request or clean up a deleted account.
+
+The JavaScript examples use a server client called `permissions`, created with `throwOnError: true` so a failed call stops the example. See [JavaScript setup](../integrations/javascript.md) to create the client.
 
 The examples illustrate individual calls. Set up the subject explicitly before checking it, and use a test database for examples that create roles. See [request identity](../integrations/identity.md) and [cleanup](../integrations/cleanup.md) for application integration.
 
 ## Shared functions
 
 ### `current_subject_id`
-
-```text
-permissions.current_subject_id() returns text
-```
 
 Returns the id of the current subject, or `null` when there is none. The id comes from the first source that has a value:
 
@@ -19,51 +17,66 @@ Returns the id of the current subject, or `null` when there is none. The id come
 
 Errors: none.
 
-JavaScript: `currentSubjectId()`.
+```js tab="JavaScript"
+const alice = permissions.as({ id: 'alice' })
+const { data: subjectId } = await alice.currentSubjectId()
+// 'alice'
+```
 
-```sql
-select permissions.current_subject_id();
--- null: no JWT, no setting
-select set_config('permissions.subject_id', 'alice', false);
-select permissions.current_subject_id();
--- alice
-select set_config('permissions.subject_id', '', false);
+```sql tab="SQL"
+-- permissions.current_subject_id() returns text
+
+begin;
+select set_config('permissions.subject_id', 'alice', true);
+select permissions.current_subject_id();   -- alice
+commit;
 ```
 
 Set `permissions.subject_id` with `set_config(..., true)` in a transaction, so that the value ends with the transaction. The value `false` keeps the setting for the whole session. A connection pool can then give the setting to the next client.
 
 ### `current_subject_type`
 
-```text
-permissions.current_subject_type() returns text
-```
-
 Returns the type of the current subject. The value is `user`, unless the setting `permissions.subject_type` has another value. The RBAC functions use the type `user` only. The OpenFGA current-subject functions use `type:id`, from this function and `current_subject_id`.
 
 Errors: none.
 
-JavaScript: `currentSubjectType()`.
+```js tab="JavaScript"
+const alice = permissions.as({ id: 'alice' })
+const { data: subjectType } = await alice.currentSubjectType()
+// 'user'
+```
 
-```sql
+```sql tab="SQL"
+-- permissions.current_subject_type() returns text
+
 select permissions.current_subject_type();   -- user
 ```
 
 ### `delete_subject`
 
-```text
-permissions.delete_subject(
-  subject_type text,
-  subject_id text
-) returns bigint
-```
-
 Removes a subject from every model. For the type `user`, it deletes the RBAC assignments of the subject. For every type, it deletes each tuple that names the subject as the subject, as a userset of the subject, or as the object. It also deletes the Cedar entity `<subject_type>::"<subject_id>"`, the parent edges from and to it, and each template link whose slot names it; static Cedar policies stay. It returns the number of rows that it deleted. Admin only.
 
 Errors: none.
 
-JavaScript: `admin.deleteSubject({ type, id })`.
+```js tab="JavaScript"
+await permissions.rbac.admin.createRole({
+  role: 'reader',
+  permissions: ['docs.read'],
+})
+await permissions.rbac.admin.assignRole({ userId: 'zoe', role: 'reader' })
+const { data: deleted } = await permissions.admin.deleteSubject({
+  type: 'user',
+  id: 'zoe',
+})
+// 1 if this assignment was Zoe's only permission data
+```
 
-```sql
+```sql tab="SQL"
+-- permissions.delete_subject(
+--   subject_type text,
+--   subject_id text
+-- ) returns bigint
+
 select permissions.rbac_create_role(
   role => 'reader',
   permissions => '{docs.read}'

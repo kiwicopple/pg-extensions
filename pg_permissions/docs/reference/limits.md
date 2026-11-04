@@ -2,7 +2,7 @@
 
 Explicit-subject and current-subject API limits differ. In particular, the OpenFGA admin list functions cap their results, while the current-subject list functions return every accessible result, whether called from application code or RLS. The Cedar functions have size limits on policies and entities, and no cap on results.
 
-The batching examples are fragments for a database with the `document#viewer` model from [the error examples](errors.md).
+Use a test database and a [server client](../integrations/javascript.md) named `permissions`. The batching examples assume the `document#viewer` model from [the error examples](errors.md).
 
 The sections [Limits](#limits) (OpenFGA) and [Cedar limits](#cedar-limits) list the limits of each model. The `rbac_*` functions have no limits.
 
@@ -28,9 +28,36 @@ The current-subject functions `fga_list_objects_current` and `fga_list_object_id
 
 The extension has no built-in time limit on API calls. OpenFGA stops a list after 3 seconds and can return partial results. To bound execution in Postgres, set `statement_timeout`; exceeding it raises an error instead of returning a partial list.
 
-To write more than 100 tuples, write them in batches. The batches can share a transaction. They then commit together:
+To write more than 100 tuples, write them in batches. These examples commit every batch together.
 
-```sql
+```js tab="JavaScript"
+import pg from 'pg'
+import { createServerClient } from 'permissions'
+
+async function writeBatches(write) {
+  const db = new pg.Client({ connectionString: process.env.DATABASE_URL })
+  await db.connect()
+  try {
+    await db.query('begin')
+    await write(createServerClient(db, { throwOnError: true }))
+    await db.query('commit')
+  } finally {
+    // Closing the connection rolls back any uncommitted writes.
+    await db.end()
+  }
+}
+
+const tuples = Array.from({ length: 200 }, (_, i) => ({
+  user: 'user:u' + (i + 1), relation: 'viewer', object: 'document:big',
+}))
+await writeBatches(async (client) => {
+  for (let start = 0; start < tuples.length; start += 100) {
+    await client.fga.admin.write({ writes: tuples.slice(start, start + 100) })
+  }
+})
+```
+
+```sql tab="SQL"
 begin;
 select permissions.fga_write(
   writes => (
@@ -61,7 +88,17 @@ commit;
 
 A call with 101 tuple keys fails:
 
-```sql
+```js tab="JavaScript"
+const writes = Array.from({ length: 101 }, (_, i) => ({
+  user: 'user:v' + (i + 1),
+  relation: 'viewer',
+  object: 'document:big',
+}))
+const { error } = await permissions.fga.admin.write({ writes })
+console.log(error?.reason?.code) // 2053
+```
+
+```sql tab="SQL"
 select permissions.fga_write(
   writes => (
     select jsonb_agg(
@@ -98,9 +135,22 @@ These limits are fixed and exceed the maxima in the tested Cedar corpus. The ext
 
 `cedar_list_resources_current` has no result cap: a cap could silently hide rows from an RLS query. `cedar_is_authorized_current` returns a single boolean. The extension has no built-in time limit; exceeding Postgres's `statement_timeout` raises an error rather than returning a partial result.
 
-To store more than 10,000 entities, put them in batches. The batches can share a transaction. They then commit together:
+To store more than 10,000 entities, put them in batches. These examples commit every batch together.
 
-```sql
+```js tab="JavaScript"
+const items = Array.from({ length: 20000 }, (_, i) => ({
+  uid: { type: 'Item', id: 'i' + (i + 1) },
+}))
+
+// Use the writeBatches helper in the tuple example above.
+await writeBatches(async (client) => {
+  for (let start = 0; start < items.length; start += 10000) {
+    await client.cedar.admin.putEntities(items.slice(start, start + 10000))
+  }
+})
+```
+
+```sql tab="SQL"
 begin;
 select permissions.cedar_put_entities(
   entities => (
@@ -133,7 +183,15 @@ commit;
 
 A call with 10,001 entities fails:
 
-```sql
+```js tab="JavaScript"
+const entities = Array.from({ length: 10001 }, (_, i) => ({
+  uid: { type: 'Big', id: 'b' + (i + 1) },
+}))
+const { error } = await permissions.cedar.admin.putEntities(entities)
+console.log(error?.reason?.code) // 'limit_exceeded'
+```
+
+```sql tab="SQL"
 select permissions.cedar_put_entities(
   entities => (
     select jsonb_agg(

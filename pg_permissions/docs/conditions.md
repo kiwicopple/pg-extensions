@@ -1,6 +1,6 @@
 # OpenFGA conditions
 
-This guide is now organized into smaller pages. Start with [Conditions and request context](models/openfga/conditions.md).
+Start with [Conditions and request context](models/openfga/conditions.md).
 
 ## A model with conditions
 

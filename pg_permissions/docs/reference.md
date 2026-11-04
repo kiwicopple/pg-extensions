@@ -1,10 +1,10 @@
 # Function reference
 
-This guide is now organized into smaller pages. Start with [shared functions](reference/shared.md), [RBAC functions](reference/rbac.md), or [OpenFGA functions](reference/openfga.md).
+Start with the [JavaScript client reference](reference/javascript.md) for setup, methods, results and errors.
 
 ## Groups
 
-Browse [shared functions](reference/shared.md), [RBAC functions](reference/rbac.md), and [OpenFGA functions](reference/openfga.md).
+Browse the [shared](reference/shared.md), [RBAC](reference/rbac.md), [OpenFGA](reference/openfga.md) and [Cedar](reference/cedar.md) APIs.
 
 ## Privileges
 

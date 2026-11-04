@@ -1,6 +1,6 @@
 # Client and admin privileges
 
-Application clients can check their own access. A trusted backend manages roles, models, tuples, policies and entities. These privileges apply regardless of the language you use.
+Application clients can check their own access. A trusted backend manages roles, models, tuples, policies and entities. Use `createServerClient(pool)` for admin writes. A subject client returned by `as({ id })`, or a browser client connected through PostgREST, exposes current-subject checks. Postgres enforces the grants behind both interfaces.
 
 The examples are fragments. They assume the `authenticated` and `service_role` database roles exist. The RBAC example uses the `alice` and `bob` variables from [RBAC setup](../models/rbac/overview.md#before-you-start); the OpenFGA example uses the [sharing model](../models/openfga/models.md); the Cedar example uses the [policies and entities](../models/cedar/policies.md). Run expected-error statements separately when your client stops on errors.
 

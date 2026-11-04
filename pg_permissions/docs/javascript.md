@@ -1,6 +1,6 @@
 # JavaScript client: setup
 
-This guide is now organized into smaller pages. Start with [JavaScript setup](integrations/javascript.md).
+Start with [JavaScript setup](integrations/javascript.md).
 
 ## Install
 

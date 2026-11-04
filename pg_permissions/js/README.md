@@ -12,7 +12,7 @@ Use it as your backend's authorization API without enabling RLS: manage permissi
 npm install permissions
 ```
 
-`permissions` 0.3.0 adds Cedar and needs `pg_permissions` 0.1.0 for Cedar. RBAC and OpenFGA work with `pg_permissions` 0.0.1 or 0.1.0. See [Install](../docs/install.md) for the database steps.
+For a Node backend using node-postgres, also install the `pg` driver (`npm install pg`). [Install the extension](../docs/install.md) in the database first.
 
 ## Choose an entry point
 
@@ -613,12 +613,7 @@ The package has a UMD bundle for a `<script>` tag. It sets the global `permissio
 
 ## Compatibility
 
-| `permissions` | `pg_permissions` | Models |
-| --- | --- | --- |
-| 0.3.x | 0.1.0 (Cedar); 0.0.1 or 0.1.0 (RBAC, OpenFGA) | RBAC, OpenFGA and Cedar |
-| 0.2.x | 0.0.1 or 0.1.0 | RBAC and OpenFGA |
-
-The runtime is Node 20 or later, or a browser, Deno or Bun that has `fetch`.
+Use Node 20 or later, or a browser, Deno or Bun with `fetch`. The current client works with all three permission models in `pg_permissions` 0.1.0. For earlier client versions, see the [package changelog](CHANGELOG.md).
 
 The package ships ESM and CommonJS, with types for both.
 

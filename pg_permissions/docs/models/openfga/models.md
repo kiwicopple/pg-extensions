@@ -2,7 +2,7 @@
 
 Describe the relationships your application supports, then write the model to Postgres.
 
-Install the extension in a fresh database and connect as its owner. For JavaScript, create the [server client](overview.md#use-from-javascript). Save the DSL below as `model.fga`; later pages use the resulting `model`, `modelId`, and tuples. Run examples marked as errors separately from a migration that stops on errors.
+Use the [server client](overview.md#use-from-javascript) with an admin connection to a fresh database with the extension installed. Save the model below as `model.fga`. Later pages use its JSON representation and ID. Run examples marked as errors separately from a migration that stops on errors.
 
 ## Write a model
 
@@ -89,14 +89,7 @@ Each type becomes an object. Its `relations` key holds the rewrite. Its `metadat
 
 Write the model as the admin. Read the JSON from the file `model.json`:
 
-```sql tab="SQL"
-\set model `cat model.json`
-select permissions.fga_write_authorization_model(
-  model => :'model'
-) as model_id \gset
-```
-
-```ts tab="JavaScript"
+```js tab="JavaScript"
 import { readFileSync } from 'node:fs'
 
 const json = readFileSync('model.json', 'utf8')
@@ -108,9 +101,25 @@ if (written.error) throw written.error
 const modelId = written.data.authorizationModelId
 ```
 
-The function returns the id of the new model. In JavaScript, the id is `data.authorizationModelId`. The id is a ULID, for example `01JB...`. The new model becomes the latest model.
+```sql tab="SQL"
+\set model `cat model.json`
+select permissions.fga_write_authorization_model(
+  model => :'model'
+) as model_id \gset
+```
 
-Every function on this page uses the latest model. To use an older model, pass `model_id`. `fga_read_authorization_models()` lists the models, newest first. `fga_read_authorization_model()` returns one model, with its `id`. Without an argument, it returns the latest model.
+A successful write returns the new ID in `data.authorizationModelId`. The id is a ULID, for example `01JB...`. The new model becomes the latest model.
+
+Checks use the latest model by default. Pass `authorizationModelId` (`model_id` in SQL) to check against a particular version. `fga_read_authorization_models()` lists the models, newest first. `fga_read_authorization_model()` returns one model, with its `id`. Without an argument, it returns the latest model.
+
+```js tab="JavaScript"
+const all = await permissions.fga.admin.readAuthorizationModels()
+// all.data.length: 1
+const one = await permissions.fga.admin.readAuthorizationModel({
+  authorizationModelId: modelId,
+})
+// one.data.id === modelId: true
+```
 
 ```sql tab="SQL"
 select count(*)
@@ -122,46 +131,9 @@ select permissions.fga_read_authorization_model(
 -- true
 ```
 
-```ts tab="JavaScript"
-const all = await permissions.fga.admin.readAuthorizationModels()
-// all.data.length: 1
-const one = await permissions.fga.admin.readAuthorizationModel({
-  authorizationModelId: modelId,
-})
-// one.data.id === modelId: true
-```
-
 The extension checks the model as the OpenFGA server does. It raises the same error codes. This example has a typo in a relation name:
 
-```sql tab="SQL"
-select permissions.fga_write_authorization_model(
-  model => '{
-    "schema_version": "1.1",
-    "type_definitions": [
-      {"type": "user"},
-      {
-        "type": "document",
-        "relations": {
-          "editor": {"this": {}},
-          "viewer": {"computedUserset": {"relation": "editr"}}
-        },
-        "metadata": {
-          "relations": {
-            "editor": {
-              "directly_related_user_types": [{"type": "user"}]
-            }
-          }
-        }
-      }
-    ]
-  }'
-);
--- ERROR:  document#viewer: computed relation 'editr' is not defined on type 'document'
--- DETAIL:  openfga:2056 invalid_authorization_model
--- HINT:  Did you mean 'editor'? Relations on type 'document': editor, viewer.
-```
-
-```ts tab="JavaScript"
+```js tab="JavaScript"
 const typo = {
   schema_version: '1.1',
   type_definitions: [
@@ -189,6 +161,34 @@ const refused =
 // refused.error.details:
 //   openfga:2056 invalid_authorization_model
 // refused.error.hint: Did you mean 'editor'? ...
+```
+
+```sql tab="SQL"
+select permissions.fga_write_authorization_model(
+  model => '{
+    "schema_version": "1.1",
+    "type_definitions": [
+      {"type": "user"},
+      {
+        "type": "document",
+        "relations": {
+          "editor": {"this": {}},
+          "viewer": {"computedUserset": {"relation": "editr"}}
+        },
+        "metadata": {
+          "relations": {
+            "editor": {
+              "directly_related_user_types": [{"type": "user"}]
+            }
+          }
+        }
+      }
+    ]
+  }'
+);
+-- ERROR:  document#viewer: computed relation 'editr' is not defined on type 'document'
+-- DETAIL:  openfga:2056 invalid_authorization_model
+-- HINT:  Did you mean 'editor'? Relations on type 'document': editor, viewer.
 ```
 
 The extension also refuses a relation that no tuple can satisfy. For example, `define viewer: reader` and `define reader: viewer` refer only to each other. This fails with `no entrypoints defined`. Computed relations that refer to each other in a cycle also fail, even when each relation has a type restriction. A refused model does not become the latest model. The tests in [`test/fga_lang/`](../../../test/fga_lang) run the OpenFGA validation cases against this function.

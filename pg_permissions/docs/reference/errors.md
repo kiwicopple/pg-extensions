@@ -2,11 +2,29 @@
 
 Errors include a message for people, a stable detail code for programs, and a hint describing the fix. The JavaScript client returns database errors in `error`; its `reason` field parses the detail code.
 
-The SQL examples below run in order in a separate test database. The setup model supports the deliberate error cases.
+Run the examples in order in a test database. The JavaScript examples use the default error handling on a [server client](../integrations/javascript.md) named `permissions`.
 
 Create this model before trying the error examples:
 
-```sql
+```js tab="JavaScript"
+const model = {
+  schema_version: '1.1',
+  type_definitions: [
+    { type: 'user' },
+    {
+      type: 'document',
+      relations: { viewer: { this: {} } },
+      metadata: {
+        relations: { viewer: { directly_related_user_types: [{ type: 'user' }] } },
+      },
+    },
+  ],
+}
+const { error: setupError } = await permissions.fga.admin.writeAuthorizationModel(model)
+if (setupError) throw setupError
+```
+
+```sql tab="SQL"
 select permissions.fga_write_authorization_model(
   model => '{
     "schema_version": "1.1",
@@ -44,7 +62,16 @@ The code in `DETAIL` is stable. Your code can match on it.
 
 This example has a typo in a relation name:
 
-```sql
+```js tab="JavaScript"
+const { error } = await permissions.fga.admin.check({
+  user: 'user:anne', relation: 'viewr', object: 'document:1',
+})
+console.log(error?.reason)
+// { model: 'openfga', code: 2000, name: 'validation_error' }
+console.log(error?.hint) // Did you mean 'viewer'? ...
+```
+
+```sql tab="SQL"
 select permissions.fga_check(
   subject => 'user:anne',
   relation => 'viewr',
@@ -57,7 +84,15 @@ select permissions.fga_check(
 
 This example has a typo in a role name. No role exists yet, so the hint says how to create one:
 
-```sql
+```js tab="JavaScript"
+const { error } = await permissions.rbac.admin.assignRole({
+  userId: 'anne', role: 'admn',
+})
+console.log(error?.reason)
+// { model: 'rbac', code: 'unknown_role', context: { role: 'admn' } }
+```
+
+```sql tab="SQL"
 select permissions.rbac_assign_role(
   user_id => 'anne',
   role => 'admn'
@@ -85,9 +120,19 @@ A misspelled name is always an error. It is never a silent `false`. The only exc
 
 The SQLSTATE is `22023` (`invalid_parameter_value`) for every OpenFGA code, with one exception. Code `2002` has SQLSTATE `54001` (`statement_too_complex`). The RBAC functions use other SQLSTATE values, which the table in [RBAC errors](#rbac-errors) lists.
 
-To read the fields in PL/pgSQL, use `get stacked diagnostics`:
+Use the parsed reason to handle a specific error in application code. In PL/pgSQL, read the database diagnostics in an exception handler.
 
-```sql
+```js tab="JavaScript"
+import { isFgaError } from 'permissions'
+
+const { error } = await permissions.fga.admin.check({
+  user: 'user:anne', relation: 'viewr', object: 'document:1',
+})
+if (isFgaError(error, 2000)) console.log(error.hint)
+else if (error) throw error
+```
+
+```sql tab="SQL"
 do $$
 declare
   code text;

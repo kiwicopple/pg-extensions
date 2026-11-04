@@ -1,6 +1,6 @@
 # Overview
 
-`pg_permissions` is an authorization store and check engine for Postgres. It stores application roles, sharing relationships and policies, with SQL functions and a JavaScript client to manage them and ask who can do what. Your backend can use those answers to authorize requests, without enabling row level security (RLS).
+`pg_permissions` is an authorization store and check engine for Postgres. It stores roles, sharing relationships and policies alongside your application data. A backend can check access with the JavaScript client or SQL and enforce the decision in a request handler.
 
 If you already use Postgres, it is an alternative to running a separate authorization service. A document app can store its roles and shares here, check whether a user can edit a document, and allow or reject the operation in its backend. You can also call the functions from RLS policies if you want Postgres to enforce access on tables.
 
@@ -54,7 +54,7 @@ A **Cedar policy** defines an authorization rule. A **Postgres RLS policy** enfo
 
 ## Where it fits in your application
 
-Your authentication system establishes who is making a request. A trusted backend assigns roles, writes sharing relationships, or manages Cedar policies and entities, using SQL or the JavaScript client. It checks access before returning data or carrying out an operation, and handles a denied result or an error.
+Your authentication system establishes who is making a request. A Node backend uses `createServerClient(pool)` to manage permissions and `permissions.as({ id: user.id })` to check the signed-in user’s access. A trusted backend assigns roles, writes sharing relationships, or manages Cedar policies and entities, using SQL or the JavaScript client. It checks access before returning data or carrying out an operation, and handles a denied result or an error.
 
 A permission check returns a decision; it does not block a later query by itself. Browser checks can guide the interface, but a trusted backend or database policy must enforce access. If you choose RLS, Postgres applies the policies to table queries. A standalone check does not include extra rules you put only in RLS. See [Check access in your application](integrations/checks.md).
 

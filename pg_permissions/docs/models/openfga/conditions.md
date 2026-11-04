@@ -20,11 +20,7 @@ type document
   relations
     define viewer: [user, user with non_expired_grant, user with in_office_network]
 
-condition non_expired_grant(
-  current_time: timestamp,
-  grant_time: timestamp,
-  grant_duration: duration
-) {
+condition non_expired_grant(current_time: timestamp, grant_time: timestamp, grant_duration: duration) {
   current_time < grant_time + grant_duration
 }
 
@@ -76,21 +72,7 @@ This fragment shows the `conditions` key:
 
 As OpenFGA does, the extension parses and type-checks expressions when you write a model, so invalid expressions fail before use. CEL has no implicit conversions, so a comparison of a timestamp with a string is not valid:
 
-```sql tab="SQL"
-\set model `cat model.json`
-select permissions.fga_write_authorization_model(
-  model => jsonb_set(
-    :'model'::jsonb,
-    '{conditions,non_expired_grant,expression}',
-    '"current_time < \"2030-01-01\""'
-  )
-);
--- ERROR:  failed to compile expression on condition 'non_expired_grant' - found no matching overload for '_<_' applied to '(timestamp, string)' (column 14)
--- DETAIL:  openfga:2056 invalid_authorization_model
--- HINT:  CEL has no implicit conversions: both operands of an operator need the same type ...
-```
-
-```ts tab="JavaScript"
+```js tab="JavaScript"
 import { readFileSync } from 'node:fs'
 
 const json = readFileSync('model.json', 'utf8')
@@ -107,14 +89,29 @@ const refused =
 //   openfga:2056 invalid_authorization_model
 ```
 
+```sql tab="SQL"
+\set model `cat model.json`
+select permissions.fga_write_authorization_model(
+  model => jsonb_set(
+    :'model'::jsonb,
+    '{conditions,non_expired_grant,expression}',
+    '"current_time < \"2030-01-01\""'
+  )
+);
+-- ERROR:  failed to compile expression on condition 'non_expired_grant' - found no matching overload for '_<_' applied to '(timestamp, string)' (column 14)
+-- DETAIL:  openfga:2056 invalid_authorization_model
+-- HINT:  CEL has no implicit conversions: both operands of an operator need the same type ...
+```
+
 Write the model:
+
+```js tab="JavaScript"
+const savedModel = await permissions.fga.admin.writeAuthorizationModel(model)
+if (savedModel.error) throw savedModel.error
+```
 
 ```sql tab="SQL"
 select permissions.fga_write_authorization_model(model => :'model');
-```
-
-```ts tab="JavaScript"
-await permissions.fga.admin.writeAuthorizationModel(model)
 ```
 
 ## Write context

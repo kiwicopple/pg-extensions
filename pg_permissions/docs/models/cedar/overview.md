@@ -4,7 +4,7 @@ Use Cedar to express authorization rules as policy text. A policy can check who 
 
 Store policies and entities here and call the checks from your backend. Cedar policies work without Postgres RLS; RLS is an optional way to apply their decisions to table queries.
 
-Cedar is included in `pg_permissions` 0.1.0. [Install or upgrade](../../install.md) before starting. An admin manages policies and entities; application clients check access for the current subject.
+[Install the extension](../../install.md) before starting the walkthrough. Use an admin connection to manage policies and entities.
 
 The walkthrough builds one example across four pages. Follow them in order:
 
@@ -51,11 +51,9 @@ Request facts such as MFA status are available through the admin check's `contex
 
 ## Use from JavaScript
 
-An example that has a JavaScript equivalent shows it next to the SQL. The JavaScript examples use [the JavaScript client](../../integrations/javascript.md). Install the client first.
+[Install the JavaScript client](../../integrations/javascript.md), then create a server client with a database role that can manage permissions. Keep the connection string on your backend.
 
-The admin calls use the server client:
-
-```ts
+```js
 import pg from 'pg'
 import { createServerClient } from 'permissions'
 
@@ -65,25 +63,20 @@ const pool = new pg.Pool({
 const permissions = createServerClient(pool)
 ```
 
-The JavaScript examples throughout this walkthrough use `permissions`. Some things differ from SQL:
+Store policies through `permissions.cedar.admin`. Pass Cedar text as a string and entity IDs as objects such as `{ type: 'Document', id: 'q3' }`. The client escapes the ID for you. It also accepts Cedar text such as `'Document::"q3"'`.
 
-- By default, each method returns `{ data, error }` rather than throwing for a database error.
-- Policies are strings, and entities, context and requests are JavaScript objects. You do not write JSON strings.
-- Names with an underscore are in camel case: `policyId` for `policy_id`, `resourceAttrs` for `resource_attrs`.
-- A uid is Cedar text (`'Document::"q3"'`) or an object (`{ type: 'Document', id: 'q3' }`). The client escapes an object. To build the text yourself, use `uid(type, id)`.
-- A check for a user runs through `as({ id })`. It sets the current subject for each call.
-- Admin methods are in `permissions.cedar.admin`. Methods for the current subject are in `permissions.cedar`.
+For a check in your backend, use `permissions.as({ id }).cedar.isAuthorized({ action, resource })` with the user ID from your verified session. Each method returns `{ data, error }` by default. Handle `error` before acting on `data`.
 
 ## How the functions map to Cedar
 
-| Cedar | pg_permissions |
-| --- | --- |
-| A policy in a policy set | `cedar_put_policy`, `cedar_delete_policy`, `cedar_policies` |
-| A policy template and its links | `cedar_put_template`, `cedar_link_template`, `cedar_delete_template`, `cedar_templates` |
-| The entities | `cedar_put_entities`, `cedar_delete_entities`, `cedar_read_entities` |
-| `isAuthorized` | `cedar_is_authorized` |
-| Not in Cedar: a check for the current subject | `cedar_is_authorized_current`, `cedar_list_resources_current` |
-| Not in Cedar: a safe uid from a row id | `cedar_uid` |
+| Operation | JavaScript (`permissions.cedar`) | SQL |
+| --- | --- | --- |
+| Manage policies | `admin.putPolicy`, `admin.deletePolicy`, `admin.policies` | `cedar_put_policy`, `cedar_delete_policy`, `cedar_policies` |
+| Manage templates and links | `admin.putTemplate`, `admin.linkTemplate`, `admin.deleteTemplate`, `admin.templates` | `cedar_put_template`, `cedar_link_template`, `cedar_delete_template`, `cedar_templates` |
+| Manage entities | `admin.putEntities`, `admin.deleteEntities`, `admin.readEntities` | `cedar_put_entities`, `cedar_delete_entities`, `cedar_read_entities` |
+| Inspect a decision for an explicit principal | `admin.isAuthorized` | `cedar_is_authorized` |
+| Check or list access for the current subject | `isAuthorized`, `listResources` | `cedar_is_authorized_current`, `cedar_list_resources_current` |
+| Build a Cedar UID | `uid(type, id)`, imported from `permissions/cedar` | `cedar_uid` |
 
 The extension keeps one policy set and one entity store in each database. There is no store id. A policy id names a policy. [Write policies](policies.md) explains the ids.
 
@@ -91,7 +84,7 @@ The policies of a database can name entities of any type. The extension does not
 
 ## The subject is the principal
 
-For a check with `cedar_is_authorized_current`, the principal is the current subject: `current_subject_type()` and `current_subject_id()`, written as `type::"id"`. The default type is `user`, so the principal is `user::"alice"`. Write the policies with the same type. To use `User`, set `permissions.subject_type` to `User`. A policy can also use `principal is user`.
+For a check with `cedar_is_authorized_current`, the principal is the current subject: `current_subject_type()` and `current_subject_id()`, written as `type::"id"`. The default type is `user`, so the principal is `user::"alice"`. Write the policies with the same type. For a principal of type `User`, pass `{ id: 'alice', type: 'User' }` to `permissions.as` or set `permissions.subject_type` in the SQL transaction. A policy can also use `principal is user`.
 
 If there is no current subject, current-subject checks return `false` and lists are empty. See [Identity and request context](../../integrations/identity.md).
 

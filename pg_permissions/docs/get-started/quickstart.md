@@ -1,16 +1,40 @@
 # Quickstart: check permissions
 
-Give Alice permission to read Acme's documents, then check access for Alice and Bob. This example uses tenant-scoped RBAC as an authorization store and check engine. The first checks need no application table or RLS policy. An optional section shows how to enforce the same permission on a table.
+Give Alice permission to read documents in Acme. Then ask the same question about Alice and Bob. The only data you need are a role and an assignment.
 
 ## Before you start
 
-[Install the extension](../install.md) in an empty test database. Run the SQL blocks in order in psql as the extension owner. Only the optional RLS example needs a connection that can create database roles and switch to them.
+[Install the extension](../install.md) in an empty test database. Work through the JavaScript examples in a single Node.js module (for example, `quickstart.mjs`), or select SQL and run those examples in one psql session. Use the extension owner for this walkthrough so you can create the role and assignment.
+
+For JavaScript, set `DATABASE_URL` to your test database's connection string and install the client and driver:
+
+```sh
+npm install permissions pg
+```
 
 ## Create a permission and assign it
 
-Create a role in the extension and give it to Alice in the `acme` scope:
+Create a `viewer` role with permission to read documents. Assign Alice that role in the `acme` scope.
 
-```sql
+```js tab="JavaScript"
+import pg from 'pg'
+import { createServerClient } from 'permissions'
+
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL })
+const permissions = createServerClient(pool, { throwOnError: true })
+
+await permissions.rbac.admin.createRole({
+  role: 'viewer',
+  permissions: ['documents.read'],
+})
+await permissions.rbac.admin.assignRole({
+  userId: 'alice',
+  role: 'viewer',
+  scope: 'acme',
+})
+```
+
+```sql tab="SQL"
 select permissions.rbac_create_role(
   role => 'viewer',
   permissions => '{documents.read}'
@@ -22,13 +46,21 @@ select permissions.rbac_assign_role(
 );
 ```
 
-The application permission role `viewer` is separate from a Postgres database role. The database role controls which tables and functions a connection can use.
+The `viewer` role belongs to your application. Postgres database roles control which connections may run the admin functions. In the JavaScript example, `throwOnError` stops the script if either write fails.
 
 ## Check Alice's permission
 
-Set the subject inside the same transaction as the check. The `true` argument makes the setting transaction-local, so it cannot leak to another request through a pooled connection.
+Ask whether Alice can read documents in Acme. On the server, `as({ id })` sets the subject for one client call in its own transaction. In SQL, set the subject inside the same transaction as the check.
 
-```sql
+```js tab="JavaScript"
+const { data: aliceCanRead } = await permissions
+  .as({ id: 'alice' })
+  .rbac.hasPermission({ permission: 'documents.read', scope: 'acme' })
+
+console.log(aliceCanRead) // true
+```
+
+```sql tab="SQL"
 begin;
 select set_config('permissions.subject_id', 'alice', true);
 select permissions.rbac_has_permission(
@@ -41,7 +73,18 @@ commit;
 
 ## Check Bob's permission
 
-```sql
+Run the same check for Bob. He has no role in Acme.
+
+```js tab="JavaScript"
+const { data: bobCanRead } = await permissions
+  .as({ id: 'bob' })
+  .rbac.hasPermission({ permission: 'documents.read', scope: 'acme' })
+
+console.log(bobCanRead) // false
+await pool.end()
+```
+
+```sql tab="SQL"
 begin;
 select set_config('permissions.subject_id', 'bob', true);
 select permissions.rbac_has_permission(
@@ -52,15 +95,13 @@ select permissions.rbac_has_permission(
 commit;
 ```
 
-Bob has no assignment, so his check returns `false`. The subject setting ends with each transaction. Your backend can use these results to allow or reject a request. The function returns a decision; it does not block an application query by itself.
+If you saved the JavaScript blocks to `quickstart.mjs`, run `node quickstart.mjs`. The two checks print `true` and `false`.
 
 ## Connect your application
 
-A trusted request handler sets the subject from the authenticated user, runs the check, and proceeds only if access is allowed. Do not let an untrusted caller choose another user's ID. [Check access in your application](../integrations/checks.md) shows the backend flow, including JavaScript and error handling.
+In a request handler, take the user ID from your authentication system and the organization from the requested resource. Check that user’s permission before fetching or changing protected data. Your server can use the decision directly. [Check access in your application](../integrations/checks.md) shows the handler and how to handle errors.
 
-PostgREST and Supabase supply identity through JWT claims; direct Postgres connections use transaction-local settings. [Identity and request context](../integrations/identity.md) explains both paths.
-
-You can stop here and use checks in your application. For JavaScript, follow [client setup](../integrations/javascript.md), then use the SQL/JavaScript examples in the [RBAC guide](../models/rbac/overview.md).
+A PostgREST or Supabase browser client gets the subject from the signed-in user's JWT. See [JavaScript setup](../integrations/javascript.md) and [Identity and request context](../integrations/identity.md).
 
 ## Optional: enforce access on a table
 

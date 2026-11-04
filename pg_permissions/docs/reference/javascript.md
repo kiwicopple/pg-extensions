@@ -6,7 +6,7 @@ Create a client using [JavaScript setup](../integrations/javascript.md). The [RB
 
 ## Results and errors
 
-Each method returns a `Promise` containing `{ data, error }`. Exactly one of the two is `null`. A method does not throw for a database error. It returns the error in `error`.
+Methods return a `Promise` containing `{ data, error }`. On success, `error` is `null`. A write that returns no data also sets `data` to `null`. By default, a database error sets `data` to `null` and fills `error`.
 
 To throw the error, pass `throwOnError: true` in the options of `createClient` or `createServerClient`:
 
@@ -60,7 +60,7 @@ if (isFgaError(error, 2000)) {
 
 ## Methods
 
-The tables show the SQL function that each method calls, and the type of `data`. For an example of each method, see [RBAC](../models/rbac/overview.md), [The OpenFGA model](../models/openfga/overview.md) and [Policies (Cedar)](../models/cedar/overview.md).
+The tables show the SQL function that each method calls, and the type of `data`. For examples of each call, see the [RBAC](rbac.md), [OpenFGA](openfga.md), [Cedar](cedar.md) and [shared API](shared.md) references.
 
 ### Client methods
 
@@ -81,7 +81,7 @@ These methods answer for the current subject. They exist on both entry points. O
 
 ### Admin methods
 
-These methods exist only on `createServerClient`, and on a standalone client with an SQL transport. They take an explicit subject.
+These methods exist only on `createServerClient`, and on a standalone client with an SQL transport. They manage permission data or answer questions about a subject you specify.
 
 | Method | SQL function | `data` |
 | --- | --- | --- |

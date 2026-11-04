@@ -41,9 +41,16 @@ condition non_expired_grant(
 }
 ```
 
-Write the model as JSON. This JSON is the output of `fga model transform` for the model above:
+Both APIs accept the JSON representation of this model. To load it from JavaScript, save the DSL above as `model.fga` and run `fga model transform --file model.fga > model.json`.
 
-```sql
+```js tab="JavaScript"
+import { readFile } from 'node:fs/promises'
+
+const model = JSON.parse(await readFile('model.json', 'utf8'))
+await permissions.fga.admin.writeAuthorizationModel(model)
+```
+
+```sql tab="SQL"
 select permissions.fga_write_authorization_model(
   model => $json$
     {
@@ -174,7 +181,43 @@ grant select, update on public.documents to authenticated;
 
 Now add the roles and the tuples. The IDs in tuples are text. A UUID goes in as `'document:' || id`:
 
-```sql
+```js tab="JavaScript"
+const ids = {
+  alice: '11111111-1111-1111-1111-111111111111',
+  bob: '22222222-2222-2222-2222-222222222222',
+  carol: '33333333-3333-3333-3333-333333333333',
+  dave: '44444444-4444-4444-4444-444444444444',
+  eng: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+  acme: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+  readme: 'd0000000-0000-0000-0000-000000000002',
+  notes: 'd0000000-0000-0000-0000-000000000003',
+  draft: 'd0000000-0000-0000-0000-000000000004',
+  diary: 'd0000000-0000-0000-0000-000000000005',
+}
+
+for (const [userId, role] of [
+  [ids.alice, 'viewer'], [ids.carol, 'editor'], [ids.dave, 'viewer'],
+]) {
+  await permissions.rbac.admin.assignRole({ userId, role, scope: ids.acme })
+}
+
+const team = 'team:' + ids.eng
+const bobUser = 'user:' + ids.bob
+const daveUser = 'user:' + ids.dave
+await permissions.fga.admin.write({
+  writes: [
+    { user: bobUser, relation: 'member', object: team },
+    { user: team + '#member', relation: 'viewer', object: 'document:' + ids.notes },
+    { user: team + '#member', relation: 'viewer', object: 'document:' + ids.draft },
+    { user: bobUser, relation: 'editor', object: 'document:' + ids.readme },
+    { user: daveUser, relation: 'owner', object: 'document:' + ids.diary },
+    { user: daveUser, relation: 'viewer', object: 'document:' + ids.notes },
+    { user: daveUser, relation: 'banned', object: 'org:' + ids.acme },
+  ],
+})
+```
+
+```sql tab="SQL"
 -- RBAC: Alice reads acme, Carol edits acme, Dave reads acme
 select permissions.rbac_assign_role(
   user_id => :'alice',
@@ -247,7 +290,22 @@ Clients and policies cannot call `fga_check`, because it takes the user as an ar
 
 The [function reference](../reference.md) has the full signatures. This example runs as Bob:
 
-```sql
+```js tab="JavaScript"
+const bob = permissions.as({ id: ids.bob })
+const { data: canEdit } = await bob.fga.check({
+  relation: 'editor', object: 'document:' + ids.readme,
+})
+// true
+const { data: documentIds } = await bob.fga.listObjects({
+  type: 'document', relation: 'viewer', idsOnly: true,
+})
+const { data: objects } = await bob.fga.listObjects({
+  type: 'document', relation: 'viewer',
+})
+// documentIds contains the three UUIDs. objects contains the same IDs prefixed with 'document:'.
+```
+
+```sql tab="SQL"
 begin;
 select set_config('permissions.subject_id', :'bob', true);
 select permissions.fga_check_current(
@@ -389,9 +447,28 @@ select null::uuid <> all (array[:'acme'::uuid]);   -- null, not true
 
 Cedar fits into the same pattern. A list policy is another permissive arm, and a Cedar check can be a restrictive gate. This section is separate. The next pages do not use it. Run it in a copy of the database, or after you finish the walkthrough.
 
-Cedar holds its own data (see [Policies (Cedar)](../models/cedar/overview.md)). A policy of Cedar does not see the roles of RBAC or the tuples of OpenFGA. The two Cedar policies below make the group `auditors` read every document, and they let a Cedar forbid block a group of users everywhere:
+Cedar holds its own data (see [Policies (Cedar)](../models/cedar/overview.md)). A policy of Cedar does not see the roles of RBAC or the tuples of OpenFGA. The three Cedar policies below let the group `auditors` read every document, and they let a Cedar forbid block a group of users everywhere:
 
-```sql
+```js tab="JavaScript"
+await permissions.cedar.admin.putPolicy({
+  policyId: 'auditors-view',
+  policy: `permit (
+    principal in Team::"auditors", action == Action::"view", resource is Document
+  );`,
+})
+await permissions.cedar.admin.putPolicy({
+  policyId: 'access-open',
+  policy: 'permit (principal, action == Action::"access", resource);',
+})
+await permissions.cedar.admin.putPolicy({
+  policyId: 'suspended',
+  policy: `forbid (
+    principal in Team::"suspended", action == Action::"access", resource
+  );`,
+})
+```
+
+```sql tab="SQL"
 select permissions.cedar_put_policy(
   policy_id => 'auditors-view',
   policy => 'permit (
@@ -420,7 +497,24 @@ select permissions.cedar_put_policy(
 
 Store the documents as entities, for the list, and put Erin in `auditors` and Dave in `suspended`. The ids of the entities are the ids of the rows:
 
-```sql
+```js tab="JavaScript"
+const { rows: documents } = await pool.query('select id from public.documents')
+await permissions.cedar.admin.putEntities(
+  documents.map(({ id }) => ({ uid: { type: 'Document', id } })),
+)
+await permissions.cedar.admin.putEntities([
+  {
+    uid: { type: 'user', id: '55555555-5555-5555-5555-555555555555' },
+    parents: [{ type: 'Team', id: 'auditors' }],
+  },
+  {
+    uid: { type: 'user', id: ids.dave },
+    parents: [{ type: 'Team', id: 'suspended' }],
+  },
+])
+```
+
+```sql tab="SQL"
 select permissions.cedar_put_entities(
   entities => (
     select jsonb_agg(

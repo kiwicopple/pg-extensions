@@ -2,7 +2,7 @@
 
 Use the `permissions` package to call the extension from Node, browsers, Deno, or Bun. A server connects over SQL; a browser or edge function uses PostgREST.
 
-Install `pg_permissions` in the database first. You can use the client as your backend's authorization API without creating RLS policies. [Check access in your application](checks.md) shows how to enforce the returned decision. Model guides show SQL and JavaScript together. See the [client reference](../reference/javascript.md) for methods, return values, and errors.
+[Install the extension](../install.md) in your database first. You can use the client as your backend's authorization API without creating RLS policies. [Check access in your application](checks.md) shows how to enforce the returned decision. The model guides use the same client and include equivalent SQL calls. See the [client reference](../reference/javascript.md) for methods, return values, and errors.
 
 ## Install
 
@@ -10,7 +10,7 @@ Install `pg_permissions` in the database first. You can use the client as your b
 npm install permissions
 ```
 
-`permissions` 0.3.0 adds Cedar and needs `pg_permissions` 0.1.0 for Cedar. RBAC and OpenFGA work with `pg_permissions` 0.0.1 or 0.1.0.
+For a Node backend using node-postgres, also install the `pg` driver (`npm install pg`).
 
 ## Entry points
 
@@ -27,7 +27,7 @@ Admin calls never go over HTTP. A browser does not need a service key. Do not se
 
 On a server, create the client from a pool:
 
-```ts
+```js
 import pg from 'pg'
 import { createServerClient } from 'permissions'
 
@@ -37,17 +37,13 @@ const pool = new pg.Pool({
 const permissions = createServerClient(pool)
 ```
 
-In a browser, create the client with the URL and the anon key of the Supabase project. The option `accessToken` returns the JWT of the signed-in user:
+In a browser, create the client with the URL and the anon key of the Supabase project. Supply your application’s `getAccessToken` callback. It returns the signed-in user’s current JWT, or `null` when signed out.
 
-```ts
+```js
 import { createClient } from 'permissions'
 
 const SUPABASE_URL = 'https://your-project.supabase.co'
 const SUPABASE_ANON_KEY = 'your-anon-key'
-
-async function getAccessToken(): Promise<string> {
-  return 'the-jwt-of-the-signed-in-user'
-}
 
 const permissions = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   accessToken: getAccessToken,
@@ -58,7 +54,7 @@ Before you use `createClient`, add `permissions` to **Exposed schemas** in the S
 
 For plain PostgREST, add `permissions` to `db-schemas`, and pass the option `restUrl`. The client then sends requests to `<restUrl>/rpc/<function>`. It does not add `/rest/v1`.
 
-```ts
+```js
 import { createClient } from 'permissions'
 
 const POSTGREST_URL = 'http://localhost:3000'
@@ -80,42 +76,38 @@ On a server, the connection has no subject. The call `as(subject)` returns a cli
 | --- | --- |
 | `as({ id, type?, role? })` | Runs each call in a transaction. The transaction sets `permissions.subject_id` to `id`, and `permissions.subject_type` to `type`. It clears `request.jwt.claims`. With `role`, it also runs `set local role`. |
 
-```ts
-import pg from 'pg'
-import { createServerClient } from 'permissions'
-
-const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL,
+```js
+const alice = permissions.as({ id: 'alice' })
+const { data: canRead, error } = await alice.rbac.hasPermission({
+  permission: 'documents.read',
+  scope: 'acme',
 })
-const permissions = createServerClient(pool)
-
-// Run each call with the privileges of a signed-in user.
-const alice = permissions.as({ id: 'alice', role: 'authenticated' })
+if (error) throw error
 ```
 
-The default `type` is `'user'`. The RBAC functions use the type `user` only. The Cedar principal is the type and the id, for example `user::"alice"`. See [RBAC](identity.md#subject-type).
+If your backend should also switch database roles, pass `role`. The role must exist, and the connection must be allowed to assume it.
+
+The default `type` is `'user'`. The RBAC functions use the type `user` only. The Cedar principal is the type and the id, for example `user::"alice"`. See [subject types](identity.md#subject-type).
 
 A browser client has no `as()`. The subject is the user of the access token.
 
 ## Get the current subject
 
-`currentSubjectId()` calls `permissions.current_subject_id()`. `currentSubjectType()` calls `permissions.current_subject_type()`. These methods are methods of the client itself. They are not in the `rbac` namespace or the `fga` namespace.
+Use `currentSubjectId()` and `currentSubjectType()` to inspect the identity on a client. A subject client reports the identity passed to `as()`. A signed-in browser client reports the identity from its JWT.
 
-They exist on `createClient`, on `createServerClient` and on the client that `as()` returns. `currentSubjectId()` returns `null` when there is no subject. A server client without `as()` has no subject. A browser client with the anon key has no subject.
-
-```ts
-import pg from 'pg'
-import { createServerClient } from 'permissions'
-
-const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL,
-})
-const permissions = createServerClient(pool)
-
+```js tab="JavaScript"
 const team = permissions.as({ id: 'eng', type: 'team' })
-
 const { data: id } = await team.currentSubjectId() // 'eng'
 const { data: type } = await team.currentSubjectType() // 'team'
+```
+
+```sql tab="SQL"
+begin;
+select set_config('permissions.subject_id', 'eng', true);
+select set_config('permissions.subject_type', 'team', true);
+select permissions.current_subject_id();    -- eng
+select permissions.current_subject_type();  -- team
+commit;
 ```
 
 ## Use from a CDN
@@ -142,7 +134,4 @@ The package has a UMD bundle for a `<script>` tag. It sets the global `permissio
 
 ## Compatibility
 
-| `permissions` | `pg_permissions` | Runtime |
-| --- | --- | --- |
-| 0.3.x | 0.1.0 (Cedar); 0.0.1 or 0.1.0 (RBAC, OpenFGA) | Node 20 or later. Browsers, Deno and Bun that have `fetch`. |
-| 0.2.x (RBAC and OpenFGA) | 0.0.1 or 0.1.0 | Node 20 or later. Browsers, Deno and Bun that have `fetch`. |
+Use Node 20 or later, or a browser, Deno or Bun with `fetch`. The current client works with all three permission models in `pg_permissions` 0.1.0. For earlier client versions, see the [package changelog](../../js/CHANGELOG.md).

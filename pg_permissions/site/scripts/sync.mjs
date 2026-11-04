@@ -17,6 +17,7 @@
 
 import fs from 'node:fs';
 import { pages } from '../navigation.mjs';
+import { convertTabs } from './code-tabs.mjs';
 import { RESEARCH_URL, researchSourceUrl } from '../research-links.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -145,86 +146,6 @@ function rewriteLinks(body, srcFile, fromRoute, markdown = false) {
 }
 
 /**
- * Tab groups. In the source, two or more adjacent fenced code blocks (only blank lines between them),
- * each with a tab="<Label>" meta, are one group:
- *
- *   ```sql tab="SQL"          ```ts tab="JavaScript"
- *
- * On GitHub they render as consecutive code blocks. On the site each group becomes
- * <Tabs syncKey="lang"> with one <TabItem label="..."> for each block, and the tab= meta is removed.
- * Returns the converted body and the number of groups. A tab= meta on a block that is alone is removed
- * with a warning.
- */
-const TAB_LABELS = ['SQL', 'JavaScript'];
-
-function convertTabs(body, srcFile) {
-	const lines = body.split('\n');
-	// 1. find the fenced blocks
-	const blocks = [];
-	for (let i = 0; i < lines.length; i++) {
-		const m = lines[i].match(/^(\s*)(`{3,}|~{3,})\s*(\S*)\s*(.*?)\s*$/);
-		if (!m) continue;
-		let end = -1;
-		for (let j = i + 1; j < lines.length; j++) {
-			const c = lines[j].match(/^\s*(`{3,}|~{3,})\s*$/);
-			if (c && c[1][0] === m[2][0] && c[1].length >= m[2].length) {
-				end = j;
-				break;
-			}
-		}
-		if (end < 0) break; // unclosed fence: leave the rest alone
-		const tab = m[4].match(/\btab="([^"]*)"/);
-		blocks.push({
-			start: i,
-			end,
-			indent: m[1],
-			fence: m[2],
-			lang: m[3],
-			meta: m[4].replace(/\btab="[^"]*"/, '').trim(),
-			tab: tab ? tab[1] : null,
-		});
-		i = end;
-	}
-	// 2. group adjacent tab blocks
-	const groups = [];
-	let cur = [];
-	const flush = () => {
-		if (cur.length) groups.push(cur);
-		cur = [];
-	};
-	for (const b of blocks) {
-		if (b.tab === null) {
-			flush();
-			continue;
-		}
-		const prev = cur[cur.length - 1];
-		const gap = prev ? lines.slice(prev.end + 1, b.start) : [];
-		if (prev && !gap.every((l) => l.trim() === '')) flush();
-		cur.push(b);
-	}
-	flush();
-	// 3. rewrite, from the end so that the indexes stay valid
-	let n = 0;
-	for (const g of groups.reverse()) {
-		const fenceLine = (b) => `${b.indent}${b.fence}${b.lang}${b.meta ? ' ' + b.meta : ''}`;
-		if (g.length < 2) {
-			warn(`${srcFile}: line ${g[0].start + 1}: tab="${g[0].tab}" on a block that has no neighbor, the meta is removed`);
-			lines[g[0].start] = fenceLine(g[0]);
-			continue;
-		}
-		for (const b of g) if (!TAB_LABELS.includes(b.tab)) warn(`${srcFile}: line ${b.start + 1}: tab label "${b.tab}" is not one of ${TAB_LABELS.join(', ')}`);
-		const out = ['<Tabs syncKey="lang">'];
-		g.forEach((b, k) => {
-			out.push(`<TabItem label="${b.tab}">`, '', fenceLine(b), ...lines.slice(b.start + 1, b.end + 1), '', '</TabItem>');
-			if (k === g.length - 1) out.push('</Tabs>');
-		});
-		lines.splice(g[0].start, g[g.length - 1].end - g[0].start + 1, ...out);
-		n++;
-	}
-	return { body: lines.join('\n'), groups: n };
-}
-
-/**
  * Escape what MDX reads as code or markup, in prose only: a brace starts an expression and a `<` starts a tag.
  * Fenced code and inline code spans are left alone.
  */
@@ -330,7 +251,7 @@ function syncPlainMarkdown() {
 		'# pg_permissions', '',
 		'> Authorization store and check engine in Postgres: RBAC, OpenFGA relationships and Cedar policies. Call from your backend or optionally enforce access with RLS.', '',
 		'Use current guides and reference for implementation. Research records include historical designs and superseded plans.',
-		'The extension has three models: RBAC, OpenFGA and Cedar. SQL and JavaScript examples are both included in Markdown.', '',
+		'Guides show JavaScript examples first and include the equivalent SQL where available. Markdown exports preserve every language example.', '',
 		'## Guides and reference', '',
 	];
 	const groups = { current: [], contributing: [] };
