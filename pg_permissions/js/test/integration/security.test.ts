@@ -80,6 +80,54 @@ describe('concurrent Cedar template changes', () => {
     }
   })
 
+  it.each([
+    ['delete link', 'read committed'], ['delete subject', 'read committed'], ['move link', 'read committed'],
+    ['delete link', 'repeatable read'], ['move link', 'serializable'],
+  ] as const)(
+    'refresh preserves a concurrent %s at %s', async (operation, isolation) => {
+      await service.query("select permissions.cedar_link_template('link','race','user::\"alice\"')")
+      await service.query('select permissions.cedar_put_template($1, $2)', ['replacement', forbid])
+      const a = await service.connect()
+      const b = await service.connect()
+      let pending: Promise<unknown> | undefined
+      let settled = false
+      try {
+        await a.query('begin')
+        await b.query(`begin isolation level ${isolation}; set local statement_timeout = '10s'`)
+        const { rows: [backend] } = await b.query('select pg_backend_pid() as pid')
+        if (operation === 'delete link') await a.query("select permissions.cedar_delete_policy('link')")
+        if (operation === 'delete subject') await a.query("select permissions.delete_subject('user', 'alice')")
+        if (operation === 'move link') await a.query("select permissions.cedar_link_template('link','replacement','user::\"alice\"')")
+        pending = b.query('select permissions.cedar_put_template($1, $2)', ['race', permit])
+          .then(() => null, (error: unknown) => error).finally(() => { settled = true })
+        // Observe a real lock wait, and always release the blocker on failure.
+        const blocked = await waitForBlock(backend.pid, () => settled)
+        await a.query('commit')
+        const error = await pending
+        expect(blocked).toBe(true)
+        if (isolation === 'read committed') {
+          expect(error).toBeNull()
+          await b.query('commit')
+        } else {
+          expect(error).toMatchObject({ code: '40001' })
+          await b.query('rollback')
+          await b.query('select permissions.cedar_put_template($1, $2)', ['race', permit])
+        }
+        const { rows } = await service.query("select template_id from permissions.cedar_policies() where policy_id='link'")
+        expect(rows).toEqual(operation === 'move link' ? [{ template_id: 'replacement' }] : [])
+        const { rows: [after] } = await service.query(`select permissions.cedar_is_authorized(
+          'user::"alice"', 'Action::"view"', 'Doc::"secret"') ->> 'decision' as decision`)
+        expect(after.decision).toBe('deny')
+      } finally {
+        await a.query('rollback')
+        await pending
+        await b.query('rollback')
+        a.release()
+        b.release()
+      }
+    },
+  )
+
   it('validates replacement slots after waiting for an in-flight link', async () => {
     const a = await service.connect()
     const b = await service.connect()

@@ -153,7 +153,7 @@ const { data: templates } = await permissions.cedar.admin.templates()
 
 Updating a template also updates its linked policies in the same transaction. The replacement must remain compatible with the slots filled by those links; otherwise the function raises `cedar:template_in_use` and names the affected links.
 
-Linking and replacing the same template coordinate through row locks. A concurrent link cannot retain the old rule after a replacement commits. Keep these transactions short, and retry the whole transaction if Postgres reports a serialization failure (`40001`) or deadlock (`40P01`).
+Linking and replacing the same template coordinate through row locks. A concurrent link cannot retain the old rule after a replacement commits. Refresh also locks its linked policies, so it cannot recreate a link that another transaction deleted or move a reassigned link back to its old template. Keep these transactions short, and retry the whole transaction if Postgres reports a serialization failure (`40001`) or deadlock (`40P01`).
 
 You cannot delete a template while it has links. Delete the links first with `cedar_delete_policy`. The hint of the error names up to five of them:
 

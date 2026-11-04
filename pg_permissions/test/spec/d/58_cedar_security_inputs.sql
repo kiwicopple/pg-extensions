@@ -7,7 +7,7 @@ select permissions.cedar_put_policy('open',
 select permissions.cedar_put_policy('closed',
     'forbid (principal, action == Action::"closed", resource);');
 
-select tap.plan(7);
+select tap.plan(8);
 set role authenticated;
 select set_config('permissions.subject_id', 'alice', false);
 select tap.is(permissions.cedar_is_authorized_current('Action::"typed"', 'Doc::"secret"',
@@ -36,5 +36,7 @@ select tap.is(permissions.cedar_is_authorized_current('Action::"open"', 'Doc::"s
     'valid sets and records still allow');
 select tap.is(permissions.cedar_is_authorized_current('Action::"closed"', 'Doc::"secret"',
     '{"owner":{"__entity":{"type":"Admin"}}}'), false, 'malformed attributes never override a forbid');
+select tap.is(permissions.cedar_is_authorized_current('Action::"open"', permissions.cedar_uid('Doc','a' || chr(30)),
+    '{"x":null}'), false, 'the fallback for ids containing the cache separator rejects the same malformed attributes');
 reset role;
 select * from tap.finish();

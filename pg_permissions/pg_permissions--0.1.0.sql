@@ -207,7 +207,8 @@ language plpgsql immutable
 as $$
 declare
     m text[];
-    t text;
+    t timestamp;
+    offset_minutes int;
 begin
     m := regexp_match(s, '^([0-9]{4}-[0-9]{2}-[0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:[.,]([0-9]+))?(Z|[+-]([0-9]{2}):([0-9]{2}))$');
     if m is null or m[2]::int > 23 or m[3]::int > 59 or m[4]::int > 59
@@ -215,9 +216,15 @@ begin
        or not pg_input_is_valid(m[1], 'date') or m[1] < '0001' then
         return null;
     end if;
-    t := m[1] || ' ' || m[2] || ':' || m[3] || ':' || m[4] || coalesce('.' || left(m[5], 6), '')
-         || case when m[6] = 'Z' then '+00:00' else m[6] end;
-    return to_char(t::timestamptz at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"');
+    -- Apply the numeric offset ourselves: RFC 3339 permits up to 23:59,
+    -- beyond Postgres' timestamptz input limit. Range-check UTC before
+    -- formatting, or year 10000 (and BC dates) break lexical comparison.
+    offset_minutes := coalesce(m[7]::int * 60 + m[8]::int, 0)
+                      * case left(m[6], 1) when '-' then -1 else 1 end;
+    t := (m[1] || ' ' || m[2] || ':' || m[3] || ':' || m[4] || coalesce('.' || left(m[5], 6), ''))::timestamp
+         - make_interval(mins => offset_minutes);
+    if t < timestamp '0001-01-01' or t >= timestamp '10000-01-01' then return null; end if;
+    return to_char(t, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"');
 end;
 $$;
 
@@ -2378,6 +2385,78 @@ as $$
                                          else 'integer overflow' end, c)::permissions.fga_cel_result end
 $$;
 
+-- Translate the supported RE2 syntax before handing it to Postgres ARE.
+-- Never pass through an engine-specific escape or option: its spelling
+-- can be valid in both engines and mean different things. NULL is a CEL
+-- evaluation error, which the caller may absorb with || or &&.
+create function permissions._fga_cel_regex(p text)
+returns text
+language plpgsql immutable strict
+as $$
+declare
+    i int := 1;
+    ch text;
+    result text := '';
+    in_class boolean := false;
+    depth int := 0;
+    dot_all boolean := starts_with(p, '(?s)');
+    bound text;
+begin
+    if octet_length(p) > 4096 or starts_with(p, '***') then return null; end if;
+    if dot_all then i := 5; end if;
+    while i <= char_length(p) loop
+        ch := substr(p, i, 1);
+        if ch = chr(92) then
+            i := i + 1;
+            ch := substr(p, i, 1);
+            if ch = '' then return null;
+            elsif not in_class and ch in ('b','B','z','A') then
+                result := result || chr(92) || case ch when 'b' then 'y' when 'B' then 'Y' when 'z' then 'Z' else 'A' end;
+            elsif ch in ('s','S') then
+                -- RE2's Perl whitespace class excludes vertical tab.
+                if in_class and ch = 'S' then return null; end if;
+                result := result || case when in_class then E' \t\n\f\r'
+                                         when ch = 's' then E'[ \t\n\f\r]' else E'[^ \t\n\f\r]' end;
+            elsif strpos('dDwWntrfav.^$|?*+()[]{}-/' || chr(92), ch) > 0 then
+                result := result || chr(92) || ch;
+            else
+                return null; -- includes backreferences and Postgres-only escapes
+            end if;
+        elsif ch = '[' then
+            -- Nested bracket forms (POSIX classes, collating elements, etc.)
+            -- and literal leading ] are outside this subset.
+            if in_class or substr(p,i+1,1) = ']' or substr(p,i+1,2) = '^]' then return null; end if;
+            in_class := true;
+            result := result || ch;
+        elsif ch = ']' then
+            in_class := false;
+            result := result || ch;
+        elsif not in_class and ch = '.' and not dot_all then
+            result := result || E'[^\n]';
+        elsif not in_class and substr(p,i,2) = '(?' then
+            if substr(p,i,3) <> '(?:' then return null; end if;
+            result := result || '(?:';
+            depth := depth + 1;
+            i := i + 2;
+        elsif not in_class and ch in ('(',')') then
+            depth := depth + case ch when '(' then 1 else -1 end;
+            if depth < 0 then return null; end if;
+            result := result || ch;
+        elsif not in_class and ch = '{' then
+            bound := (regexp_match(substr(p,i), '^\{(?:0|[1-9][0-9]*)(?:,(?:0|[1-9][0-9]*)?)?\}'))[1];
+            if bound is null then result := result || chr(92) || '{';
+            else result := result || bound; i := i + char_length(bound) - 1;
+            end if;
+        else
+            result := result || ch;
+        end if;
+        i := i + 1;
+    end loop;
+    if in_class or depth <> 0 or starts_with(result, '***') then return null; end if;
+    return result;
+end;
+$$;
+
 -- One node of a typed AST (_fga_cel_compile) over an activation (parameter
 -- name -> canonical value; every parameter is present). c is the cost so far.
 create function permissions._fga_cel_eval(n jsonb, act jsonb, c int)
@@ -2402,6 +2481,7 @@ declare
     d2 float8;
     s1 text collate "C";
     s2 text collate "C";
+    pattern text collate "C";
     ts timestamptz;
     lt timestamp;
     i int;
@@ -2654,7 +2734,11 @@ begin
             return row(to_jsonb(right(s1, char_length(s2)) = s2), null::text, c);
         end if;
         begin
-            return row(to_jsonb(s1 ~ s2), null::text, c);
+            pattern := permissions._fga_cel_regex(s2);
+            if pattern is null then
+                return row(null::jsonb, format('invalid or unsupported regular expression ''%s''', s2), c);
+            end if;
+            return row(to_jsonb(s1 ~ pattern), null::text, c);
         exception when invalid_regular_expression then
             return row(null::jsonb, format('invalid regular expression ''%s''', s2), c);
         end;
@@ -2683,7 +2767,7 @@ begin
                 return row(null::jsonb, case k1 when 'div' then 'division by zero' else 'modulus by zero' end, c);
             end if;
             return permissions._fga_cel_intres(case k1 when 'add' then a1 + a2 when 'sub' then a1 - a2 when 'mul' then a1 * a2
-                                                        when 'div' then trunc(a1 / a2) when 'mod' then mod(a1, a2) else -a1 end,
+                                                        when 'div' then div(a1, a2) when 'mod' then mod(a1, a2) else -a1 end,
                                                case k2 when 'du' then 'duration' else k2 end, c);
         elsif k2 = 'dbl' then
             d1 := v1::text::float8;
@@ -2706,7 +2790,7 @@ begin
                 an := v1; v1 := v2; v2 := an;
             end if;
             ts := (v1 #>> '{}')::timestamptz
-                  + ((case when f = 'sub_ts_du' then -1 else 1 end * trunc(v2::text::numeric / 1000)) || ' microseconds')::interval;
+                  + ((case when f = 'sub_ts_du' then -1 else 1 end * div(v2::text::numeric, 1000)) || ' microseconds')::interval;
             an := permissions._fga_cel_ts_val(ts);
             if an is null then
                 return row(null::jsonb, 'timestamp overflow'::text, c);
@@ -2820,7 +2904,7 @@ begin
             else floor(extract(milliseconds from lt)) - floor(extract(second from lt)) * 1000 end::int), null::text, c);
     elsif f = 'du_get' then
         a1 := v1::text::numeric;
-        return row(to_jsonb(trunc(a1 / case n ->> 'g' when 'getHours' then 3600000000000 when 'getMinutes' then 60000000000
+        return row(to_jsonb(div(a1, case n ->> 'g' when 'getHours' then 3600000000000 when 'getMinutes' then 60000000000
                                                       when 'getSeconds' then 1000000000 else 1000000 end)), null::text, c);
     end if;
     return row(null::jsonb, format('no such overload: %s', f), c);
@@ -5466,6 +5550,41 @@ declare
 begin
     case ops[k]
     when 'this' then
+        -- A direct leaf in an exclusion has no positive walk steps of its
+        -- own. Read its restrictions and tuples instead. set_eval guarantees
+        -- each userset restriction is monotone, so its forward walk is exact.
+        if exists (select 1 from permissions.fga_rewrite_nodes n where n.model_id = p_m
+                   and n.type = p_type and n.relation = p_rel and n.node = k and n.in_subtract) then
+            return query
+            with restrictions as materialized (
+                select tr.user_type, tr.user_relation, tr.wildcard, tr.condition
+                from permissions.fga_type_restrictions tr
+                where tr.model_id = p_m and tr.type = p_type and tr.relation = p_rel
+            ), subjects(t,i,r,lvl) as (
+                select p_ut, p_uid, p_urel, 0
+                union all select p_ut, '*', '', 0 where p_urel = '' and p_uid <> '*'
+                union all
+                select g.user_type, f.object_id, g.user_relation, least(f.lvl + 1, 25)
+                from (select distinct user_type, user_relation from restrictions where user_relation <> '') g
+                cross join lateral permissions._fga_forward(p_m, p_ut, p_uid, p_urel, p_ctx,
+                                            g.user_type, g.user_relation, p_req, wm) f
+            )
+            select hit.object_id, min(a.lvl)
+            from subjects a
+            join restrictions tr on tr.user_type = a.t and tr.user_relation = a.r and tr.wildcard = (a.i = '*')
+            cross join lateral (
+                select tu.object_id, tu.condition_context from permissions.fga_tuples tu
+                where tu.user_type = a.t and tu.user_id = a.i and tu.user_relation = a.r
+                  and tu.object_type = p_type and tu.relation = p_rel and tu.condition_name = tr.condition
+                union all
+                select x.object_id, x.condition_context from unnest(p_ctx) x
+                where x.user_type = a.t and x.user_id = a.i and x.user_relation = a.r
+                  and x.object_type = p_type and x.relation = p_rel and x.condition_name = tr.condition
+            ) hit
+            where tr.condition = '' or permissions._fga_cond(p_m, tr.condition, hit.condition_context, p_req, wm)
+            group by hit.object_id;
+            return;
+        end if;
         return query
         select f.object_id, f.lvl
         from permissions._fga_forward(p_m, p_ut, p_uid, p_urel, p_ctx, p_type, p_rel, p_req, wm, true) f;
@@ -10139,11 +10258,18 @@ begin
     values (cedar_put_template.template_id, cedar_put_template.template, est, nullif(c -> 'ast', 'null'), c -> 'annotations')
     on conflict on constraint cedar_templates_pkey do update
         set source = excluded.source, est = excluded.est, ast = excluded.ast, annotations = excluded.annotations;
+    -- A subject cleanup, direct deletion or move to another template can
+    -- change a link without locking this template. Lock the surviving
+    -- links before validation and refresh; never upsert from a stale list.
+    with links as materialized (
+        select x.policy_id, x.slots from permissions.cedar_policies x
+        where x.template_id = cedar_put_template.template_id
+        order by x.policy_id for update
+    )
     select string_agg(format('%s (%s)', x.policy_id, (select string_agg(k, ', ' order by k) from jsonb_object_keys(x.slots) k)), ', ' order by x.policy_id)
     into bad
-    from permissions.cedar_policies x
-    where x.template_id = cedar_put_template.template_id
-      and array(select k from jsonb_object_keys(x.slots) k order by k) <> want;
+    from links x
+    where array(select k from jsonb_object_keys(x.slots) k order by k) <> want;
     if bad is not null then
         perform permissions._cedar_error('template_in_use',
             format('template %L has links that fill other slots than the new template''s %s: %s', template_id, array_to_string(want, ' and '), bad),
