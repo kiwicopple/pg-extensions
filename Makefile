@@ -11,7 +11,9 @@ help:
 	@echo "make bench.pg_permissions 		# benchmark pg_permissions (the extension by default; IMPL=..., SCALE=small|medium|large)"
 	@echo "make docs  				# build the documentation site (pg_permissions/site/dist)"
 	@echo "make docs.dev  				# run the documentation site locally with hot reload"
-	@echo "make docs.sync  			# re-sync pg_permissions markdown and benchmark data into pg_permissions/site/"
+	@echo "make docs.sync  			# re-sync pg_permissions markdown into pg_permissions/site/"
+	@echo "make research.docs  			# build the research docs site for all extensions (research-site/dist)"
+	@echo "make research.docs.dev  		# run the research docs site locally with hot reload"
 	@echo "make test.pg_validate  			# run the pg_validate test suite on a local throwaway Postgres"
 	@echo "make test.pg_validate.docker  		# run the pg_validate test suite on Postgres 16, 17 and 18 (Docker)"
 	@echo "make docs.pg_validate  			# build the pg_validate documentation site (pg_validate/site/dist)"
@@ -84,3 +86,16 @@ docs.pg_validate: $(PG_VALIDATE_SITE)/node_modules
 
 docs.pg_validate.dev: $(PG_VALIDATE_SITE)/node_modules
 	npm --prefix pg_validate run docs:dev
+
+# Research docs site for every <extension>/research/ directory (GitHub Pages). See research-site/README.md.
+RESEARCH_SITE := $(REPO_DIR)/research-site
+
+.PHONY: research.docs research.docs.dev
+$(RESEARCH_SITE)/node_modules: $(RESEARCH_SITE)/package-lock.json
+	npm --prefix research-site ci
+
+research.docs: $(RESEARCH_SITE)/node_modules
+	npm --prefix research-site run build
+
+research.docs.dev: $(RESEARCH_SITE)/node_modules
+	npm --prefix research-site run dev

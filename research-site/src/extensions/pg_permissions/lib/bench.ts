@@ -1,9 +1,9 @@
 // Benchmark data layer. Loads every run file at build time.
 //
-//   real data:  src/data/bench/*.json    (copied by `npm run sync` from pg_permissions/bench/baselines/data)
-//   fixture:    src/data/fixture/*.json  (generated from the saved reports; used ONLY when there is no real data)
+//   real data:  data/bench/*.json    (copied from pg_permissions/bench/baselines/data by ../sync.mjs during `npm run sync`)
+//   fixture:    data/fixture/*.json  (generated from the saved reports; used ONLY when there is no real data)
 //
-// Real data wins automatically: as soon as one file exists in src/data/bench the fixture is ignored.
+// Real data wins automatically: as soon as one file exists in data/bench the fixture is ignored.
 
 import { DESIGN_IDS, engine, type Design } from './chart';
 import labels from '../data/workload-labels.json';
@@ -48,8 +48,8 @@ export const REF = process.env.DOCS_REPO_REF ?? 'pg_permissions';
 export const BASELINES_URL = `${REPO}/tree/${REF}/pg_permissions/bench/baselines`;
 export const DATA_URL = `${BASELINES_URL}/data`;
 
-const real = import.meta.glob<Omit<Run, 'file'>>('/src/data/bench/*.json', { eager: true, import: 'default' });
-const fixture = import.meta.glob<Omit<Run, 'file'>>('/src/data/fixture/*.json', { eager: true, import: 'default' });
+const real = import.meta.glob<Omit<Run, 'file'>>('/src/extensions/pg_permissions/data/bench/*.json', { eager: true, import: 'default' });
+const fixture = import.meta.glob<Omit<Run, 'file'>>('/src/extensions/pg_permissions/data/fixture/*.json', { eager: true, import: 'default' });
 
 export const usingFixture = Object.keys(real).length === 0;
 const source = usingFixture ? fixture : real;
@@ -256,7 +256,7 @@ export interface WorkloadInfo {
 	description: string;
 }
 
-const generated = import.meta.glob<Record<string, { description: string }>>('/src/data/workloads.generated.json', {
+const generated = import.meta.glob<Record<string, { description: string }>>('/src/extensions/pg_permissions/data/workloads.generated.json', {
 	eager: true,
 	import: 'default',
 });
@@ -323,7 +323,7 @@ export function comparisonAnchor(scale: string, shape: string): string {
 }
 
 export const comparisonLink = (scale?: string, shape?: string) =>
-	url(`research/benchmarks/comparison/${scale && shape ? comparisonAnchor(scale, shape) : ''}`);
+	url(`pg_permissions/benchmarks/comparison/${scale && shape ? comparisonAnchor(scale, shape) : ''}`);
 
 export type ByEngine = Partial<Record<Design, number>>;
 

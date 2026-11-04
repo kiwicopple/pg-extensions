@@ -27,7 +27,7 @@ export default defineConfig({
 				},
 			],
 			editLink: { baseUrl: `${process.env.DOCS_REPO_URL ?? 'https://github.com/kiwicopple/pg-extensions'}/edit/${process.env.DOCS_REPO_REF ?? 'main'}/pg_permissions/site/` },
-			customCss: ['./src/styles/custom.css', './src/styles/viz.css'],
+			customCss: ['./src/styles/custom.css'],
 			components: {
 				PageTitle: './src/components/SitePageTitle.astro',
 				SocialIcons: './src/components/SiteLinks.astro',

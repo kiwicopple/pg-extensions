@@ -3,12 +3,12 @@ title: Optimizations, before and after
 description: What the session 3 optimization pass changed on each pg_permissions design, measured on Docker Postgres 18, with the changes in the ranking.
 ---
 
-import OptKey from '../../../../components/opt/OptKey.astro';
-import OptRbac from '../../../../components/opt/OptRbac.astro';
-import OptSeeds from '../../../../components/opt/OptSeeds.astro';
-import OptRanking from '../../../../components/opt/OptRanking.astro';
-import OptVersions from '../../../../components/opt/OptVersions.astro';
-import OptTakeaways from '../../../../components/opt/OptTakeaways.astro';
+import OptKey from '../../../../extensions/pg_permissions/components/opt/OptKey.astro';
+import OptRbac from '../../../../extensions/pg_permissions/components/opt/OptRbac.astro';
+import OptSeeds from '../../../../extensions/pg_permissions/components/opt/OptSeeds.astro';
+import OptRanking from '../../../../extensions/pg_permissions/components/opt/OptRanking.astro';
+import OptVersions from '../../../../extensions/pg_permissions/components/opt/OptVersions.astro';
+import OptTakeaways from '../../../../extensions/pg_permissions/components/opt/OptTakeaways.astro';
 
 All three designs went through one optimization pass. This page shows two sets of Docker Postgres 18 runs side by side.
 The first set is from before the pass (untagged runs), and the second set is from after the pass (tagged `opt`).

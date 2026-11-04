@@ -56,8 +56,8 @@ The SQL reference covers [shared functions](./reference/shared/), [RBAC](./refer
 
 ## Design and evidence
 
-The extension has separate APIs for RBAC, OpenFGA and Cedar, with shared identity and RLS integration. [Current architecture](./research/architecture/) explains the design and how future models can fit. The [Cedar design record](./research/designs/e-cedar/) has the oracle results and the measurements of the Cedar model.
+The extension has separate APIs for RBAC, OpenFGA and Cedar, with shared identity and RLS integration. [Current architecture](https://kiwicopple.github.io/pg-extensions/pg_permissions/architecture/) explains the design and how future models can fit. The [Cedar design record](https://kiwicopple.github.io/pg-extensions/pg_permissions/designs/e-cedar/) has the oracle results and the measurements of the Cedar model.
 
-The test suite includes OpenFGA cases and Cedar's own integration tests, and runs on Postgres 16, 17, and 18, including pg_tle installation in Docker. [Benchmark reports](./research/benchmarks/overview/) distinguish the current implementation from historical prototypes and describe the limits of the measurements. Hosted installation and broader production workloads remain unverified in that research.
+The test suite includes OpenFGA cases and Cedar's own integration tests, and runs on Postgres 16, 17, and 18, including pg_tle installation in Docker. [Benchmark reports](https://kiwicopple.github.io/pg-extensions/pg_permissions/benchmarks/overview/) distinguish the current implementation from historical prototypes and describe the limits of the measurements. Hosted installation and broader production workloads remain unverified in that research.
 
 For agents and other tools, the [Markdown index](./llms.txt) links to plain-text versions of the documentation, including both example languages.
