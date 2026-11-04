@@ -58,8 +58,8 @@ select tap.is(crdt.yseq_value(crdt.yseq_set(:'s1a', 'Jello', 'bob', base => :'s1
               'set with an older base keeps the other writer''s change');
 select tap.is(crdt.yseq_value(crdt.yseq_set(:'s1a', 'Hello', 'bob')), 'Hello',
               'without base the same save reverts it');
-select tap.is(crdt.yseq_value(crdt.yseq_set(:'s1a', 'Hello!', 'alice', base => :'s1')), 'Hello there!',
-              'the same replica saving twice from one base: the second save gets fresh ids');
+select tap.is(crdt.yseq_value(crdt.yseq_set(:'s1a', 'Hello!', 'alice', base => :'s1')), 'Hello!',
+              'the same replica saving twice from one base: its own first save counts as base, so the second replaces it');
 
 -- errors
 select tap.throws_ok($$select crdt.yseq_insert(crdt.yseq_empty(), 1, 'a', 'alice')$$, '22023', 'insert past the end: 22023');
