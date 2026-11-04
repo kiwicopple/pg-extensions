@@ -78,11 +78,27 @@ $$;
 -- Shared: the caller's replica id
 -- ============================================================================
 
--- The JWT `sub` claim (PostgREST, Supabase) wins; the crdt.replica_id session
--- setting is the fallback for plain Postgres, tests and server-side jobs. The
--- same rule as pg_permissions' current_subject_id(). Both settings are only as
--- trustworthy as whoever sets them: PostgREST sets request.jwt.claims from a
--- verified JWT, but a role with direct SQL access can set either one itself.
+-- Replica ids are any non-empty text without ":". An entry key is a replica id,
+-- or <replica id>:<device> with a non-empty device suffix (which may contain
+-- more ":"), so one writer identity can own several replicas (a phone and a
+-- laptop). The owner of a key is the part before the first ":".
+--
+-- The default identity of a writer, for pn_apply_delta's replica argument.
+-- Nothing here is specific to one platform:
+--
+--   1. A JWT claim from request.jwt.claims, the setting PostgREST (and
+--      PostgREST-style APIs, Supabase among them) fills from a verified token.
+--      The claim is `sub` unless the setting crdt.replica_id_claim names
+--      another (email, user_id, ...). A numeric claim is read as text.
+--   2. Else the setting crdt.replica_id, which an app server sets per
+--      transaction (set local crdt.replica_id = '...').
+--   3. Else null: pn_apply_delta then rejects the write.
+--
+-- The same order as pg_permissions' current_subject_id() (JWT sub, then a
+-- setting). Settings are only as trustworthy as whoever sets them: any role
+-- can set custom settings, so a client with direct SQL access can claim any
+-- id. Wrappers for such clients pass session_user (or their own lookup) to
+-- pn_apply_delta explicitly instead.
 create function crdt.current_replica_id()
 returns text
 language plpgsql stable
@@ -90,7 +106,8 @@ set search_path = pg_catalog, pg_temp
 as $$
 begin
     return coalesce(
-        nullif(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub', ''),
+        nullif(nullif(current_setting('request.jwt.claims', true), '')::jsonb
+               ->> coalesce(nullif(current_setting('crdt.replica_id_claim', true), ''), 'sub'), ''),
         nullif(current_setting('crdt.replica_id', true), '')
     );
 end;
@@ -149,8 +166,10 @@ returns crdt.pn
 language sql immutable parallel safe
 return '{"t": "pn", "v": 1, "p": {}, "n": {}}'::crdt.pn;
 
--- Adds `amount` to the caller-supplied replica's entry in p. A null state
--- counts as empty. The amount must be zero or more (0 is a no-op).
+-- Adds `amount` to the replica's entry in p. `replica` is a replica key (an
+-- id, or <id>:<device>); trusted code supplies it. A null state counts as
+-- empty. The amount must be zero or more (0 is a no-op). pn_merge does not
+-- check keys: it must accept whatever states other replicas send.
 create function crdt.pn_increment(state crdt.pn, replica text, amount bigint default 1)
 returns crdt.pn
 language plpgsql immutable parallel safe
@@ -160,8 +179,10 @@ begin
         raise exception 'crdt.pn_increment: replica and amount must not be null'
             using errcode = '22004';
     end if;
-    if replica = '' then
-        raise exception 'crdt.pn_increment: replica must not be empty' using errcode = '22023';
+    if replica !~ '^[^:]+(:.+)?$' then
+        raise exception 'crdt.pn_increment: % is not a replica key', pg_catalog.quote_literal(replica)
+            using errcode = '22023',
+                  hint = 'A replica key is a non-empty id without ":", optionally followed by ":<device>".';
     end if;
     if amount < 0 then
         raise exception 'crdt.pn_increment: amount must be zero or more, got %', amount
@@ -188,8 +209,10 @@ begin
         raise exception 'crdt.pn_decrement: replica and amount must not be null'
             using errcode = '22004';
     end if;
-    if replica = '' then
-        raise exception 'crdt.pn_decrement: replica must not be empty' using errcode = '22023';
+    if replica !~ '^[^:]+(:.+)?$' then
+        raise exception 'crdt.pn_decrement: % is not a replica key', pg_catalog.quote_literal(replica)
+            using errcode = '22023',
+                  hint = 'A replica key is a non-empty id without ":", optionally followed by ":<device>".';
     end if;
     if amount < 0 then
         raise exception 'crdt.pn_decrement: amount must be zero or more, got %', amount
@@ -273,32 +296,44 @@ create aggregate crdt.pn_merge_agg(crdt.pn) (
     parallel = safe
 );
 
--- The RLS-safe write path: pn_merge for a delta from an untrusted client.
--- The caller's replica id comes from crdt.current_replica_id() (JWT sub, else
--- the crdt.replica_id setting), never from the input. Every entry of the
--- delta must belong to that id: the id itself, or `<id>:<device>` for a user
--- with several devices, each a replica of its own. No entry may be lower than
--- the current one: max-merge would ignore it, but a lower total means a
--- replica that lost its state or shares its id, and silently ignoring it
--- would also swallow its next increments.
---
--- Use it inside the app's own SECURITY DEFINER function, with the client
--- denied UPDATE on the column:
+-- The write path for untrusted writers: pn_merge for a delta from a writer
+-- whose identity is `replica`, by default crdt.current_replica_id(). The app
+-- wraps it in its own SECURITY DEFINER function, denies writers UPDATE on the
+-- column, and passes whatever identity it trusts (the default resolver,
+-- session_user, a lookup in its own users table):
 --
 --   update posts set likes = crdt.pn_apply_delta(likes, delta) where id = $1;
+--   update posts set likes = crdt.pn_apply_delta(likes, delta, session_user::text) where id = $1;
 --
--- Errors: 42501 no replica id, or an entry of another replica; 22023 an
--- entry that is not a valid count, or a count lower than the current one;
--- 23514 (from the domain) a delta that is not a crdt.pn envelope.
-create function crdt.pn_apply_delta(state crdt.pn, delta crdt.pn)
+-- Every key of the delta must be a well-formed replica key owned by
+-- `replica`: the id itself, or <id>:<device>. Entries lower than the current
+-- ones are ignored, as by pn_merge: a retry or a replayed older delta
+-- succeeds and changes nothing. (A writer that lost its state must read its
+-- entries back first, or use a new device id; see the README.)
+--
+-- IMMUTABLE: the result depends on the arguments only; the default argument
+-- is evaluated by the caller. Errors: 42501 no replica (null), or an entry
+-- owned by another replica; 22023 a replica that is empty or contains ":", a
+-- malformed key, or a count that is not an integer from 0 to the bigint
+-- maximum; 23514 (from the domain) a delta that is not a crdt.pn envelope.
+create function crdt.pn_apply_delta(state crdt.pn, delta crdt.pn, replica text default crdt.current_replica_id())
 returns crdt.pn
-language plpgsql stable
+language plpgsql immutable parallel safe
 set search_path = pg_catalog, pg_temp
 as $$
 declare
-    me text := crdt.current_replica_id();
     bad record;
 begin
+    if replica is null then
+        raise exception 'crdt.pn_apply_delta: the writer has no replica id'
+            using errcode = '42501',
+                  hint = 'Pass the writer''s identity as the replica argument, or set it up for crdt.current_replica_id() (a JWT claim in request.jwt.claims, or the crdt.replica_id setting).';
+    end if;
+    if replica !~ '^[^:]+$' then
+        raise exception 'crdt.pn_apply_delta: % is not a replica id', quote_literal(replica)
+            using errcode = '22023',
+                  hint = 'A replica id is non-empty and has no ":" (":" separates a replica id from a device suffix).';
+    end if;
     if delta is null then
         return state;
     end if;
@@ -306,30 +341,25 @@ begin
         raise exception 'crdt.pn_apply_delta: the delta has an entry that is not an integer from 0 to 9223372036854775807'
             using errcode = '22023';
     end if;
-    if me is null then
-        raise exception 'crdt.pn_apply_delta: the caller has no replica id'
-            using errcode = '42501',
-                  hint = 'Call with a JWT that has a sub claim, or set crdt.replica_id.';
+
+    select m.map, e.key into bad
+    from (values ('p'), ('n')) m(map), jsonb_each(delta -> m.map) e
+    where e.key !~ '^[^:]+(:.+)?$'
+    limit 1;
+    if found then
+        raise exception 'crdt.pn_apply_delta: entry %.% is not a replica key', bad.map, quote_literal(bad.key)
+            using errcode = '22023',
+                  hint = 'A replica key is a non-empty id without ":", optionally followed by ":<device>".';
     end if;
 
     select m.map, e.key into bad
     from (values ('p'), ('n')) m(map), jsonb_each(delta -> m.map) e
-    where e.key <> me and not starts_with(e.key, me || ':')
+    where split_part(e.key, ':', 1) <> replica
     limit 1;
     if found then
-        raise exception 'crdt.pn_apply_delta: replica % cannot write entry %.% of another replica', me, bad.map, bad.key
+        raise exception 'crdt.pn_apply_delta: replica % cannot write entry %.% of another replica', quote_literal(replica), bad.map, quote_literal(bad.key)
             using errcode = '42501',
-                  hint = 'A delta may only contain the caller''s own entries: its replica id, or <replica id>:<device>.';
-    end if;
-
-    select m.map, e.key, e.value, state -> m.map -> e.key as cur into bad
-    from (values ('p'), ('n')) m(map), jsonb_each(delta -> m.map) e
-    where e.value < (state -> m.map -> e.key)
-    limit 1;
-    if found then
-        raise exception 'crdt.pn_apply_delta: the delta lowers %.% from % to %', bad.map, bad.key, bad.cur, bad.value
-            using errcode = '22023',
-                  hint = 'Counts only grow. The replica may have lost its state or share its id with another writer.';
+                  hint = 'A delta may only contain the writer''s own entries: its replica id, or <replica id>:<device>.';
     end if;
 
     return crdt.pn_merge(coalesce(state, crdt.pn_empty()), delta);
@@ -361,10 +391,11 @@ end;
 $$;
 grant usage on schema crdt to public;
 
--- Client-facing: the whole PN-Counter API. Every function is pure or reads
--- only the caller's own identity; none needs privileges of its own. Apps
--- decide who may write which rows (RLS, column privileges, their own
--- SECURITY DEFINER functions around pn_apply_delta).
+-- Granted to public: the whole PN-Counter API. Every function is pure or
+-- reads only the caller's own settings; none needs privileges of its own.
+-- Apps decide who may write which rows (row-level security, column
+-- privileges, their own SECURITY DEFINER functions around pn_apply_delta,
+-- granted to their own roles).
 grant execute on function
     crdt.current_replica_id(),
     crdt.pn_is_valid(jsonb),
@@ -374,5 +405,5 @@ grant execute on function
     crdt.pn_value(crdt.pn),
     crdt.pn_merge(crdt.pn, crdt.pn),
     crdt.pn_merge_agg(crdt.pn),
-    crdt.pn_apply_delta(crdt.pn, crdt.pn)
+    crdt.pn_apply_delta(crdt.pn, crdt.pn, text)
 to public;

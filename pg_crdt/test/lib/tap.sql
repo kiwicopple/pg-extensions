@@ -123,7 +123,7 @@ as $$
     from tap.state where planned is distinct from ran
 $$;
 
--- Tests switch roles (set role authenticated); they still need to record results.
+-- Tests switch roles (set role, set session authorization); they still need to record results.
 grant usage on schema tap to public;
 grant all on tap.state to public;
 grant execute on all functions in schema tap to public;

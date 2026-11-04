@@ -20,7 +20,7 @@ From the `pg_crdt/` directory:
 
 From the root of the repository: `make test.pg_crdt` and `make test.pg_crdt.docker`.
 
-By default the runner starts a throwaway Postgres in a temporary directory, listening on a Unix socket only, and deletes it at the end. It loads `lib/tap.sql` (minimal pgTAP-style assertions) and the extension file into a template database, and runs each spec file in a fresh clone of it, one at a time. It creates Supabase's client roles (`anon`, `authenticated`, `service_role`), so RLS tests run like Supabase clients. When the Postgres installation has pg_tle, the cluster preloads it.
+By default the runner starts a throwaway Postgres in a temporary directory, listening on a Unix socket only, and deletes it at the end. It loads `lib/tap.sql` (minimal pgTAP-style assertions) and the extension file into a template database, and runs each spec file in a fresh clone of it, one at a time. It creates the client roles of the PostgREST convention (`anon`, `authenticated`, `service_role`); only `02_security` uses them, to check grants where those roles exist. Specs that need writer roles create their own. When the Postgres installation has pg_tle, the cluster preloads it.
 
 A file passes only when each planned assertion ran and passed, and no SQL error occurred.
 
@@ -30,7 +30,7 @@ A file passes only when each planned assertion ran and passed, and no SQL error 
 
 | File | Goal |
 | --- | --- |
-| `01_basics` | empty, increment, decrement, value, defaults, a negative amount and invalid domain values rejected |
+| `01_basics` | empty, increment, decrement, value, defaults, generic replica keys; a negative amount, malformed keys and invalid domain values rejected |
 | `02_security` | grants (only for the client roles that exist), languages, volatility and parallel labels, pinned search_path, no SECURITY DEFINER |
 | `03_install` | non-superuser install as a script, through pg_tle and from the control file; the schema guard; drop extension restrict and cascade |
 | `10_merge_laws` | commutative, associative, idempotent, identity (empty and null), equal to an independent per-key max: 1,000 random triples each |
@@ -38,7 +38,7 @@ A file passes only when each planned assertion ran and passed, and no SQL error 
 | `12_round_trip` | text, json and column round-trips; canonical text output |
 | `20_concurrency` | two dblink sessions: `update ... set s = pn_merge(s, $1)` loses nothing under READ COMMITTED; a client read-merge-write does (negative control) |
 | `21_aggregate` | `pn_merge_agg` equals folding `pn_merge`, in any order and in a parallel plan |
-| `30_apply_delta` | the RLS write path: forged and lowered deltas rejected, valid ones accepted, identity from the JWT or the setting |
+| `30_apply_delta` | the write path for untrusted writers: identity from a JWT claim (configurable), an app server's `set local`, or `session_user`; forged and malformed deltas rejected, stale ones a no-op; `:` reserved in replica ids |
 | `40_open_questions` | the domain questions: implicit casts, when the CHECK runs (counted), generated columns and expression indexes |
 
 The property tests use `setseed`, so a run is reproducible on one Postgres version. The generator (`fixtures/gen.sql`) draws replica ids from a small pool so random states overlap.

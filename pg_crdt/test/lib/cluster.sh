@@ -70,7 +70,8 @@ stop_cluster() {
     PGCRDT_TMP=
 }
 
-# Supabase's client roles, so tests can switch to them as on Supabase.
+# The client roles of the PostgREST convention (anon, authenticated, as on
+# Supabase), so 02_security can check grants to them. Nothing else needs them.
 ensure_roles() {
     psql_admin <<'SQL'
 do $$

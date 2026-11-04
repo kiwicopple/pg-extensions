@@ -98,11 +98,12 @@ Pitfall to test for (derived in `prior-art.md`, not from a paper): a set *delta*
 
 ## 5. Security
 
-RLS cannot see inside a CRDT value. A client that can write the column can forge another replica's counter entry or tags. The blessed path:
+Row-level security cannot see inside a CRDT value. A writer that can update the column can forge another replica's counter entry or tags. The blessed path:
 
-- Revoke direct UPDATE on state columns from clients.
-- Expose SECURITY DEFINER apply functions (for example `crdt.pn_apply(table, id, delta)` or app-written wrappers) that derive `replica_id` from `auth.uid()`/JWT and validate that a delta touches only that replica's entries and tags.
-- Open question: how server-side writes (cron, triggers) get a replica id.
+- Revoke direct UPDATE on state columns from writers.
+- The app writes SECURITY DEFINER wrappers around a validating merge per variant (`crdt.pn_apply_delta(state, delta, replica)`), which checks that a delta touches only entries owned by `replica` (the id, or `<id>:<device>`; `:` is reserved in ids). Stale entries are a no-op, so retries succeed.
+- **Identity is pluggable** (decided in session 3). The wrapper passes whatever identity the app trusts: `session_user` for direct SQL clients, a lookup in its own users table, a JWT claim, or a platform helper such as Supabase's `auth.uid()::text`. The default argument, `crdt.current_replica_id()`, reads a JWT claim from `request.jwt.claims` (the PostgREST convention; claim configurable with `crdt.replica_id_claim`, default `sub`), then the `crdt.replica_id` setting that app servers and server-side jobs set with `SET LOCAL`. Any role can set those settings, so the default is safe only for writers that cannot run their own SQL.
+- pg_crdt assumes no platform: no UUID ids, no `auth` schema, no Supabase roles.
 
 ## 6. Integration notes
 
@@ -120,7 +121,7 @@ RLS cannot see inside a CRDT value. A client that can write the column can forge
 ## 8. Plan
 
 1. **Spec first** (as in pg_permissions): property tests for commutativity, associativity, idempotence, convergence under shuffled and duplicated delivery, and round-trip, per variant.
-2. **Vertical slice: `pn_` end to end.** Envelope, functions, aggregate, optional domain, apply function with RLS, tests, pg_tle install plus a plain migration install.
+2. **Vertical slice: `pn_` end to end.** Envelope, functions, aggregate, optional domain, apply function for untrusted writers, tests, pg_tle install plus a plain migration install.
 3. Benchmark the two storage shapes and SQL vs PL/pgSQL merge for `pn_`, before writing `awset_`.
 4. `awset_` (with the oracle), then `lww_`, then `lwwmap_`.
 5. `doclog_`.

@@ -1,9 +1,9 @@
 -- Goal: privileges and function hygiene (architecture.md sections 5 and 6).
--- Client roles (anon, authenticated) can use the client-facing API and
--- nothing else; every function is SQL or PL/pgSQL; pure functions are
--- IMMUTABLE PARALLEL SAFE; functions that decide on identity pin search_path.
--- Role checks run only for the client roles that exist (test/run.sh creates
--- them, an --external server may not have them).
+-- Every role can use the client-facing API and nothing else; every function
+-- is SQL or PL/pgSQL; pure functions are IMMUTABLE PARALLEL SAFE; functions
+-- that decide on identity pin search_path. Role checks use the PostgREST
+-- convention roles anon and authenticated, only where they exist (test/run.sh
+-- creates them; another server may not have them).
 
 create temp table client_api (sig regprocedure);
 insert into client_api values
@@ -15,7 +15,7 @@ insert into client_api values
     ('crdt.pn_merge(crdt.pn, crdt.pn)'),
     ('crdt.pn_merge_agg(crdt.pn)'),
     ('crdt.pn_is_valid(jsonb)'),
-    ('crdt.pn_apply_delta(crdt.pn, crdt.pn)');
+    ('crdt.pn_apply_delta(crdt.pn, crdt.pn, text)');
 
 create temp table client_roles as
 select rolname from pg_roles where rolname in ('anon', 'authenticated');
@@ -62,17 +62,15 @@ select tap.is(
      where p.oid in ('crdt.pn_empty()'::regprocedure, 'crdt.pn_increment(crdt.pn, text, bigint)'::regprocedure,
                      'crdt.pn_decrement(crdt.pn, text, bigint)'::regprocedure, 'crdt.pn_value(crdt.pn)'::regprocedure,
                      'crdt.pn_merge(crdt.pn, crdt.pn)'::regprocedure, 'crdt.pn_merge_agg(crdt.pn)'::regprocedure,
-                     'crdt.pn_is_valid(jsonb)'::regprocedure)
+                     'crdt.pn_is_valid(jsonb)'::regprocedure, 'crdt.pn_apply_delta(crdt.pn, crdt.pn, text)'::regprocedure)
        and not (p.provolatile = 'i' and p.proparallel = 's')),
-    null, 'pure functions and the aggregate are IMMUTABLE PARALLEL SAFE');
+    null, 'pure functions, the aggregate and pn_apply_delta (pure given its replica argument) are IMMUTABLE PARALLEL SAFE');
+select tap.is(
+    (select provolatile::text from pg_proc where oid = 'crdt.current_replica_id()'::regprocedure),
+    's', 'current_replica_id, which reads settings, is STABLE');
 select tap.is(
     (select string_agg(p.proname, ', ' order by 1) from pg_proc p
-     where p.oid in ('crdt.current_replica_id()'::regprocedure, 'crdt.pn_apply_delta(crdt.pn, crdt.pn)'::regprocedure)
-       and p.provolatile <> 's'),
-    null, 'functions that read the caller identity are STABLE');
-select tap.is(
-    (select string_agg(p.proname, ', ' order by 1) from pg_proc p
-     where p.oid in ('crdt.current_replica_id()'::regprocedure, 'crdt.pn_apply_delta(crdt.pn, crdt.pn)'::regprocedure)
+     where p.oid in ('crdt.current_replica_id()'::regprocedure, 'crdt.pn_apply_delta(crdt.pn, crdt.pn, text)'::regprocedure)
        and not exists (select 1 from unnest(p.proconfig) c where c = 'search_path=pg_catalog, pg_temp')),
     null, 'functions that decide on identity pin search_path to pg_catalog, pg_temp');
 select tap.is(

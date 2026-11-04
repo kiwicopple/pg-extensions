@@ -2,7 +2,7 @@
 -- defaults, a negative amount rejected, and the crdt.pn domain rejecting
 -- anything that is not a valid envelope (architecture.md sections 2 and 3).
 
-select tap.plan(43);
+select tap.plan(47);
 
 -- empty
 select tap.is(crdt.pn_empty()::jsonb, '{"t": "pn", "v": 1, "p": {}, "n": {}}'::jsonb,
@@ -67,6 +67,18 @@ select tap.throws_ok($$ select crdt.pn_increment(crdt.pn_empty(), '', 1) $$, '22
                      'pn_increment rejects an empty replica id');
 select tap.throws_ok($$ select crdt.pn_decrement(crdt.pn_empty(), '', 1) $$, '22023',
                      'pn_decrement rejects an empty replica id');
+-- replica keys: any non-empty text; `:` separates an owner from a device
+-- suffix (<owner>:<device>), so neither side may be empty
+select tap.throws_ok($$ select crdt.pn_increment(crdt.pn_empty(), 'abc:', 1) $$, '22023',
+                     'pn_increment rejects a key with an empty device suffix (abc:)');
+select tap.throws_ok($$ select crdt.pn_increment(crdt.pn_empty(), ':x', 1) $$, '22023',
+                     'pn_increment rejects a key with an empty owner (:x)');
+select tap.throws_ok($$ select crdt.pn_decrement(crdt.pn_empty(), ':', 1) $$, '22023',
+                     'pn_decrement rejects the key :');
+select tap.is(crdt.pn_decrement(crdt.pn_increment(crdt.pn_increment(crdt.pn_increment(crdt.pn_increment(
+                  crdt.pn_empty(), 'abc:phone'), 'abc:phone:2'), 'ada@example.com'), '42'), 'Ünïcode name')::jsonb,
+              '{"t": "pn", "v": 1, "p": {"abc:phone": 1, "abc:phone:2": 1, "ada@example.com": 1, "42": 1}, "n": {"Ünïcode name": 1}}'::jsonb,
+              'replica keys are generic text: devices (abc:phone, abc:phone:2), emails, integers as text, any characters');
 select tap.throws_ok($$ select crdt.pn_increment(crdt.pn_increment(crdt.pn_empty(), 'a', 9223372036854775807), 'a', 1) $$,
                      '22003', 'an entry that would pass the bigint limit raises numeric_value_out_of_range');
 
