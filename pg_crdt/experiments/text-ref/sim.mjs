@@ -44,12 +44,16 @@ export function randLocalOp(rnd, doc, replica, opts = {}) {
 
 // Random concurrent editing session. Returns { log, docs, expected, names }.
 // log = ops in global generation order (a valid causal order).
-export function simulate(seed, { names, nOps, syncProb = 0.2, dupProb = 0.15, maxRun = 8, delProb = 0.3 }) {
+// validate: apply ops through the untrusted path ({validate:true}); `rejected` counts rejections (honest ops must have none).
+export function simulate(seed, { names, nOps, syncProb = 0.2, dupProb = 0.15, maxRun = 8, delProb = 0.3, validate = false }) {
   const rnd = mulberry32(seed);
   const docs = names.map(() => new Doc());
   const log = [];
+  const aopts = { validate };
+  let rejected = 0;
+  if (validate) for (const d of docs) d.onDecision = (op, st) => { if (st === 'rejected') rejected++; };
   const delivered = names.map(() => new Set());
-  const deliver = (ri_, idx) => { docs[ri_].apply(log[idx]); delivered[ri_].add(idx); };
+  const deliver = (ri_, idx) => { docs[ri_].apply(log[idx], aopts); delivered[ri_].add(idx); };
   const syncSome = (to) => {
     const missing = [];
     for (let k = 0; k < log.length; k++) if (!delivered[to].has(k)) missing.push(k);
@@ -57,7 +61,7 @@ export function simulate(seed, { names, nOps, syncProb = 0.2, dupProb = 0.15, ma
     const take = shuffle(rnd, missing).slice(0, ri(rnd, 1, missing.length));
     for (const k of take) {
       deliver(to, k);
-      if (rnd() < dupProb) docs[to].apply(log[k]); // duplicate delivery
+      if (rnd() < dupProb) docs[to].apply(log[k], aopts); // duplicate delivery
     }
   };
   while (log.length < nOps) {
@@ -73,8 +77,8 @@ export function simulate(seed, { names, nOps, syncProb = 0.2, dupProb = 0.15, ma
     for (let k = 0; k < log.length; k++) if (!delivered[t].has(k)) missing.push(k);
     for (const k of shuffle(rnd, missing)) {
       deliver(t, k);
-      if (rnd() < dupProb) docs[t].apply(log[k]);
+      if (rnd() < dupProb) docs[t].apply(log[k], aopts);
     }
   }
-  return { log, docs, names, expected: docs[0].text() };
+  return { log, docs, names, expected: docs[0].text(), rejected };
 }

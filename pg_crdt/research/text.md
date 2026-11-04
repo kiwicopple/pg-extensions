@@ -83,3 +83,20 @@ Prefixes (provisional): shape A `text_` (domain `crdt.text`)? No. Names must say
 - Replay a real editing trace (automerge-paper from josephg/editing-traces: about 260k single-char edits, final text about 100 kB), with op-by-op and batched timings.
 - Offline merge: two replicas diverge by N concurrent edits, then merge.
 - Concurrency: several sessions editing one document (lost updates? lock waits?).
+
+## Amendment 1 (overnight): causal validation for untrusted writers
+
+An adversarial review found that `apply` accepted any origins that exist. Alice writes "abc", bob sends `["bob",1,null,null,"Y"]`, and a third writer sends `["mal",1,null,["alice",2],"X"]`, whose originRight skips "a". The two delivery orders give `aYXbc` and `aXbcY`, and no merge brings them back together. The JS reference had the same hole, so it was in the contract.
+
+Fix: each op carries `"v"`, the sender's version vector before the op. The untrusted path checks rules V0 to V7, documented with the convergence argument and ablation evidence in `experiments/text-ref/README.md`:
+- **Static, on arrival:** shape (V0); origins covered by v advanced run by run (V1); a run's first seq is v[r]+1 (V2); delete targets are covered by v (V6, a security rule: no pre-deleting future text).
+- **Dynamic, once the doc covers v:** v is causally closed (V3, needs a stored per-run dependency vector); originLeft is before originRight (V4); no item strictly between the origins is covered by v (V5).
+- An op that claims items the server lacks waits (V7), so pending ops need a per-writer quota.
+
+The whole op is accepted or rejected. The fuzz evidence: 0 divergences in 3,000+ byzantine seeds, and 0 honest ops rejected in 300 seeds. Turning off V1 to V5 one at a time causes divergence.
+
+Two corrections to the brief:
+- Origins are adjacent in the full sequence, tombstones included.
+- Ops returned by `ops_since` carry no `v`, so they are for trusted catch-up only. **Equivocation** (two different ops with the same `(replica, seq)`) is not covered by the rules. A single Postgres server enforces one writer per id with the primary key, so the first arrival wins. Server-to-server merge stays a trusted path.
+
+Also: `set(doc, new_text)` diffing against the current text reverts concurrent edits when the save is stale. Both shapes add a three-way `set` with a base (shape B: a token from `ydoc_base`; shape A: the loaded state).

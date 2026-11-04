@@ -2,7 +2,7 @@
 // Usage: node convert-trace.mjs [raw.json.gz] [outDir] [--verify-remote]
 //   defaults: traces/raw/automerge-paper.json.gz  traces/
 // The raw file is untrusted data: it is only gunzipped and JSON.parse'd.
-// --verify-remote additionally applies the emitted ops to a fresh Doc through apply() (slow, O(n) per op).
+// --verify-remote additionally applies the emitted ops to a fresh Doc through apply() (trusted and validated path).
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
@@ -92,6 +92,14 @@ if (verifyRemote) {
     stats[`jsRemoteApply_${label}_Ms`] = Math.round(Number(process.hrtime.bigint() - t) / 1e6);
     assert.equal(d.text(), trace.endContent, `remote apply (${label}) mismatch`);
     assert.equal(d.pendingCount(), 0);
+  }
+  // same ops through the untrusted path (rules V1..V7): nothing may be rejected
+  for (const [label, list] of [['batch100', batches], ['ops', ops]]) {
+    const t = process.hrtime.bigint();
+    const d = new Doc();
+    for (const o of list) assert.equal(d.apply(o, { validate: true }), 'accepted');
+    stats[`jsValidatedApply_${label}_Ms`] = Math.round(Number(process.hrtime.bigint() - t) / 1e6);
+    assert.equal(d.text(), trace.endContent, `validated apply (${label}) mismatch`);
   }
 }
 console.log(JSON.stringify(stats, null, 2));

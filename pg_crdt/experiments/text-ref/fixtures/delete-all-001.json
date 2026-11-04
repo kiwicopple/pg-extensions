@@ -1,11 +1,13 @@
 {
 "ops": [
-  {"i":[],"d":[["alice",1,13]]},
-  {"i":[["alice",1,null,null,"hello 😀 world"]],"d":[]}
+  {"v":{"alice":13},"i":[],"d":[["alice",1,13]]},
+  {"v":{},"i":[["alice",1,null,null,"hello 😀 world"]],"d":[]}
 ],
 "ops_causal": [
-  {"i":[["alice",1,null,null,"hello 😀 world"]],"d":[]},
-  {"i":[],"d":[["alice",1,13]]}
+  {"v":{},"i":[["alice",1,null,null,"hello 😀 world"]],"d":[]},
+  {"v":{"alice":13},"i":[],"d":[["alice",1,13]]}
 ],
+"rejected": [],
+"rejected_causal": [],
 "expected": ""
 }

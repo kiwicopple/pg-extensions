@@ -1,26 +1,28 @@
 {
 "ops": [
-  {"i":[["alice",2,["alice",1],["base",2],"a"]],"d":[]},
-  {"i":[["bob",4,["bob",3],["base",2],"b"]],"d":[]},
-  {"i":[["alice",1,["base",1],["base",2],"a"]],"d":[]},
-  {"i":[["bob",2,["bob",1],["base",2],"b"]],"d":[]},
-  {"i":[["base",1,null,null,"XY"]],"d":[]},
-  {"i":[["bob",3,["bob",2],["base",2],"b"]],"d":[]},
-  {"i":[["alice",3,["alice",2],["base",2],"a"]],"d":[]},
-  {"i":[["bob",4,["bob",3],["base",2],"b"]],"d":[]},
-  {"i":[["bob",1,["base",1],["base",2],"b"]],"d":[]},
-  {"i":[["alice",4,["alice",3],["base",2],"a"]],"d":[]}
+  {"v":{"base":2,"alice":1},"i":[["alice",2,["alice",1],["base",2],"a"]],"d":[]},
+  {"v":{"base":2,"bob":3},"i":[["bob",4,["bob",3],["base",2],"b"]],"d":[]},
+  {"v":{"base":2},"i":[["alice",1,["base",1],["base",2],"a"]],"d":[]},
+  {"v":{"base":2,"bob":1},"i":[["bob",2,["bob",1],["base",2],"b"]],"d":[]},
+  {"v":{},"i":[["base",1,null,null,"XY"]],"d":[]},
+  {"v":{"base":2,"bob":2},"i":[["bob",3,["bob",2],["base",2],"b"]],"d":[]},
+  {"v":{"base":2,"alice":2},"i":[["alice",3,["alice",2],["base",2],"a"]],"d":[]},
+  {"v":{"base":2,"bob":3},"i":[["bob",4,["bob",3],["base",2],"b"]],"d":[]},
+  {"v":{"base":2},"i":[["bob",1,["base",1],["base",2],"b"]],"d":[]},
+  {"v":{"base":2,"alice":3},"i":[["alice",4,["alice",3],["base",2],"a"]],"d":[]}
 ],
 "ops_causal": [
-  {"i":[["base",1,null,null,"XY"]],"d":[]},
-  {"i":[["bob",1,["base",1],["base",2],"b"]],"d":[]},
-  {"i":[["alice",1,["base",1],["base",2],"a"]],"d":[]},
-  {"i":[["alice",2,["alice",1],["base",2],"a"]],"d":[]},
-  {"i":[["alice",3,["alice",2],["base",2],"a"]],"d":[]},
-  {"i":[["bob",2,["bob",1],["base",2],"b"]],"d":[]},
-  {"i":[["alice",4,["alice",3],["base",2],"a"]],"d":[]},
-  {"i":[["bob",3,["bob",2],["base",2],"b"]],"d":[]},
-  {"i":[["bob",4,["bob",3],["base",2],"b"]],"d":[]}
+  {"v":{},"i":[["base",1,null,null,"XY"]],"d":[]},
+  {"v":{"base":2},"i":[["bob",1,["base",1],["base",2],"b"]],"d":[]},
+  {"v":{"base":2},"i":[["alice",1,["base",1],["base",2],"a"]],"d":[]},
+  {"v":{"base":2,"alice":1},"i":[["alice",2,["alice",1],["base",2],"a"]],"d":[]},
+  {"v":{"base":2,"alice":2},"i":[["alice",3,["alice",2],["base",2],"a"]],"d":[]},
+  {"v":{"base":2,"bob":1},"i":[["bob",2,["bob",1],["base",2],"b"]],"d":[]},
+  {"v":{"base":2,"alice":3},"i":[["alice",4,["alice",3],["base",2],"a"]],"d":[]},
+  {"v":{"base":2,"bob":2},"i":[["bob",3,["bob",2],["base",2],"b"]],"d":[]},
+  {"v":{"base":2,"bob":3},"i":[["bob",4,["bob",3],["base",2],"b"]],"d":[]}
 ],
+"rejected": [],
+"rejected_causal": [],
 "expected": "XaaaabbbbY"
 }

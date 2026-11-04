@@ -1,7 +1,8 @@
 // Self-tests for ref.mjs. `node test.mjs` exits 0 on success, 1 on failure.
 import assert from 'node:assert/strict';
-import { Doc, mergeOps } from './ref.mjs';
+import { Doc, OpRejected, mergeOps } from './ref.mjs';
 import { mulberry32, ri, pick, shuffle, simulate, randLocalOp } from './sim.mjs';
+import { byzSim, tryApply } from './byz.mjs';
 
 let passed = 0;
 function t(name, fn) {
@@ -27,11 +28,13 @@ t('basic local edits', () => {
 t('op wire format matches brief', () => {
   const d = new Doc();
   const o1 = d.localInsert('alice', 0, 'Hello');
-  assert.deepEqual(o1, { i: [['alice', 1, null, null, 'Hello']], d: [] });
+  assert.deepEqual(o1, { v: {}, i: [['alice', 1, null, null, 'Hello']], d: [] });
   const o2 = d.localInsert('bob', 5, '!');
   assert.deepEqual(o2.i, [['bob', 1, ['alice', 5], null, '!']]);
+  assert.deepEqual(o2.v, { alice: 5 });
   const o3 = d.localDelete('alice', 1, 3);
   assert.deepEqual(o3.d, [['alice', 2, 3]]);
+  assert.deepEqual(o3.v, { alice: 5, bob: 1 });
 });
 
 t('non-interleaving: concurrent aaaa / bbbb at same spot', () => {
@@ -188,6 +191,136 @@ t('convergence fuzz (random order, duplicates, 2-6 replicas, 300 seeds)', () => 
 t('large concurrent sessions converge (heavy conflicts, 4 replicas x 600 ops)', () => {
   const { docs } = simulate(4242, { names: ['alice', 'bob', 'carol', 'dave'], nOps: 600, syncProb: 0.03, maxRun: 12 });
   for (const d of docs) assert.equal(d.text(), docs[0].text());
+});
+
+// ---------------------------------------------------------------------------------------------
+// Validation rules (untrusted path): see README "Validation rules".
+const V = { validate: true };
+const rejects = (doc, op, re) => assert.throws(() => doc.apply(op, V), (e) => e instanceof OpRejected && e.code === '22023' && re.test(e.reason));
+
+t('original repro: non-adjacent originRight is rejected, replicas converge', () => {
+  const alice = new Doc(); const oa = alice.localInsert('alice', 0, 'abc');
+  const bob = { v: {}, i: [['bob', 1, null, null, 'Y']], d: [] };
+  const mal = { v: { alice: 3 }, i: [['mal', 1, null, ['alice', 2], 'X']], d: [] };
+  // trusted path: the two delivery orders diverge (this is the hole)
+  const t1 = new Doc(), t2 = new Doc();
+  for (const o of [oa, bob, mal]) t1.apply(o);
+  for (const o of [oa, mal, bob]) t2.apply(o);
+  assert.notEqual(t1.text(), t2.text(), 'trusted path diverges on the repro');
+  // validated path: X is rejected whatever the order
+  for (const order of [[oa, bob, mal], [oa, mal, bob], [mal, oa, bob], [bob, mal, oa]]) {
+    const d = new Doc();
+    for (const o of order) tryApply(d, o);
+    assert.equal(d.text(), 'abcY');
+    assert.equal(d.pendingCount(), 0);
+  }
+  const d = new Doc(); d.apply(oa, V);
+  rejects(d, mal, /V5/);
+});
+
+t('validated path: each rule rejects its violation', () => {
+  const d = new Doc();
+  d.apply(new Doc().localInsert('alice', 0, 'abc'), V); // a1 a2 a3
+  d.apply({ v: { alice: 3 }, i: [['bob', 1, ['alice', 3], null, 'Z']], d: [] }, V); // fine
+  rejects(d, { i: [], d: [] }, /malformed/);                                              // no v
+  rejects(d, { v: { 'a:b': 1 }, i: [], d: [] }, /malformed/);                              // bad id in v
+  rejects(d, { v: { alice: 0 }, i: [], d: [] }, /malformed/);                              // zero in v
+  rejects(d, { v: { alice: 3 }, i: [['m1', 1, ['alice', 3], ['carol', 1], 'x']], d: [] }, /V1/); // or not covered
+  rejects(d, { v: { alice: 3 }, i: [['m2', 2, null, null, 'x']], d: [] }, /V2/);          // seq forged
+  rejects(d, { v: { alice: 3, m3: 1 }, i: [['m3', 1, null, null, 'x']], d: [] }, /V2/);   // seq reuse
+  rejects(d, { v: { alice: 3 }, i: [['m4', 1, ['alice', 3], ['alice', 1], 'x']], d: [] }, /V4/); // reversed origins
+  rejects(d, { v: { alice: 3 }, i: [['m5', 1, ['alice', 2], ['alice', 2], 'x']], d: [] }, /V4/); // ol == or
+  rejects(d, { v: { alice: 3 }, i: [['m6', 1, ['alice', 1], ['alice', 3], 'x']], d: [] }, /V5/); // skips alice2
+  rejects(d, { v: { alice: 3 }, i: [], d: [['alice', 3, 2]] }, /V6/);                      // delete past v
+  rejects(d, { v: { alice: 3 }, i: [], d: [['ghost', 1, 1]] }, /V6/);                      // delete unseen id
+  // V3: v claims bob:1 without alice:3 which bob1 depends on
+  rejects(d, { v: { alice: 2, bob: 1 }, i: [['m7', 1, null, null, 'x']], d: [] }, /V3/);
+  assert.equal(d.text(), 'abcZ');
+  // rejection is atomic: second run bad -> first run not applied
+  rejects(d, { v: { alice: 3, bob: 1 }, i: [['m8', 1, ['bob', 1], null, 'ok'], ['m8', 3, ['alice', 1], ['alice', 3], 'bad']], d: [] }, /V5/);
+  assert.equal(d.text(), 'abcZ');
+  assert.deepEqual(d.versionVector(), { alice: 3, bob: 1 });
+  // chained runs in one op are fine (v advances run by run), delete may target the op's own inserts
+  d.apply({ v: { alice: 3, bob: 1 }, i: [['m9', 1, ['bob', 1], null, 'AB'], ['m9', 3, ['m9', 2], null, 'C']], d: [['m9', 2, 1]] }, V);
+  assert.equal(d.text(), 'abcZAC');
+});
+
+t('validated path: ops wait until the doc covers v; duplicates are no-ops', () => {
+  const A = new Doc(); const o1 = A.localInsert('a', 0, 'xyz'); const o2 = A.localInsert('b', 3, '!');
+  const o3 = A.localDelete('a', 0, 1);
+  const B = new Doc(); const dec = [];
+  B.onDecision = (op, st) => dec.push(st);
+  assert.equal(B.apply(o3, V), 'pending');
+  assert.equal(B.apply(o2, V), 'pending');
+  assert.equal(B.apply(o2, V), 'pending');
+  assert.equal(B.text(), '');
+  assert.equal(B.apply(o1, V), 'accepted');
+  assert.equal(B.text(), 'yz!');
+  assert.equal(B.pendingCount(), 0);
+  assert.equal(B.apply(o1, V), 'accepted'); assert.equal(B.apply(o2, V), 'accepted');
+  assert.equal(B.text(), 'yz!');
+});
+
+t('honest fuzz through the validated path: nothing rejected, converges (300 seeds)', () => {
+  const all = ['alice', 'bob', 'carol', 'dave', 'Eve', 'zed'];
+  let ops = 0;
+  for (let seed = 1; seed <= 300; seed++) {
+    const rnd = mulberry32(seed * 104729);
+    const n = ri(rnd, 2, 6);
+    const names = shuffle(rnd, all.slice()).slice(0, n);
+    const { docs, log, rejected } = simulate(seed, { names, nOps: ri(rnd, 20, 150), syncProb: pick(rnd, [0.05, 0.2, 0.5]), validate: true });
+    assert.equal(rejected, 0, `seed ${seed}: honest op rejected`);
+    ops += log.length;
+    for (const d of docs) {
+      assert.equal(d.text(), docs[0].text(), `seed ${seed}`);
+      assert.equal(d.pendingCount(), 0, `seed ${seed} pending`);
+    }
+    // same ops through the trusted path give the same text
+    const f = new Doc(); for (const o of shuffle(rnd, log.slice())) f.apply(o);
+    assert.equal(f.text(), docs[0].text());
+  }
+  console.log(`     (${ops} honest ops, 0 rejected)`);
+});
+
+t('merged ops (mergeOps) from one replica pass validation', () => {
+  const rnd = mulberry32(11);
+  const A = new Doc(); const ops = [];
+  for (let k = 0; k < 100; k++) ops.push(randLocalOp(rnd, A, 'a', { maxRun: 3 }));
+  const B = new Doc(); B.apply(mergeOps(ops), V);
+  assert.equal(B.text(), A.text());
+  const C = new Doc();
+  for (let k = 0; k < 100; k += 10) C.apply(mergeOps(ops.slice(k, k + 10)), V);
+  assert.equal(C.text(), A.text());
+});
+
+const BYZ_SEEDS = 600;
+t(`byzantine fuzz: identical decisions and converged text on every replica (${BYZ_SEEDS} seeds)`, () => {
+  const tot = { accepted: 0, rejected: 0, pending: 0, byzAccepted: 0 };
+  for (let seed = 1; seed <= BYZ_SEEDS; seed++) {
+    const r = byzSim(seed, { nOps: 40 + (seed % 60) });
+    assert.ok(r.ok, `seed ${seed}: ${r.problems.slice(0, 3).join(' | ')}`);
+    for (const k in tot) tot[k] += r.stats[k];
+  }
+  assert.ok(tot.rejected > 1000 && tot.byzAccepted > 500, 'fuzz must exercise both outcomes');
+  console.log(`     (ops: ${tot.accepted} accepted, ${tot.rejected} rejected, ${tot.pending} never applicable; byzantine accepted: ${tot.byzAccepted})`);
+});
+
+t('byzantine fuzz is sharp: disabling V1, V2, V3, V4 or V5 makes replicas diverge', () => {
+  for (const rule of ['coverOrigins', 'ownSeq', 'closed', 'order', 'between']) {
+    let bad = 0;
+    for (let seed = 1; seed <= 1500 && !bad; seed++) {
+      if (!byzSim(seed, { nOps: 40 + (seed % 60), rules: { [rule]: false } }).ok) bad++;
+    }
+    assert.ok(bad, `rule ${rule} was never needed by the fuzz`);
+  }
+});
+
+t('KNOWN HOLE (not covered by V1-V6): equivocation, two ops with the same id and different content', () => {
+  const o1 = { v: {}, i: [['mal', 1, null, null, 'X']], d: [] };
+  const o2 = { v: {}, i: [['mal', 1, null, null, 'Z']], d: [] };
+  const A = new Doc(), B = new Doc();
+  tryApply(A, o1); tryApply(A, o2); tryApply(B, o2); tryApply(B, o1);
+  assert.notEqual(A.text(), B.text()); // first arrival wins; needs an ownership/sequencing argument outside the CRDT
 });
 
 console.log(`${passed} tests passed` + (process.exitCode ? ' (with failures)' : ''));

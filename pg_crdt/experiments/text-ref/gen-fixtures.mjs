@@ -4,33 +4,38 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import assert from 'node:assert/strict';
-import { Doc } from './ref.mjs';
+import { Doc, OpRejected } from './ref.mjs';
+import { byzSim } from './byz.mjs';
 import { mulberry32, ri, pick, shuffle, simulate } from './sim.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const outDir = join(here, 'fixtures');
 mkdirSync(outDir, { recursive: true });
 
-// Random topological order of the log: an op becomes ready when every op that created
-// an id it references (origins, same replica's previous seq, delete targets) is placed.
-function causalOrder(rnd, log) {
+// Random topological order of the ops. An op is ready when the doc covers its v, i.e. every op that
+// created an id (r, 1..v[r]) is placed (the untrusted path waits for exactly that). Ops in `skip`
+// (rejected ones) create no ids, so nothing can depend on them.
+function causalOrder(rnd, log, skip) {
   const creator = new Map(); // replica -> array seq-1 -> op index
   log.forEach((op, k) => {
+    if (skip.has(k)) return;
     for (const [r, s, , , text] of op.i) {
       let a = creator.get(r); if (!a) creator.set(r, (a = []));
       const n = Array.from(text).length;
       for (let q = 0; q < n; q++) a[s - 1 + q] = k;
     }
   });
-  const who = (r, s) => creator.get(r)?.[s - 1];
   const deps = log.map((op, k) => {
     const ds = new Set();
-    for (const [r, s, ol, or] of op.i) {
-      for (const id of [ol, or, s > 1 ? [r, s - 1] : null]) if (id) ds.add(who(id[0], id[1]));
+    for (const [r, n] of Object.entries(op.v)) {
+      for (let q = 1; q <= n; q++) {
+        const c = creator.get(r)?.[q - 1];
+        if (c === undefined && skip.has(k)) continue; // statically rejected ops never wait (V1/V2/V6 fire on arrival)
+        assert.ok(c !== undefined, `op ${k} claims an id nobody created: ${r}:${q}`);
+        ds.add(c);
+      }
     }
-    for (const [r, s, len] of op.d) for (let q = 0; q < len; q++) ds.add(who(r, s + q));
     ds.delete(k);
-    for (const x of ds) assert.ok(x !== undefined, 'dangling dependency');
     return ds;
   });
   const placed = new Set(), out = [];
@@ -60,20 +65,52 @@ function deliveryOrder(rnd, log, mode) {
   return order;
 }
 
-function write(name, log, expected, rnd, mode) {
-  const ops = deliveryOrder(rnd, log, mode).map((k) => log[k]);
-  const causal = causalOrder(rnd, log).map((k) => log[k]);
-  // self-check: both orders reproduce `expected`; causal order never needs buffering
-  const a = new Doc(); for (const o of ops) a.apply(o);
-  assert.equal(a.text(), expected); assert.equal(a.pendingCount(), 0);
-  const b = new Doc();
-  for (const o of causal) { b.apply(o); assert.equal(b.pendingCount(), 0, `${name}: causal order needed buffering`); }
-  assert.equal(b.text(), expected);
+// Replay `list` through the validated path in a fresh doc. Returns { doc, rejectedPositions, decided }.
+function replayValidated(list, { allowPending = false } = {}) {
+  const doc = new Doc();
+  const rejectedPositions = [];
+  const decided = new Map();
+  doc.onDecision = (op, st, reason) => decided.set(op, [st, reason]);
+  list.forEach((op, p) => {
+    let res;
+    try { res = doc.apply(op, { validate: true }); } catch (e) { if (e instanceof OpRejected) res = 'rejected'; else throw e; }
+    if (res === 'rejected') rejectedPositions.push(p);
+    if (res === 'pending' && !allowPending) { /* may be decided later (delivery order is arbitrary) */ }
+  });
+  return { doc, rejectedPositions, decided };
+}
+
+const reasonCounts = new Map();
+// `rejectedLog`: Set of log indexes that must be rejected (empty for honest fixtures).
+function write(name, log, expected, rnd, mode, rejectedLog = new Set()) {
+  const order = deliveryOrder(rnd, log, mode);
+  const ops = order.map((k) => log[k]);
+  const rejected = order.flatMap((k, p) => (rejectedLog.has(k) ? [p] : []));
+  const corder = causalOrder(rnd, log, rejectedLog);
+  const causal = corder.map((k) => log[k]);
+  const rejectedCausal = corder.flatMap((k, p) => (rejectedLog.has(k) ? [p] : []));
+  // self-checks, validated path: arbitrary order reproduces expected text and the rejected set; causal
+  // order never waits
+  const a = replayValidated(ops);
+  assert.equal(a.doc.text(), expected, `${name}: text`); assert.equal(a.doc.pendingCount(), 0, `${name}: stuck ops`);
+  assert.deepEqual(ops.flatMap((op, p) => (a.decided.get(op)[0] === 'rejected' ? [p] : [])), rejected, `${name}: rejected set`);
+  for (const [op, [st, why]] of a.decided) if (st === 'rejected') reasonCounts.set(why.split(':')[0], (reasonCounts.get(why.split(':')[0]) ?? 0) + 1);
+  const b = new Doc(); const decidedB = [];
+  b.onDecision = (op, st) => decidedB.push(st);
+  causal.forEach((op, p) => {
+    let res;
+    try { res = b.apply(op, { validate: true }); } catch (e) { if (e instanceof OpRejected) res = 'rejected'; else throw e; }
+    assert.notEqual(res, 'pending', `${name}: causal order needed buffering at ${p}`);
+    assert.equal(res === 'rejected', rejectedCausal.includes(p), `${name}: causal rejected set at ${p}`);
+  });
+  assert.equal(b.text(), expected); assert.equal(b.pendingCount(), 0);
+  // trusted path (ignores v) reproduces the text for honest fixtures
+  if (!rejectedLog.size) { const c = new Doc(); for (const o of ops) c.apply(o); assert.equal(c.text(), expected); }
   const fmt = (arr) => '[\n' + arr.map((o) => '  ' + JSON.stringify(o)).join(',\n') + '\n]';
-  const json = `{\n"ops": ${fmt(ops)},\n"ops_causal": ${fmt(causal)},\n"expected": ${JSON.stringify(expected)}\n}\n`;
+  const json = `{\n"ops": ${fmt(ops)},\n"ops_causal": ${fmt(causal)},\n"rejected": ${JSON.stringify(rejected)},\n"rejected_causal": ${JSON.stringify(rejectedCausal)},\n"expected": ${JSON.stringify(expected)}\n}\n`;
   JSON.parse(json);
   writeFileSync(join(outDir, name + '.json'), json);
-  return { name, replicas: Object.keys(a.versionVector()).length, generated: log.length, delivered: ops.length, len: Array.from(expected).length };
+  return { name, replicas: Object.keys(a.doc.versionVector()).length, generated: log.length, delivered: ops.length, rejected: rejected.length, len: Array.from(expected).length };
 }
 
 const NAMES = ['alice', 'bob', 'carol', 'dave', 'Eve', 'zed'];
@@ -84,7 +121,7 @@ for (let n = 1; n <= 50; n++) {
   const nr = ri(rnd, 2, 5);
   const names = shuffle(rnd, NAMES.slice()).slice(0, nr);
   const { log, expected } = simulate(5000 + n, {
-    names, nOps: ri(rnd, 15, 160), syncProb: pick(rnd, [0.05, 0.15, 0.4]),
+    validate: true, names, nOps: ri(rnd, 15, 160), syncProb: pick(rnd, [0.05, 0.15, 0.4]),
     maxRun: pick(rnd, [3, 8, 20]), delProb: pick(rnd, [0.15, 0.3, 0.45]),
   });
   summary.push(write(`fuzz-${String(n).padStart(3, '0')}`, log, expected, rnd, n % 2 ? 'shuffled' : 'near-causal'));
@@ -123,5 +160,52 @@ for (let n = 1; n <= 3; n++) {
   log.push(d.localDelete('alice', 0, d.length()));
   summary.push(write('delete-all-001', log, '', rnd, 'shuffled'));
 }
-for (const s of summary) console.log(`${s.name}: replicas=${s.replicas} generated=${s.generated} delivered=${s.delivered} len=${s.len}`);
+// Malicious fixtures. Honest replicas never see the untrusted ops; untrusted ops come from fresh replica ids
+// (seq 1) that lie about origins, v and delete targets. Each must be accepted or rejected on every replica,
+// whatever the delivery order. `rejected` lists positions in `ops` (duplicates included) that must be rejected.
+for (let n = 1; n <= 12; n++) {
+  const rnd = mulberry32(3000 + n);
+  const r = byzSim(9000 + n, {
+    honest: ['alice', 'bob', 'carol', 'dave'].slice(0, 2 + (n % 3)), nOps: 30 + 6 * n, byzFrac: 0.35 + 0.03 * n,
+    honestSeesByz: false, nExtra: 2, byzOpts: { noRaise: true, continueProb: 0 },
+  });
+  assert.ok(r.ok, r.problems.join('; '));
+  assert.equal(r.stats.pending, 0);
+  const rejectedLog = new Set(r.statuses.flatMap((st, k) => (st[0] === 'rejected' ? [k] : [])));
+  summary.push(write(`malicious-${String(n).padStart(3, '0')}`, r.log, r.texts[0], rnd, n % 2 ? 'shuffled' : 'near-causal', rejectedLog));
+}
+// the reviewer's repro: alice "abc", bob honest "Y", mal skips "a" with originRight = alice:2
+{
+  const rnd = mulberry32(3100);
+  const A = new Doc(); const oa = A.localInsert('alice', 0, 'abc');
+  const ob = { v: {}, i: [['bob', 1, null, null, 'Y']], d: [] };
+  const om = { v: { alice: 3 }, i: [['mal', 1, null, ['alice', 2], 'X']], d: [] };
+  summary.push(write('malicious-repro-001', [oa, ob, om], 'abcY', rnd, 'shuffled', new Set([2])));
+}
+// one violation per rule on top of an honest base (alice "abc", bob "Z" after alice:3)
+{
+  const rnd = mulberry32(3200);
+  const A = new Doc(); const oa = A.localInsert('alice', 0, 'abc');
+  const ob = { v: { alice: 3 }, i: [['bob', 1, ['alice', 3], null, 'Z']], d: [] };
+  const bad = [
+    { v: { alice: 3 }, i: [['m02', 1, ['alice', 3], ['carol', 1], 'x']], d: [] },                          // V1
+    { v: { alice: 3 }, i: [['m03', 2, null, null, 'x']], d: [] },                                          // V2 forged seq
+    { v: { alice: 3, m04: 1 }, i: [['m04', 1, null, null, 'x']], d: [] },                                  // V2 reused seq
+    { v: { alice: 2, bob: 1 }, i: [['m05', 1, null, null, 'x']], d: [] },                                  // V3 not closed
+    { v: { alice: 3 }, i: [['m06', 1, ['alice', 3], ['alice', 1], 'x']], d: [] },                          // V4 reversed
+    { v: { alice: 3 }, i: [['m07', 1, ['alice', 2], ['alice', 2], 'x']], d: [] },                          // V4 equal
+    { v: { alice: 3 }, i: [['m08', 1, ['alice', 1], ['alice', 3], 'x']], d: [] },                          // V5 skips alice:2
+    { v: { alice: 3 }, i: [], d: [['alice', 3, 2]] },                                                      // V6 past v
+    { v: { alice: 3 }, i: [], d: [['ghost', 1, 1]] },                                                      // V6 unseen id
+    { v: { alice: 3, bob: 1 }, i: [['m09', 1, ['bob', 1], null, 'ok'], ['m09', 3, ['alice', 1], ['alice', 3], 'bad']], d: [] }, // V5, atomic
+    { v: { alice: 3 }, i: [['m10', 1, ['alice', 1], ['alice', 2], '-']], d: [] },                          // fine: adjacent
+    { v: { alice: 2 }, i: [['m11', 1, ['alice', 1], ['alice', 2], '+']], d: [] },                          // fine: honest stale view
+  ];
+  const log = [oa, ob, ...bad];
+  const rejectedLog = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((k) => k + 1));
+  const doc = new Doc(); for (const o of log) { try { doc.apply(o, { validate: true }); } catch (e) { if (!(e instanceof OpRejected)) throw e; } }
+  summary.push(write('malicious-rules-001', log, doc.text(), rnd, 'shuffled', rejectedLog));
+}
+for (const s of summary) console.log(`${s.name}: replicas=${s.replicas} generated=${s.generated} delivered=${s.delivered} rejected=${s.rejected} len=${s.len}`);
+console.log('rejection reasons across fixtures:', Object.fromEntries([...reasonCounts].sort()));
 console.log(`${summary.length} fixtures written to fixtures/`);
