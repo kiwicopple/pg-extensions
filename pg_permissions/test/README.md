@@ -103,6 +103,14 @@ The scenarios and the work plan are in [`../research/plan.md`](../research/plan.
 | `7x_cedar_oracle` | Cedar oracle (generated before each run, not committed) | `spec/d/` |
 | `90_usage_` | The SQL examples of the user docs: RBAC, OpenFGA, conditions, RLS and Cedar (`90_usage_cedar.sql`) | `spec/d/` |
 
+### Security regressions
+
+`d/06_security_invariants.sql` checks privileges, search paths, temporary-type attacks and malformed inputs. `d/07_security_default_privileges.sql` installs and upgrades in databases with permissive global and schema-local default grants. `d/08_security_cache_rollback.sql` tries to replay signed Cedar filters across revocation and savepoint rollback. `d/58_cedar_security_inputs.sql` checks malformed resource attributes against both conditional and unconditional permits.
+
+The JavaScript integration suite adds real concurrent connections and direct PostgREST requests in `js/test/integration/security.test.ts`. Run `npm run test:integration` from `js/`. Its template tests exercise both orders of concurrent linking and replacement, including a replacement that changes slots. Hierarchy tests try to create a cycle with two writers under `READ COMMITTED`, `REPEATABLE READ`, and `SERIALIZABLE`. Unit tests also cover subject isolation, refusal of admin calls on subject transports, and unexpected boolean responses.
+
+Run SQL suites that generate Cedar oracle files sequentially with the Docker matrix: both commands regenerate the same files. The matrix includes pg_tle installation and upgrade checks on Postgres 16, 17 and 18.
+
 ## Write a test
 
 A spec file is a psql script. Create the data as the superuser, declare a plan, assert, and finish:

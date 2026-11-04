@@ -316,6 +316,11 @@ export const pages = [
     "label": "C: usage"
   },
   {
+    "src": "research/security/2026-11-03-SECURITY_REVIEW.md",
+    "route": "research/security-review-2026-11-03",
+    "label": "Security review (2026-11-03)"
+  },
+  {
     "src": "research/upstream/openfga-cycle-but-not-inconsistency.md",
     "route": "research/upstream/openfga-cycle-but-not",
     "label": "OpenFGA upstream report"
@@ -725,6 +730,10 @@ export const sidebar = [
             "slug": "research/prototypes/c-compiled-model"
           }
         ]
+      },
+      {
+        "label": "Security review (2026-11-03)",
+        "slug": "research/security-review-2026-11-03"
       },
       {
         "label": "OpenFGA upstream report",

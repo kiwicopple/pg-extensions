@@ -150,6 +150,7 @@ The current-subject helpers read the subject from the same settings as the other
 The extension keeps these properties for each function and table it creates. The spec `test/spec/d/06_security_invariants.sql` checks them in the catalog, so a new function or grant that breaks one fails the tests.
 
 - Clients can execute only the client functions in the table above. They have no privilege on a table or sequence of the extension.
+- Newly installed objects discard grants inherited from the installer's default privileges, including grants to named roles. Add the backend's admin grants explicitly after installation. An upgrade preserves explicit grants on existing RBAC and OpenFGA functions; audit those grants when upgrading an existing database.
 - Each `security definer` function sets `search_path` to `pg_catalog, pg_temp` and `standard_conforming_strings` to `on`. A temporary type or a session setting of the caller does not change what the function does.
 - The functions do not build or run dynamic SQL. Names, ids, policies and JSON are data.
 - A missing subject, a null argument or a malformed value gives false or an empty result, or raises an error. It never gives access. An OpenFGA check with an unknown relation raises an error.
@@ -166,3 +167,5 @@ revoke all on function permissions.my_function(text) from public;
 ```
 
 In your own `security definer` functions, set `search_path = pg_catalog, pg_temp` and qualify each name with its schema. Do not set `search_path` to an empty value: Postgres then searches the temporary schema of the caller first for types and tables.
+
+The [2026-11-03 security review](../../research/security/2026-11-03-SECURITY_REVIEW.md) records how these properties were tested, the findings it fixed, and the deployment boundaries that remain.

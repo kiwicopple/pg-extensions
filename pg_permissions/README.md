@@ -27,7 +27,7 @@ The extension is pure SQL. It needs no other extension and no C code. It runs on
 Run the SQL file once in a fresh database, from this directory:
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 \
   -f pg_permissions--0.1.0.sql
 ```
 
@@ -121,3 +121,5 @@ The Vercel Git integration deploys on every push to `main`. The script `docs:pub
 To run the tests, see [`test/README.md`](test/README.md). To run Postgres 16, 17 and 18 with pg_tle, see [`docker/README.md`](docker/README.md). Write documentation as described in [`STYLE.md`](STYLE.md). The documentation site (Astro + Starlight) is in [`site/`](site/README.md); `npm run docs:build` builds it.
 
 For the design history and the benchmarks, see [`research/README.md`](research/README.md).
+
+The [2026-11-03 security review](research/security/2026-11-03-SECURITY_REVIEW.md) records the findings, fixes, regression coverage and remaining deployment boundaries.
