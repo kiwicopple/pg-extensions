@@ -2,7 +2,7 @@
 -- version vector, yseq_diff as the op of a local edit, and YjsMod's
 -- non-interleaving of concurrent runs typed at the same place.
 
-select tap.plan(20);
+select tap.plan(23);
 
 select crdt.yseq_insert(crdt.yseq_empty(), 0, 'XY', 'base') as base \gset
 
@@ -33,17 +33,19 @@ select tap.is(crdt.yseq_ops_since(:'ab', '{"base": 2, "alice": 2, "bob": 4}') ->
 select tap.is(jsonb_array_length(crdt.yseq_ops_since(:'ab', null) -> 'i'), 3, 'a null version vector means everything');
 select tap.throws_ok(format('select crdt.yseq_ops_since(%L, %L)', :'ab', '{"alice": -1}'), '22023', 'a negative count is rejected: 22023');
 select tap.throws_ok(format('select crdt.yseq_ops_since(%L, %L)', :'ab', '[1]'), '22023', 'a non-object version vector is rejected: 22023');
-select tap.is(crdt.yseq_value(crdt.yseq_apply(:'b', crdt.yseq_ops_since(:'ab', crdt.yseq_version(:'b')), 'alice')), 'XaaaabbbbY',
-              'ops_since(state, version(other)) brings the other replica up to date');
+select tap.is(crdt.yseq_value(crdt._yseq_integrate(:'b', crdt.yseq_ops_since(:'ab', crdt.yseq_version(:'b')) -> 'i', '[]')), 'XaaaabbbbY',
+              'ops_since(state, version(other)) brings the other replica up to date (trusted path)');
+select tap.throws_ok(format('select crdt.yseq_apply(%L, %L, %L)', :'b', crdt.yseq_ops_since(:'ab', crdt.yseq_version(:'b')), 'alice'), '22023',
+                     'ops_since ops carry no v: yseq_apply rejects them');
 
 -- deletes travel as a delete set
 select crdt.yseq_delete(:'ab', 2, 4, 'bob') as abd \gset
 select tap.is(crdt.yseq_ops_since(:'abd', crdt.yseq_version(:'ab')), '{"i": [], "d": [["alice", 2, 3], ["bob", 1, 1]]}'::jsonb,
               'ops_since sends the whole delete set');
-select tap.is(crdt.yseq_diff(:'abd', crdt.yseq_delete(:'abd', 0, 1, 'bob')), '{"i": [], "d": [["base", 1, 1]]}'::jsonb,
+select tap.is(crdt.yseq_diff(:'abd', crdt.yseq_delete(:'abd', 0, 1, 'bob')), '{"v": {"base": 1}, "i": [], "d": [["base", 1, 1]]}'::jsonb,
               'yseq_diff sends only the new deletes');
-select tap.is(crdt.yseq_value(crdt.yseq_apply(:'b', crdt.yseq_ops_since(:'abd', crdt.yseq_version(:'b')), 'alice')), crdt.yseq_value(:'abd'),
-              'a replica that applies them sees the deletes');
+select tap.is(crdt.yseq_value(crdt._yseq_integrate(:'b', crdt.yseq_ops_since(:'abd', crdt.yseq_version(:'b')) -> 'i', crdt.yseq_ops_since(:'abd', crdt.yseq_version(:'b')) -> 'd')), crdt.yseq_value(:'abd'),
+              'a replica that integrates them sees the deletes');
 
 -- causal order of ops_since: a fresh state applies it in one pass without pending
 select crdt.yseq_merge(pg_temp.type(:'ab', 0, 'qq', 'carol'), pg_temp.type(:'ab', 9, 'rr', 'dave')) as abcd \gset
@@ -66,6 +68,11 @@ select tap.is(crdt.yseq_value(:'doc2'), E'First paragraph, edited by A.\nSecond 
 select tap.is(crdt.yseq_value(crdt.yseq_set(:'doc1', E'First paragraph.\nSecond paragraph.\nThird paragraph, edited by B.', 'b')),
               E'First paragraph.\nSecond paragraph.\nThird paragraph, edited by B.',
               'without base the second save is last-writer-wins for the whole text');
+select tap.is(crdt.yseq_value(crdt.yseq_apply(:'doc1', crdt.yseq_diff(:'doc1', :'doc2'), 'b')), crdt.yseq_value(:'doc2'),
+              'the three-way save''s op (yseq_diff) passes the causal rules on another replica that has the concurrent edit');
+select tap.is(crdt.yseq_value(crdt.yseq_apply(crdt.yseq_set(:'doc0', E'First paragraph.\nSecond paragraph.\nThird paragraph, edited by B.', 'b'),
+                                              crdt.yseq_diff(:'doc0', :'doc1'), 'a')),
+              E'First paragraph, edited by A.\nSecond paragraph.\nThird paragraph, edited by B.', 'and A''s op passes on B''s replica');
 -- a delete next to an append
 select crdt.yseq_set(:'doc0', E'First paragraph.\nSecond paragraph.\nThird paragraph.\nFourth.', 'a', base => :'doc0') as doc3 \gset
 select tap.is(crdt.yseq_value(crdt.yseq_set(:'doc3', E'First paragraph.\nSecond paragraph.\nThird.', 'b', base => :'doc0')),

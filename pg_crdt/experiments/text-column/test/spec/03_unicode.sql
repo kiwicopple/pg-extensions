@@ -18,7 +18,7 @@ select tap.is(crdt.yseq_length(crdt.yseq_insert(crdt.yseq_empty(), 0, '👨' || 
 
 -- set across characters with a common lead byte: é (C3 A9) -> è (C3 A8)
 select tap.is(crdt.yseq_diff(crdt.yseq_insert(crdt.yseq_empty(), 0, 'café!', 'a'), crdt.yseq_set(crdt.yseq_insert(crdt.yseq_empty(), 0, 'café!', 'a'), 'cafè!', 'b')),
-              '{"i": [["b", 1, ["a", 3], ["a", 4], "è"]], "d": [["a", 4, 1]]}'::jsonb,
+              '{"v": {"a": 4}, "i": [["b", 1, ["a", 3], ["a", 4], "è"]], "d": [["a", 4, 1]]}'::jsonb,
               'set é -> è: replaces the whole code point, not a byte');
 -- common trailing bytes: 😀 (F0 9F 98 80) -> 🙀 (F0 9F 99 80)
 select tap.is(crdt.yseq_value(crdt.yseq_set(crdt.yseq_insert(crdt.yseq_empty(), 0, 'x😀y', 'a'), 'x🙀y', 'b')), 'x🙀y',
@@ -31,7 +31,7 @@ select tap.is(crdt.yseq_value(crdt.yseq_set(crdt.yseq_insert(crdt.yseq_empty(), 
 select tap.is(crdt.yseq_ops_since(crdt.yseq_insert(crdt.yseq_empty(), 0, 'é😀', U&'\+01F600')) -> 'i',
               jsonb_build_array(jsonb_build_array(U&'\+01F600', 1, null, null, 'é😀')), 'a non-BMP replica id and text round-trip in ops');
 select tap.is(crdt.yseq_value(crdt.yseq_apply(crdt.yseq_empty(),
-              jsonb_build_object('i', jsonb_build_array(jsonb_build_array('ü', 1, null, null, 'a😀' || U&'\0301'))), 'ü')),
+              jsonb_build_object('v', '{}'::jsonb, 'i', jsonb_build_array(jsonb_build_array('ü', 1, null, null, 'a😀' || U&'\0301'))), 'ü')),
               'a😀' || U&'\0301', 'apply: unicode run text and replica id');
 select tap.is(crdt.yseq_ops_since(crdt.yseq_delete(crdt.yseq_insert(crdt.yseq_empty(), 0, 'a😀b', 'r'), 1, 1, 'r')) -> 'i' -> 0 ->> 4,
               'a' || U&'\FFFD' || 'b', 'ops_since sends U+FFFD for a deleted character (one code point each)');

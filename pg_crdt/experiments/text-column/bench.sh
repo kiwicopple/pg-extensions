@@ -214,7 +214,10 @@ select label as document,
                        overlay(crdt.yseq_value(s) placing repeat('Q', 300) from crdt.yseq_length(s) / 2 for 280)), s, 10) as "set (1 paragraph)",
        bench.ms('select crdt.yseq_value($1)', s, 50) as "value",
        bench.ms('select crdt.yseq_length($1)', s, 50) as "length",
-       bench.ms('select crdt.yseq_apply($1, ''{"i": [["zz", 1, null, null, "x"]], "d": []}'', ''zz'')', s, 10) as "apply 1 run",
+       bench.ms(format('select crdt.yseq_apply($1, %L, ''zz'')', jsonb_build_object('v', crdt.yseq_version(s), 'i', jsonb_build_array(jsonb_build_array('zz', 1, null,
+                jsonb_build_array(s -> 'r' ->> (((s #>> '{m,0}')::int[])[1] - 1), ((s #>> '{m,0}')::int[])[2]), 'x')))), s, 10) as "apply 1 run",
+       bench.ms(format('select crdt.yseq_apply($1, %L, ''zz'')', jsonb_build_object('v', crdt.yseq_version(s) || jsonb_build_object('paper', (crdt.yseq_version(s) ->> 'paper')::int - 1), 'i', jsonb_build_array(jsonb_build_array('zz', 1, null,
+                jsonb_build_array(s -> 'r' ->> (((s #>> '{m,0}')::int[])[1] - 1), ((s #>> '{m,0}')::int[])[2]), 'x')))), s, 10) as "apply 1 run (sender behind: V3 scan)",
        bench.ms('select crdt.yseq_ops_since($1, crdt.yseq_version($1))', s, 5) as "ops_since (none)",
        bench.ms('select crdt.yseq_ops_since($1, ''{}'')', s, 3) as "ops_since (all)"
 from (select label, (s::jsonb || '{}')::crdt.yseq s, id from bench.docs) d

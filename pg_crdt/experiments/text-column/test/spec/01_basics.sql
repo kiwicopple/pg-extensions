@@ -41,13 +41,13 @@ select tap.is(crdt.yseq_set(:'s1', 'Hello', 'bob')::jsonb, :'s1'::jsonb, 'set to
 select tap.is(crdt.yseq_value(crdt.yseq_set(null, 'abc', 'bob')), 'abc', 'set on null');
 select tap.is(crdt.yseq_value(crdt.yseq_set(:'s1', '', 'bob')), '', 'set to empty');
 select tap.is(crdt.yseq_diff(:'s1', crdt.yseq_set(:'s1', 'Help!', 'bob')),
-              '{"i": [["bob", 1, ["alice", 3], ["alice", 4], "p!"]], "d": [["alice", 4, 2]]}'::jsonb,
+              '{"v": {"alice": 5}, "i": [["bob", 1, ["alice", 3], ["alice", 4], "p!"]], "d": [["alice", 4, 2]]}'::jsonb,
               'set Hello -> Help!: keeps the common prefix, one delete and one insert');
 select tap.is(crdt.yseq_diff(:'s1', crdt.yseq_set(:'s1', 'Hello, Hello', 'bob')),
-              '{"i": [["bob", 1, ["alice", 5], null, ", Hello"]], "d": []}'::jsonb,
+              '{"v": {"alice": 5}, "i": [["bob", 1, ["alice", 5], null, ", Hello"]], "d": []}'::jsonb,
               'set with only an append: one insert at the end');
 select tap.is(crdt.yseq_diff(:'s1', crdt.yseq_set(:'s1', 'Jello', 'bob')),
-              '{"i": [["bob", 1, null, ["alice", 1], "J"]], "d": [["alice", 1, 1]]}'::jsonb,
+              '{"v": {"alice": 1}, "i": [["bob", 1, null, ["alice", 1], "J"]], "d": [["alice", 1, 1]]}'::jsonb,
               'set replacing the first character');
 
 -- set with base: the diff is taken against the text the editor loaded
@@ -73,8 +73,8 @@ select tap.throws_ok(format('select crdt.yseq_set(%L, %L, %L)', :'s1', 'a', ''),
 
 -- the domain checks the envelope
 select tap.throws_ok($$select '{"t": "yseq", "v": 1}'::crdt.yseq$$, '23514', 'domain: missing keys rejected');
-select tap.throws_ok($$select '{"t": "yseq", "v": 2, "r": [], "c": [], "n": [], "s": [], "m": [], "p": [], "x": []}'::crdt.yseq$$, '23514', 'domain: another version rejected');
-select tap.throws_ok($$select '{"t": "yseq", "v": 1, "r": [], "c": [], "n": [], "s": "abc", "m": [], "p": [], "x": []}'::crdt.yseq$$, '23514', 'domain: s must be an array');
-select tap.ok(not crdt.yseq_is_valid('{"t": "yseq", "v": 1, "r": ["a"], "c": [3], "n": [3], "s": ["abcd"], "m": ["{1,1,3,0,0,0,0}"], "p": [], "x": []}'),
+select tap.throws_ok($$select '{"t": "yseq", "v": 2, "r": [], "c": [], "n": [], "s": [], "m": [], "p": [], "x": [], "q": []}'::crdt.yseq$$, '23514', 'domain: another version rejected');
+select tap.throws_ok($$select '{"t": "yseq", "v": 1, "r": [], "c": [], "n": [], "s": "abc", "m": [], "p": [], "x": [], "q": []}'::crdt.yseq$$, '23514', 'domain: s must be an array');
+select tap.ok(not crdt.yseq_is_valid('{"t": "yseq", "v": 1, "r": ["a"], "c": [3], "n": [3], "s": ["abcd"], "m": ["{1,1,3,0,0,0,0}"], "p": [], "x": [], "q": []}'),
               'yseq_is_valid: rejects chunk text that does not match its runs');
 select * from tap.finish();

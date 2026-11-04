@@ -33,12 +33,12 @@ create index on posts using gin (to_tsvector('english', crdt.yseq_value(body)));
 | `yseq_delete(s, pos, len, replica)` | Delete `len` code points at `pos`. |
 | `yseq_set(s, content, replica, base => null)` | Make the text equal `content` with one delete and one insert (common prefix and suffix, in code points). See "set() and concurrent saves". |
 | `yseq_merge(a, b)`, `yseq_merge_agg(s)` | Full-state merge. Commutative, associative and idempotent on the document; `merge(x, null) = x`. |
-| `yseq_apply(s, ops, replica default crdt.current_replica_id())` | The untrusted write path, like `pn_apply_delta`. Inserts only with the caller's id or `<id>:<device>` (42501 otherwise, and for a null replica); deletes of anyone's characters; malformed ops 22023; idempotent. `ops` is one op or an array of ops. |
-| `yseq_ops_since(s, vv default '{}') -> jsonb` | `{"i": [...], "d": [...]}`: the insert runs the holder of `vv` lacks, in a causal order, and the whole delete set. |
-| `yseq_diff(old, new) -> jsonb` | The op that takes `old` to `new`: inserts beyond `old`'s version, and only the deletes `old` lacks. |
+| `yseq_apply(s, ops, replica default crdt.current_replica_id())` | The untrusted write path, like `pn_apply_delta`. Every op carries `v`, the sender's version vector before the op, and is accepted or rejected whole by the causal rules V0 to V7 (see "Causal validation"). Inserts only with the caller's id or `<id>:<device>` (42501 otherwise, and for a null replica); deletes of characters `v` covers; malformed or rejected ops 22023; too much waiting from one writer 54000; idempotent. `ops` is one op or an array of ops. |
+| `yseq_ops_since(s, vv default '{}') -> jsonb` | `{"i": [...], "d": [...]}`: the insert runs the holder of `vv` lacks, in a causal order, and the whole delete set. No `v`: these ops are for trusted catch-up (`yseq_merge`, or `crdt._yseq_integrate` on a server), and `yseq_apply` rejects them. |
+| `yseq_diff(old, new) -> jsonb` | The op that takes `old` to `new`: inserts beyond `old`'s version, only the deletes `old` lacks, and `v` for `yseq_apply`. |
 | `yseq_is_valid(jsonb) -> boolean` | The full validator (envelope, chunks, runs, version vector, origin sides, pending ops). For tests, or a table CHECK on states from outside. |
 
-The op a local edit generated: the edit functions return only the new state; `crdt.yseq_diff(old, new)` returns exactly the op (tested for every edit in `02_model`). In one statement, with the row lock taken first:
+The op a local edit generated: the edit functions return only the new state; `crdt.yseq_diff(old, new)` returns exactly the op, with `v` (tested for every edit in `02_model`, and through `yseq_apply` in `11_convergence` and `12_sync`). In one statement, with the row lock taken first:
 
 ```sql
 with old as (select body from posts where id = $1 for update)
@@ -238,9 +238,42 @@ research/text.md said that concurrent saves of different paragraphs both survive
 
 Why the base is the whole state and not a version vector token, as in shape B (`ydoc_base`): the text at a version needs (1) which characters were visible then, so each delete needs a stamp saying when it happened, and (2) the text of characters deleted since, which this shape does not store. Stamps would also stop adjacent tombstones from merging into one run unless their stamps are equal. The trace has 77,463 single-character delete patches that now merge into about 6,900 tombstone runs; with a stamp per delete they would be up to 77,463 runs, about 6 times the current 12,396 runs in total. A bounded log of recent deletes with their text would allow a small token for recent bases and is listed below as a follow-up. The cost of the current design is the payload: the client sends the state back (30 kB raw for the 10k document, 450 kB for 100k).
 
+## Causal validation (Amendment 1)
+
+research/text.md, Amendment 1: origins that merely exist are not enough. A writer that names origins which were never adjacent (the reviewer's repro: originRight skips a character) makes replicas diverge. Every op on the untrusted path now carries `v`, the sender's version vector before the op, and `yseq_apply` checks the rules of experiments/text-ref/README.md:
+
+- On arrival, from the op alone (in `yseq_apply`): V0 `v` is an object of replica keys and counts from 1; V1 both origins of each run are covered by `v` advanced run by run; V2 each run starts at `v[replica] + 1`; V6 every delete target is covered (no pre-deleting someone's future text). A failure raises 22023.
+- V7: an op whose `v` names characters the document lacks waits in the state (`"q": [[writer, op], ...]`) and is retried by every later `yseq_apply` and `yseq_merge`. At most 256 insert runs plus deletes, and 64 kB of op JSON, may wait per writer (`crdt._yseq_quota`); above that `yseq_apply` raises 54000.
+- Once the document covers `v` (in `crdt._yseq_integrate`): V3 `v` is causally closed; V4 originLeft is before originRight; V5 nothing covered by `v` lies strictly between them, tombstones included. An op is accepted or rejected whole: for an op of several runs the engine keeps copies of its arrays and restores them when a later run fails. An incoming op that fails raises 22023; a waiting op that fails in a later call is dropped silently (that call succeeds), as the reference reports it through a callback.
+- A run that repeats integrated ids is a no-op; a run that overlaps them partly is rejected (only equivocation makes one).
+
+**V3 needs no new storage.** The reference keeps a cumulative dependency vector per item. Here it is derived: an item's cross-replica origins are always on the first character of a run (character k > 0 has originLeft = its predecessor in the run, same replica, and the run's originRight; splits and merges keep that), so "the items `v` covers have all their origins covered" is one scan of the runs (`seq <= v[rep]` and an origin of another replica above `v`). That scan is needed only when the sender lags behind the document on some replica (`v[q] < c[q]`); a sender that has everything passes V3 at once, because the state itself is causally closed. Size cost on the trace: 0 bytes. CPU: see the table below (sender behind: one scan of all runs).
+
+**V4 and V5** walk the slots between the two origins (found with the same lookups as the integration), checking each slot's first seq against the advanced `v`. Honest typing has adjacent origins, so the walk is empty; a byzantine op with far-apart origins costs one walk, then is rejected.
+
+**Local edits produce ops that pass.** A local insert puts the new run right after the visible character `pos-1` and takes the next item, tombstones included, as originRight: adjacent in the full sequence, as V5 requires. `yseq_diff(old, new)` sets `v` to the causal closure, in `old`, of what the op depends on (its origins, each replica's previous character, its delete targets): the smallest `v` the rules accept. That also covers the three-way `yseq_set` with base, whose origins were adjacent in the base but may have concurrent text between them in the current state (that text is not in the closure). Honest ops are never rejected in the tests: `11_convergence` sends every edit of 40 random multi-replica sessions through `yseq_apply`, and `12_sync` sends three-way saves to a replica that has the concurrent edit.
+
+**Trusted paths stay trusted.** `yseq_merge` (and `crdt._yseq_integrate` called directly) does not check the rules: it is for states and catch-up ops from servers you run. Ops from `yseq_ops_since` carry no `v` and cannot pass `yseq_apply`. Equivocation (two ops with the same ids and different content) is not covered by the rules; in one database, the first arrival wins, and re-applied ids are not compared.
+
+**Fixtures.** All 71 JS fixtures, including the 14 `malicious-*` ones (V1 to V6 rejections, an atomicity case, accepted look-alikes), pass through the validated path with the expected text and the expected decisions: in causal order the ops that raise are exactly `rejected_causal`; in shuffled order with duplicates every raised op is in `rejected`, and every op in `rejected` either raised or waited and was dropped later. Split in two halves, validated separately and merged, they give the expected text too.
+
+**Cost of validation** (`bench.sh --quick`, same machine; "before" is the trusted engine of the previous version):
+
+| measurement | before (trusted) | validated |
+| --- | --- | --- |
+| batch100 trace replay, 2,598 `yseq_apply` calls in a table row, lz4 | 5.6 ms per call | 6.0 ms per call (+7%) |
+| the same, pglz | 10.6 ms per call | 11.5 ms per call (+9%) |
+| batch100 in memory, one call per op (`_yseq_integrate` vs `yseq_apply`) | 11.0 s | 11.7 s (+6%) |
+| apply of one run, 100k document, sender up to date | | 7.9 ms |
+| the same, sender one character behind (V3 scans the runs) | | 9.5 ms (+1.6 ms) |
+| the same at 10k | | 0.89 ms, 1.0 ms behind |
+| stored size | | +0 (V3 data is derived; `"q"` is empty unless ops wait) |
+
+The trace's ops all come from one up-to-date writer, so V3 never scans and V4/V5 walk nothing; the overhead is the static checks in `yseq_apply` (a PL/pgSQL loop over each op's runs) and the op-level bookkeeping in the engine. Edits by position, reads and merge are unchanged (merge 54 and 98 ms at 100k).
+
 ## Tests
 
-`experiments/text-column/test/run.sh`: 11 files, 177 assertions, all passing on Postgres 16.4. The suite also passes with chunks of 4 runs and the bulk-delete path forced (`--impl` with an edited copy), which exercises chunk splits on almost every edit.
+`experiments/text-column/test/run.sh`: 11 files, 199 assertions, all passing on Postgres 16.4. The suite also passes with chunks of 4 runs and the bulk-delete path forced (`--impl` with an edited copy), which exercises chunk splits on almost every edit.
 
 | File | Goal |
 | --- | --- |
@@ -251,10 +284,10 @@ Why the base is the whole state and not a version vector token, as in shape B (`
 | `11_convergence` | 40 trials of 2 to 5 replicas editing and syncing (merge and partial apply); the whole log shuffled with duplicates one op per call, all in one call, and every replica after the log, all equal; nothing pending; valid |
 | `12_sync` | non-interleaving of concurrent typing at one spot (both merge orders, C collation), ops_since with version vectors, delete set, yseq_diff, causal order of ops_since, three-way set |
 | `20_concurrency` | two dblink sessions: three-way set with a lock wait, stale set without base (pinned), 600 concurrent `yseq_insert`, `yseq_set` and `yseq_merge` transactions each lose nothing, negative control |
-| `30_apply` | owner rule (id, device key, exact match), null and malformed caller ids, deletes of others, arrays of ops, idempotence, held inserts and deletes, 12 malformed ops (22023), default identity, labels and grants |
+| `30_apply` | owner rule (id, device key, exact match), null and malformed caller ids, deletes of others, arrays of ops, idempotence; each causal rule V0 to V7 (the reviewer's repro, a two-run op rejected whole, a waiting op dropped later with nothing applied, a waiting op carried by merge); the quota (54000); malformed ops (22023); default identity; labels and grants |
 | `31_generated` | stored generated column, GIN full-text index and expression index used by the planner, `like`, REINDEX and updates under `search_path = pg_catalog, pg_temp` |
 | `32_review` | regressions from the adversarial review: linear cost of 8,000 deletes and 8,000 random inserts in one apply, a second save from the same base, malformed states (23514, 22023), seq and len written as 1.0, seq 2147483647, pending entries that are not pending |
-| `40_differential` | the JS reference fixtures except `malicious-*` (forged origins; they wait for the op format with a version vector) (`experiments/text-ref/fixtures/fixtures.sql`): shuffled ops with duplicates one per call, causal ops, all in one call, two halves merged, ops_since replayed; all equal to the reference text |
+| `40_differential` | all JS reference fixtures (`experiments/text-ref/fixtures/fixtures.sql`), `malicious-*` included: validated one op per call (shuffled with duplicates, and causal) with the reference's text and decisions, two validated halves merged, ops_since replayed on the trusted path, honest fixtures in one trusted call |
 
 ## Limitations
 
@@ -262,10 +295,11 @@ Why the base is the whole state and not a version vector token, as in shape B (`
 - `yseq_apply`, `yseq_merge` and `yseq_ops_since` parse every run on each call (about 5 to 10 ms at 100k characters, before TOAST).
 - No tombstone garbage collection: deleted characters stay as runs forever (without their text).
 - Ids are trusted to be unique: a replica that reuses ids with different text (two writers sharing one replica key) loses the second text silently, as in the reference. Use one replica key per writer session (`<user>:<device>`).
-- `yseq_apply` ignores an op's `"v"` key for now (the new fixtures carry one); forged origins (review finding 1) are not handled yet.
+- Equivocation is not detected (see "Causal validation"); `yseq_merge` must only receive states from servers you trust.
+- A waiting op rejected in a later call is dropped silently; the writer learns only that its text never appears.
 - Many concurrent inserts at one spot still cost O(k) each in the YjsMod scan, as in any YjsMod implementation.
 - `yseq_is_valid` rejects pending entries that are not pending (a pending delete of a present id, a pending run that is wholly present or ready), which only a hand-made state has. A writer that uses one replica key both locally and through `yseq_apply` can make such a state (see below).
-- Pending runs and deletes from `yseq_apply` are not bounded: a client can park junk ops in the state (ops with a seq gap or unknown origins). An app should cap the state size or the pending count.
+- The waiting-op quota is per writer (256 runs plus deletes, 64 kB); many writer ids can still fill a state. The quota is a constant (`crdt._yseq_quota`), not a setting, so that `yseq_apply` stays IMMUTABLE.
 - Local edits do not retry pending ops (only `yseq_apply` and `yseq_merge` do), and a replica that writes both locally and through `yseq_apply` with the same key can collide with its own pending ids.
 - `yseq_ops_since` sends the whole delete set every time.
 - Positions are code points; JS clients must convert from UTF-16 indexes. Grapheme clusters (combining marks, ZWJ sequences) can be split by a position edit or by set()'s diff.

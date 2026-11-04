@@ -16,7 +16,8 @@
  *    "s": ["...", "..."],     per chunk: the visible text
  *    "m": ["{...}", "{...}"], per chunk: the runs, an int[] literal, 7 ints per run
  *    "p": [],                 pending insert runs (wire format), origins not seen yet
- *    "x": []}                 pending deletes (wire format) of ids not seen yet
+ *    "x": [],                 pending deletes (wire format) of ids not seen yet
+ *    "q": []}                 validated ops waiting for v: [[writer, op], ...]
  *
  * A run is [rep, seq, len, olrep, olseq, orrep, orseq]: the characters
  * (r[rep], seq .. seq+|len|-1), visible when len > 0 and tombstones when
@@ -57,14 +58,15 @@
 create domain crdt.yseq as jsonb
     check (
         jsonb_typeof(value) = 'object'
-        and value @> '{"t": "yseq", "v": 1, "r": [], "c": [], "n": [], "s": [], "m": [], "p": [], "x": []}'
-        and (value - '{t,v,r,c,n,s,m,p,x}'::text[]) = '{}'::jsonb
+        and value @> '{"t": "yseq", "v": 1, "r": [], "c": [], "n": [], "s": [], "m": [], "p": [], "x": [], "q": []}'
+        and (value - '{t,v,r,c,n,s,m,p,x,q}'::text[]) = '{}'::jsonb
         and value @@ 'strict $.r.size() == $.c.size() && $.n.size() == $.s.size() && $.n.size() == $.m.size()'
         and not value @? 'strict $.r[*] ? (@.type() != "string")'
         and not value @? 'strict $.c[*] ? (@.type() != "number" || @ < 1 || @ > 2147483647 || @.floor() != @)'
         and not value @? 'strict $.n[*] ? (@.type() != "number")'
         and not value @? 'strict $.p[*] ? (@.type() != "array" || @.size() != 5)'
         and not value @? 'strict $.x[*] ? (@.type() != "array" || @.size() != 3)'
+        and not value @? 'strict $.q[*] ? (@.type() != "array" || @.size() != 2)'
     );
 
 comment on domain crdt.yseq is
@@ -73,7 +75,7 @@ comment on domain crdt.yseq is
 create function crdt.yseq_empty()
 returns crdt.yseq
 language sql immutable parallel safe
-return '{"t": "yseq", "v": 1, "r": [], "c": [], "n": [], "s": [], "m": [], "p": [], "x": []}'::crdt.yseq;
+return '{"t": "yseq", "v": 1, "r": [], "c": [], "n": [], "s": [], "m": [], "p": [], "x": [], "q": []}'::crdt.yseq;
 
 -- The text. IMMUTABLE, so it can back a stored generated column, an
 -- expression index or a full-text index. One chunk: the string itself.
@@ -398,6 +400,14 @@ begin
 end;
 $$;
 
+-- The most a writer may have waiting in the state (ops whose v names
+-- characters the document does not have yet): insert runs plus deletes,
+-- and bytes of op JSON. yseq_apply raises 54000 above either.
+create function crdt._yseq_quota(kind text)
+returns int
+language sql immutable parallel safe
+return case kind when 'runs' then 256 when 'bytes' then 65536 end;
+
 -- Integrate remote insert runs and deletes (wire format, already checked)
 -- into a state, with the state's pending runs and deletes. The trusted core
 -- of yseq_apply and yseq_merge.
@@ -417,7 +427,7 @@ $$;
 -- width_bucket over the original slots sorted by first key (a binary search
 -- in C), or the list of runs integrated in this call, then along sx, the
 -- chain of right halves left by splits. Only changed chunks are rebuilt.
-create function crdt._yseq_integrate(state crdt.yseq, ins jsonb, dels jsonb)
+create function crdt._yseq_integrate(state crdt.yseq, ins jsonb, dels jsonb, vops jsonb default null)
 returns crdt.yseq
 language plpgsql immutable parallel safe
 as $$
@@ -536,6 +546,44 @@ declare
     take int;
     pend_x jsonb := '[]';
     pend_p jsonb := '[]';
+    -- validated ops
+    vo_w text[];
+    vo_op jsonb[];
+    vo_inc boolean[];
+    vo_st int[];
+    vo_why text[];
+    nvo int;
+    vi int;
+    act int;
+    wfound boolean;
+    covered boolean;
+    vk text;
+    vn int;
+    vadv int[];
+    lag boolean;
+    op_r text[];
+    op_s int[];
+    op_olk text[];
+    op_ols int[];
+    op_ork text[];
+    op_ors int[];
+    op_t text[];
+    op_n int;
+    op_k int;
+    il int;
+    ul int;
+    ir int;
+    ur int;
+    bad text;
+    acc_dels jsonb := '[]';
+    pend_q jsonb := '[]';
+    lim_runs bigint;
+    lim_bytes bigint;
+    s_mm int[]; s_nx int[]; s_pv int[]; s_sca int[]; s_mark int[]; s_sx int[];
+    s_nd boolean[]; s_nt text[]; s_ns int; s_head int; s_tail int; s_cc int[];
+    s_rr text[]; s_dirty boolean[]; s_chh int[]; s_nch int; s_nv int[]; s_st text[];
+    s_ms text[]; s_nk1 int8[]; s_nk2 int8[]; s_nsl int[]; s_nne int;
+    s_sk int8[]; s_sp int[]; s_oe int8[]; s_changed boolean;
     -- output
     m int;
     h int;
@@ -575,6 +623,12 @@ begin
     tail := case when nr0 > 0 then nr0 else -1 end;
 
     -- ---- inserts --------------------------------------------------------
+    -- Two sources. Trusted runs (state p, then ins) are integrated in
+    -- rounds, each run once its own replica's previous character and its
+    -- origins are present. Validated ops (state q, then vops; each
+    -- [writer, op] with op.v, statically checked by yseq_apply: V0, V1, V2,
+    -- V6) wait until the document covers v (V7), are checked against the
+    -- document (V3, V4, V5) and are integrated whole or not at all.
     select array_agg(x ->> 0 order by o), array_agg((x ->> 1)::numeric::int order by o),
            array_agg(x -> 2 ->> 0 order by o), array_agg((x -> 2 ->> 1)::numeric::int order by o),
            array_agg(x -> 3 ->> 0 order by o), array_agg((x -> 3 ->> 1)::numeric::int order by o),
@@ -584,8 +638,18 @@ begin
           union all
           select x, o + 4294967296 from jsonb_array_elements(coalesce(ins, '[]'::jsonb)) with ordinality b(x, o)) z;
     nw := coalesce(cardinality(w_r), 0);
+    select array_agg(x -> 0 ->> 0 order by o), array_agg(x -> 1 order by o), array_agg(o > 4294967296 order by o)
+      into vo_w, vo_op, vo_inc
+    from (select x, o from jsonb_array_elements(state -> 'q') with ordinality a(x, o)
+          union all
+          select x, o + 4294967296 from jsonb_array_elements(coalesce(vops, '[]'::jsonb)) with ordinality b(x, o)) z;
+    nvo := coalesce(cardinality(vo_w), 0);
+    if nvo > 0 then
+        vo_st := array_fill(0, array[nvo]);
+        vo_why := array_fill(null::text, array[nvo]);
+    end if;
 
-    if nw > 0 then
+    if nw > 0 or nvo > 0 then
         -- the original slots by first character key, for width_bucket
         select coalesce(array_agg(k order by k), '{}'), coalesce(array_agg(g order by k), '{}'), coalesce(array_agg(e order by k), '{}')
           into sk, sp, oe
@@ -594,338 +658,559 @@ begin
               from generate_series(1, nr0) g) z;
         kready := true;
         w_done := array_fill(false, array[nw]);
-        progress := true;
-        while progress loop
-            progress := false;
-            wi := 1;
-            while wi <= nw loop
-                if w_done[wi] then
+        wi := 1;
+        progress := false;
+        act := 0;
+        loop
+            -- chains of split halves got long (splits in random order): re-index
+            -- every slot, so that walks start short again (amortized O(log n) lookups)
+            if nwalk > 2 * ns + 256 then
+                select coalesce(array_agg(k order by k), '{}'), coalesce(array_agg(g order by k), '{}'), coalesce(array_agg(e order by k), '{}')
+                  into sk, sp, oe
+                from (select g, (mm[7 * g - 6]::int8 << 32) | mm[7 * g - 5] k,
+                             (mm[7 * g - 6]::int8 << 32) | (mm[7 * g - 5] + abs(mm[7 * g - 4]) - 1) e
+                      from generate_series(1, ns) g) z;
+                nk1 := '{}';
+                nk2 := '{}';
+                nsl := '{}';
+                nne := 0;
+                fhead := 0;
+                fslot := 0;
+                nwalk := 0;
+            end if;
+
+            if act = 0 then
+                -- the next trusted run that is ready
+                wfound := false;
+                while wi <= nw loop
+                    if not w_done[wi] then
+                        rk := w_r[wi];
+                        s := w_s[wi];
+                        tx := w_t[wi];
+                        ln := length(tx);
+                        ri := array_position(rr, rk);
+                        have := coalesce(cc[ri], 0);
+                        if s::int8 + ln - 1 <= have then
+                            -- already integrated
+                            w_done[wi] := true;
+                        elsif s::int8 <= have::int8 + 1 then
+                            olk := w_olk[wi];
+                            ols := w_ols[wi];
+                            off := have + 1 - s;
+                            if off > 0 then
+                                s := have + 1;
+                                tx := substr(tx, off + 1);
+                                ln := ln - off;
+                                olk := rk;
+                                ols := have;
+                            end if;
+                            ork := w_ork[wi];
+                            ors := w_ors[wi];
+                            olri := case when olk is null then 0 else array_position(rr, olk) end;
+                            orri := case when ork is null then 0 else array_position(rr, ork) end;
+                            if not (olri is null or orri is null or (olri > 0 and ols > cc[olri]) or (orri > 0 and ors > cc[orri])) then
+                                wfound := true;
+                                exit;
+                            end if;
+                        end if;
+                    end if;
                     wi := wi + 1;
+                end loop;
+                if not wfound then
+                    -- no trusted run is ready: a validated op whose v the document covers (V7)
+                    vi := 1;
+                    while vi <= nvo loop
+                        if vo_st[vi] = 0 then
+                            covered := true;
+                            for vk, vn in select key, (value #>> '{}')::numeric::int from jsonb_each(vo_op[vi] -> 'v') loop
+                                if coalesce(cc[array_position(rr, vk)], 0) < vn then
+                                    covered := false;
+                                    exit;
+                                end if;
+                            end loop;
+                            exit when covered;
+                        end if;
+                        vi := vi + 1;
+                    end loop;
+                    if vi > nvo then
+                        exit when not progress;
+                        -- something changed this round: try the waiting runs again
+                        wi := 1;
+                        progress := false;
+                        continue;
+                    end if;
+                    act := vi;
+                    progress := true;
+                    -- vadv: v by replica index, advanced run by run below
+                    vadv := array_fill(0, array[coalesce(cardinality(rr), 0)]);
+                    for vk, vn in select key, (value #>> '{}')::numeric::int from jsonb_each(vo_op[act] -> 'v') loop
+                        vadv[array_position(rr, vk)] := vn;
+                    end loop;
+                    -- V3: v is causally closed. Only replicas the sender lags on can
+                    -- hold a dependency beyond v; then one scan of the runs, whose
+                    -- first characters carry every cross-replica origin.
+                    lag := false;
+                    i := 1;
+                    while i <= coalesce(cardinality(rr), 0) loop
+                        if vadv[i] < cc[i] then lag := true; exit; end if;
+                        i := i + 1;
+                    end loop;
+                    if lag and exists (
+                        select 1 from generate_series(1, ns) g
+                        where mm[7 * g - 5] <= vadv[mm[7 * g - 6]]
+                          and ((mm[7 * g - 3] > 0 and mm[7 * g - 3] <> mm[7 * g - 6] and mm[7 * g - 2] > vadv[mm[7 * g - 3]])
+                            or (mm[7 * g - 1] > 0 and mm[7 * g - 1] <> mm[7 * g - 6] and mm[7 * g] > vadv[mm[7 * g - 1]]))) then
+                        vo_st[act] := 2;
+                        vo_why[act] := 'V3: v is not causally closed';
+                        act := 0;
+                        continue;
+                    end if;
+                    select array_agg(x ->> 0 order by o), array_agg((x ->> 1)::numeric::int order by o),
+                           array_agg(x -> 2 ->> 0 order by o), array_agg((x -> 2 ->> 1)::numeric::int order by o),
+                           array_agg(x -> 3 ->> 0 order by o), array_agg((x -> 3 ->> 1)::numeric::int order by o),
+                           array_agg(x ->> 4 order by o)
+                      into op_r, op_s, op_olk, op_ols, op_ork, op_ors, op_t
+                    from jsonb_array_elements(coalesce(vo_op[act] -> 'i', '[]'::jsonb)) with ordinality a(x, o);
+                    op_n := coalesce(cardinality(op_r), 0);
+                    op_k := 0;
+                    if op_n > 1 then
+                        -- a later run can still be rejected: keep what to restore
+                        s_mm := mm; s_nx := nx; s_pv := pv; s_sca := sca; s_mark := mark; s_sx := sx;
+                        s_nd := nd; s_nt := nt; s_ns := ns; s_head := head; s_tail := tail; s_cc := cc;
+                        s_rr := rr; s_dirty := dirty; s_chh := chh; s_nch := nch; s_nv := nv; s_st := st;
+                        s_ms := ms; s_nk1 := nk1; s_nk2 := nk2; s_nsl := nsl; s_nne := nne;
+                        s_sk := sk; s_sp := sp; s_oe := oe; s_changed := changed;
+                    end if;
                     continue;
                 end if;
-                -- chains of split halves got long (splits in random order): re-index
-                -- every slot, so that walks start short again (amortized O(log n) lookups)
-                if nwalk > 2 * ns + 256 then
-                    select coalesce(array_agg(k order by k), '{}'), coalesce(array_agg(g order by k), '{}'), coalesce(array_agg(e order by k), '{}')
-                      into sk, sp, oe
-                    from (select g, (mm[7 * g - 6]::int8 << 32) | mm[7 * g - 5] k,
-                                 (mm[7 * g - 6]::int8 << 32) | (mm[7 * g - 5] + abs(mm[7 * g - 4]) - 1) e
-                          from generate_series(1, ns) g) z;
-                    nk1 := '{}';
-                    nk2 := '{}';
-                    nsl := '{}';
-                    nne := 0;
-                    fhead := 0;
-                    fslot := 0;
-                    nwalk := 0;
+            else
+                -- the next run of the active validated op
+                op_k := op_k + 1;
+                if op_k > op_n then
+                    vo_st[act] := 1;
+                    acc_dels := acc_dels || coalesce(vo_op[act] -> 'd', '[]'::jsonb);
+                    act := 0;
+                    continue;
                 end if;
-                rk := w_r[wi];
-                s := w_s[wi];
-                tx := w_t[wi];
+                rk := op_r[op_k];
+                s := op_s[op_k];
+                tx := op_t[op_k];
                 ln := length(tx);
                 ri := array_position(rr, rk);
                 have := coalesce(cc[ri], 0);
+                bad := null;
                 if s::int8 + ln - 1 <= have then
-                    -- already integrated
-                    w_done[wi] := true;
-                    wi := wi + 1;
+                    -- a duplicate of integrated ids
+                    vadv[ri] := greatest(vadv[ri], s + ln - 1);
                     continue;
-                end if;
-                if s::int8 > have::int8 + 1 then
-                    wi := wi + 1;
-                    continue;
-                end if;
-                olk := w_olk[wi];
-                ols := w_ols[wi];
-                off := have + 1 - s;
-                if off > 0 then
-                    s := have + 1;
-                    tx := substr(tx, off + 1);
-                    ln := ln - off;
-                    olk := rk;
-                    ols := have;
-                end if;
-                ork := w_ork[wi];
-                ors := w_ors[wi];
-                olri := case when olk is null then 0 else array_position(rr, olk) end;
-                orri := case when ork is null then 0 else array_position(rr, ork) end;
-                if olri is null or orri is null or (olri > 0 and ols > cc[olri]) or (orri > 0 and ors > cc[orri]) then
-                    wi := wi + 1;
-                    continue;
-                end if;
-                if ri is null then
-                    rr := rr || rk;
-                    cc := cc || 0;
-                    ri := cardinality(rr);
-                end if;
-
-                -- left: the slot that ends with originLeft (split if needed)
-                if olri = 0 then
-                    lft := 0;
+                elsif s <= have or s > have + 1 then
+                    bad := 'the run overlaps integrated ids';
                 else
-                    fk := (olri::int8 << 32) | ols;
-                    i := width_bucket(fk, sk);
-                    if i > 0 and fk <= oe[i] then
-                        i := sp[i];
+                    olk := op_olk[op_k];
+                    ols := op_ols[op_k];
+                    ork := op_ork[op_k];
+                    ors := op_ors[op_k];
+                    olri := case when olk is null then 0 else array_position(rr, olk) end;
+                    orri := case when ork is null then 0 else array_position(rr, ork) end;
+                    if olri is null or orri is null or (olri > 0 and ols > cc[olri]) or (orri > 0 and ors > cc[orri]) then
+                        bad := 'an origin is missing';
+                    end if;
+                end if;
+                if bad is null then
+                    -- V4, V5: originLeft before originRight, and nothing covered by
+                    -- vadv strictly between them (tombstones included)
+                    if olri = 0 then
+                        il := 0;
+                        ul := -1;
                     else
-                        i := nsl[coalesce(array_position(nk2, fk), array_position(nk1, fk),
+                        fk := (olri::int8 << 32) | ols;
+                        il := width_bucket(fk, sk);
+                        if il > 0 and fk <= oe[il] then
+                            il := sp[il];
+                        else
+                            il := nsl[coalesce(array_position(nk2, fk), array_position(nk1, fk),
+                                          (select u.o::int from unnest(nk1, nk2) with ordinality u(a, b, o) where fk between u.a and u.b limit 1))];
+                        end if;
+                        while fk > ((mm[7 * il - 6]::int8 << 32) | (mm[7 * il - 5] + abs(mm[7 * il - 4]) - 1)) loop
+                            il := sx[il];
+                            nwalk := nwalk + 1;
+                        end loop;
+                        ul := ols - mm[7 * il - 5];
+                    end if;
+                    if orri = 0 then
+                        ir := -1;
+                        ur := 0;
+                    else
+                        fk := (orri::int8 << 32) | ors;
+                        ir := width_bucket(fk, sk);
+                        if ir > 0 and fk <= oe[ir] then
+                            ir := sp[ir];
+                        else
+                            ir := nsl[coalesce(array_position(nk2, fk), array_position(nk1, fk),
+                                          (select u.o::int from unnest(nk1, nk2) with ordinality u(a, b, o) where fk between u.a and u.b limit 1))];
+                        end if;
+                        while fk > ((mm[7 * ir - 6]::int8 << 32) | (mm[7 * ir - 5] + abs(mm[7 * ir - 4]) - 1)) loop
+                            ir := sx[ir];
+                            nwalk := nwalk + 1;
+                        end loop;
+                        ur := ors - mm[7 * ir - 5];
+                    end if;
+                    if il > 0 and il = ir then
+                        if ul >= ur then
+                            bad := 'V4: originLeft is not before originRight';
+                        elsif ur - ul > 1 and mm[7 * il - 5] + ul + 1 <= coalesce(vadv[mm[7 * il - 6]], 0) then
+                            bad := 'V5: an item covered by v lies between the origins';
+                        end if;
+                    else
+                        if il > 0 and ul < abs(mm[7 * il - 4]) - 1 and mm[7 * il - 5] + ul + 1 <= coalesce(vadv[mm[7 * il - 6]], 0) then
+                            bad := 'V5: an item covered by v lies between the origins';
+                        end if;
+                        if bad is null then
+                            z := case when il = 0 then head when nx[il] <> 0 then nx[il] when il < nr0 then il + 1 else -1 end;
+                            loop
+                                exit when z = ir;
+                                if z = -1 then
+                                    bad := 'V4: originLeft is not before originRight';
+                                    exit;
+                                end if;
+                                if mm[7 * z - 5] <= coalesce(vadv[mm[7 * z - 6]], 0) then
+                                    bad := 'V5: an item covered by v lies between the origins';
+                                    exit;
+                                end if;
+                                z := case when nx[z] <> 0 then nx[z] when z < nr0 then z + 1 else -1 end;
+                            end loop;
+                        end if;
+                        if bad is null and ir > 0 and ur > 0 and mm[7 * ir - 5] <= coalesce(vadv[mm[7 * ir - 6]], 0) then
+                            bad := 'V5: an item covered by v lies between the origins';
+                        end if;
+                    end if;
+                end if;
+                if bad is not null then
+                    -- reject the whole op: undo its earlier runs
+                    if op_n > 1 then
+                        mm := s_mm; nx := s_nx; pv := s_pv; sca := s_sca; mark := s_mark; sx := s_sx;
+                        nd := s_nd; nt := s_nt; ns := s_ns; head := s_head; tail := s_tail; cc := s_cc;
+                        rr := s_rr; dirty := s_dirty; chh := s_chh; nch := s_nch; nv := s_nv; st := s_st;
+                        ms := s_ms; nk1 := s_nk1; nk2 := s_nk2; nsl := s_nsl; nne := s_nne;
+                        sk := s_sk; sp := s_sp; oe := s_oe; changed := s_changed;
+                        fhead := 0;
+                        fslot := 0;
+                    end if;
+                    vo_st[act] := 2;
+                    vo_why[act] := bad;
+                    act := 0;
+                    continue;
+                end if;
+            end if;
+            if ri is null then
+                rr := rr || rk;
+                cc := cc || 0;
+                ri := cardinality(rr);
+                if act > 0 then vadv[ri] := 0; end if;
+            end if;
+            -- left: the slot that ends with originLeft (split if needed)
+            if olri = 0 then
+                lft := 0;
+            else
+                fk := (olri::int8 << 32) | ols;
+                i := width_bucket(fk, sk);
+                if i > 0 and fk <= oe[i] then
+                    i := sp[i];
+                else
+                    i := nsl[coalesce(array_position(nk2, fk), array_position(nk1, fk),
+                                 (select u.o::int from unnest(nk1, nk2) with ordinality u(a, b, o) where fk between u.a and u.b limit 1))];
+                end if;
+                -- walk the chain of right halves; resume from the last hit when it is
+                -- on the same chain and not past the key (ascending lookups stay linear)
+                fh := i;
+                if i = fhead and fk >= ((mm[7 * fslot - 6]::int8 << 32) | mm[7 * fslot - 5]) then
+                    i := fslot;
+                end if;
+                while fk > ((mm[7 * i - 6]::int8 << 32) | (mm[7 * i - 5] + abs(mm[7 * i - 4]) - 1)) loop
+                    i := sx[i];
+                    nwalk := nwalk + 1;
+                end loop;
+                fhead := fh;
+                fslot := i;
+                a := ols - mm[7 * i - 5] + 1;
+                if a < abs(mm[7 * i - 4]) then
+                    -- split slot i after a characters
+                    sg := case when mm[7 * i - 4] < 0 then -1 else 1 end;
+                    ns := ns + 1;
+                    mm[7 * ns - 6] := mm[7 * i - 6];
+                    mm[7 * ns - 5] := mm[7 * i - 5] + a;
+                    mm[7 * ns - 4] := sg * (abs(mm[7 * i - 4]) - a);
+                    mm[7 * ns - 3] := mm[7 * i - 6];
+                    mm[7 * ns - 2] := mm[7 * i - 5] + a - 1;
+                    mm[7 * ns - 1] := mm[7 * i - 1];
+                    mm[7 * ns] := mm[7 * i];
+                    mm[7 * i - 4] := sg * a;
+                    sx[ns] := sx[i];
+                    sx[i] := ns;
+                    nd[ns] := false;
+                    if i > nr0 and nt[i - nr0] is not null then
+                        nt[ns - nr0] := substr(nt[i - nr0], a + 1);
+                        nt[i - nr0] := left(nt[i - nr0], a);
+                    else
+                        nt[ns - nr0] := null;
+                    end if;
+                    nxt := case when nx[i] <> 0 then nx[i] when i < nr0 then i + 1 else -1 end;
+                    nx[ns] := nxt;
+                    pv[ns] := i;
+                    mark[ns] := 0;
+                    sca[ns - nr0] := (case when i <= nr0 then width_bucket(i, cbh) else sca[i - nr0] end);
+                    nx[i] := ns;
+                    if nxt > 0 then pv[nxt] := ns; else tail := ns; end if;
+                    dirty[(case when i <= nr0 then width_bucket(i, cbh) else sca[i - nr0] end)] := true;
+                end if;
+                lft := i;
+            end if;
+            -- right: the slot that starts with originRight (split if needed)
+            if orri = 0 then
+                rgt := -1;
+            else
+                fk := (orri::int8 << 32) | ors;
+                i := width_bucket(fk, sk);
+                if i > 0 and fk <= oe[i] then
+                    i := sp[i];
+                else
+                    i := nsl[coalesce(array_position(nk2, fk), array_position(nk1, fk),
+                                 (select u.o::int from unnest(nk1, nk2) with ordinality u(a, b, o) where fk between u.a and u.b limit 1))];
+                end if;
+                -- walk the chain of right halves; resume from the last hit when it is
+                -- on the same chain and not past the key (ascending lookups stay linear)
+                fh := i;
+                if i = fhead and fk >= ((mm[7 * fslot - 6]::int8 << 32) | mm[7 * fslot - 5]) then
+                    i := fslot;
+                end if;
+                while fk > ((mm[7 * i - 6]::int8 << 32) | (mm[7 * i - 5] + abs(mm[7 * i - 4]) - 1)) loop
+                    i := sx[i];
+                    nwalk := nwalk + 1;
+                end loop;
+                fhead := fh;
+                fslot := i;
+                a := ors - mm[7 * i - 5];
+                if a > 0 then
+                    sg := case when mm[7 * i - 4] < 0 then -1 else 1 end;
+                    ns := ns + 1;
+                    mm[7 * ns - 6] := mm[7 * i - 6];
+                    mm[7 * ns - 5] := mm[7 * i - 5] + a;
+                    mm[7 * ns - 4] := sg * (abs(mm[7 * i - 4]) - a);
+                    mm[7 * ns - 3] := mm[7 * i - 6];
+                    mm[7 * ns - 2] := mm[7 * i - 5] + a - 1;
+                    mm[7 * ns - 1] := mm[7 * i - 1];
+                    mm[7 * ns] := mm[7 * i];
+                    mm[7 * i - 4] := sg * a;
+                    sx[ns] := sx[i];
+                    sx[i] := ns;
+                    nd[ns] := false;
+                    if i > nr0 and nt[i - nr0] is not null then
+                        nt[ns - nr0] := substr(nt[i - nr0], a + 1);
+                        nt[i - nr0] := left(nt[i - nr0], a);
+                    else
+                        nt[ns - nr0] := null;
+                    end if;
+                    nxt := case when nx[i] <> 0 then nx[i] when i < nr0 then i + 1 else -1 end;
+                    nx[ns] := nxt;
+                    pv[ns] := i;
+                    mark[ns] := 0;
+                    sca[ns - nr0] := (case when i <= nr0 then width_bucket(i, cbh) else sca[i - nr0] end);
+                    nx[i] := ns;
+                    if nxt > 0 then pv[nxt] := ns; else tail := ns; end if;
+                    dirty[(case when i <= nr0 then width_bucket(i, cbh) else sca[i - nr0] end)] := true;
+                    i := ns;
+                end if;
+                rgt := i;
+            end if;
+
+            -- YjsMod scan, one slot at a time (see research/text.md)
+            gen := gen + 1;
+            lastoff := case when lft > 0 then abs(mm[7 * lft - 4]) - 1 end;
+            cur := case when lft = 0 then head
+                        when nx[lft] <> 0 then nx[lft] when lft < nr0 then lft + 1 else -1 end;
+            dest := cur;
+            scanning := false;
+            loop
+                if not scanning then
+                    dest := cur;
+                end if;
+                exit when cur = -1 or cur = rgt;
+                mark[cur] := gen;
+                -- originLeft of cur against ours
+                if mm[7 * cur - 3] = 0 then
+                    ocl := case when lft = 0 then 0 else -1 end;
+                elsif lft = 0 then
+                    ocl := 1;
+                else
+                    fk := (mm[7 * cur - 3]::int8 << 32) | mm[7 * cur - 2];
+                    p := width_bucket(fk, sk);
+                    if p > 0 and fk <= oe[p] then
+                        p := sp[p];
+                    else
+                        p := nsl[coalesce(array_position(nk2, fk), array_position(nk1, fk),
                                      (select u.o::int from unnest(nk1, nk2) with ordinality u(a, b, o) where fk between u.a and u.b limit 1))];
                     end if;
                     -- walk the chain of right halves; resume from the last hit when it is
                     -- on the same chain and not past the key (ascending lookups stay linear)
-                    fh := i;
-                    if i = fhead and fk >= ((mm[7 * fslot - 6]::int8 << 32) | mm[7 * fslot - 5]) then
-                        i := fslot;
+                    fh := p;
+                    if p = fhead and fk >= ((mm[7 * fslot - 6]::int8 << 32) | mm[7 * fslot - 5]) then
+                        p := fslot;
                     end if;
-                    while fk > ((mm[7 * i - 6]::int8 << 32) | (mm[7 * i - 5] + abs(mm[7 * i - 4]) - 1)) loop
-                        i := sx[i];
+                    while fk > ((mm[7 * p - 6]::int8 << 32) | (mm[7 * p - 5] + abs(mm[7 * p - 4]) - 1)) loop
+                        p := sx[p];
                         nwalk := nwalk + 1;
                     end loop;
                     fhead := fh;
-                    fslot := i;
-                    a := ols - mm[7 * i - 5] + 1;
-                    if a < abs(mm[7 * i - 4]) then
-                        -- split slot i after a characters
-                        sg := case when mm[7 * i - 4] < 0 then -1 else 1 end;
-                        ns := ns + 1;
-                        mm[7 * ns - 6] := mm[7 * i - 6];
-                        mm[7 * ns - 5] := mm[7 * i - 5] + a;
-                        mm[7 * ns - 4] := sg * (abs(mm[7 * i - 4]) - a);
-                        mm[7 * ns - 3] := mm[7 * i - 6];
-                        mm[7 * ns - 2] := mm[7 * i - 5] + a - 1;
-                        mm[7 * ns - 1] := mm[7 * i - 1];
-                        mm[7 * ns] := mm[7 * i];
-                        mm[7 * i - 4] := sg * a;
-                        sx[ns] := sx[i];
-                        sx[i] := ns;
-                        nd[ns] := false;
-                        if i > nr0 and nt[i - nr0] is not null then
-                            nt[ns - nr0] := substr(nt[i - nr0], a + 1);
-                            nt[i - nr0] := left(nt[i - nr0], a);
-                        else
-                            nt[ns - nr0] := null;
-                        end if;
-                        nxt := case when nx[i] <> 0 then nx[i] when i < nr0 then i + 1 else -1 end;
-                        nx[ns] := nxt;
-                        pv[ns] := i;
-                        mark[ns] := 0;
-                        sca[ns - nr0] := (case when i <= nr0 then width_bucket(i, cbh) else sca[i - nr0] end);
-                        nx[i] := ns;
-                        if nxt > 0 then pv[nxt] := ns; else tail := ns; end if;
-                        dirty[(case when i <= nr0 then width_bucket(i, cbh) else sca[i - nr0] end)] := true;
-                    end if;
-                    lft := i;
-                end if;
-                -- right: the slot that starts with originRight (split if needed)
-                if orri = 0 then
-                    rgt := -1;
-                else
-                    fk := (orri::int8 << 32) | ors;
-                    i := width_bucket(fk, sk);
-                    if i > 0 and fk <= oe[i] then
-                        i := sp[i];
-                    else
-                        i := nsl[coalesce(array_position(nk2, fk), array_position(nk1, fk),
-                                     (select u.o::int from unnest(nk1, nk2) with ordinality u(a, b, o) where fk between u.a and u.b limit 1))];
-                    end if;
-                    -- walk the chain of right halves; resume from the last hit when it is
-                    -- on the same chain and not past the key (ascending lookups stay linear)
-                    fh := i;
-                    if i = fhead and fk >= ((mm[7 * fslot - 6]::int8 << 32) | mm[7 * fslot - 5]) then
-                        i := fslot;
-                    end if;
-                    while fk > ((mm[7 * i - 6]::int8 << 32) | (mm[7 * i - 5] + abs(mm[7 * i - 4]) - 1)) loop
-                        i := sx[i];
-                        nwalk := nwalk + 1;
-                    end loop;
-                    fhead := fh;
-                    fslot := i;
-                    a := ors - mm[7 * i - 5];
-                    if a > 0 then
-                        sg := case when mm[7 * i - 4] < 0 then -1 else 1 end;
-                        ns := ns + 1;
-                        mm[7 * ns - 6] := mm[7 * i - 6];
-                        mm[7 * ns - 5] := mm[7 * i - 5] + a;
-                        mm[7 * ns - 4] := sg * (abs(mm[7 * i - 4]) - a);
-                        mm[7 * ns - 3] := mm[7 * i - 6];
-                        mm[7 * ns - 2] := mm[7 * i - 5] + a - 1;
-                        mm[7 * ns - 1] := mm[7 * i - 1];
-                        mm[7 * ns] := mm[7 * i];
-                        mm[7 * i - 4] := sg * a;
-                        sx[ns] := sx[i];
-                        sx[i] := ns;
-                        nd[ns] := false;
-                        if i > nr0 and nt[i - nr0] is not null then
-                            nt[ns - nr0] := substr(nt[i - nr0], a + 1);
-                            nt[i - nr0] := left(nt[i - nr0], a);
-                        else
-                            nt[ns - nr0] := null;
-                        end if;
-                        nxt := case when nx[i] <> 0 then nx[i] when i < nr0 then i + 1 else -1 end;
-                        nx[ns] := nxt;
-                        pv[ns] := i;
-                        mark[ns] := 0;
-                        sca[ns - nr0] := (case when i <= nr0 then width_bucket(i, cbh) else sca[i - nr0] end);
-                        nx[i] := ns;
-                        if nxt > 0 then pv[nxt] := ns; else tail := ns; end if;
-                        dirty[(case when i <= nr0 then width_bucket(i, cbh) else sca[i - nr0] end)] := true;
-                        i := ns;
-                    end if;
-                    rgt := i;
-                end if;
-
-                -- YjsMod scan, one slot at a time (see research/text.md)
-                gen := gen + 1;
-                lastoff := case when lft > 0 then abs(mm[7 * lft - 4]) - 1 end;
-                cur := case when lft = 0 then head
-                            when nx[lft] <> 0 then nx[lft] when lft < nr0 then lft + 1 else -1 end;
-                dest := cur;
-                scanning := false;
-                loop
-                    if not scanning then
-                        dest := cur;
-                    end if;
-                    exit when cur = -1 or cur = rgt;
-                    mark[cur] := gen;
-                    -- originLeft of cur against ours
-                    if mm[7 * cur - 3] = 0 then
-                        ocl := case when lft = 0 then 0 else -1 end;
-                    elsif lft = 0 then
+                    fslot := p;
+                    if p = lft then
+                        ocl := case when mm[7 * cur - 2] - mm[7 * p - 5] = lastoff then 0 else -1 end;
+                    elsif mark[p] = gen then
                         ocl := 1;
                     else
-                        fk := (mm[7 * cur - 3]::int8 << 32) | mm[7 * cur - 2];
-                        p := width_bucket(fk, sk);
-                        if p > 0 and fk <= oe[p] then
-                            p := sp[p];
+                        ocl := -1;
+                    end if;
+                end if;
+                exit when ocl < 0;
+                if ocl = 0 then
+                    -- originRight of cur against ours
+                    if mm[7 * cur - 1] = 0 then
+                        ocr := case when rgt = -1 then 0 else 1 end;
+                    elsif rgt = -1 then
+                        ocr := -1;
+                    else
+                        fk := (mm[7 * cur - 1]::int8 << 32) | mm[7 * cur];
+                        q := width_bucket(fk, sk);
+                        if q > 0 and fk <= oe[q] then
+                            q := sp[q];
                         else
-                            p := nsl[coalesce(array_position(nk2, fk), array_position(nk1, fk),
+                            q := nsl[coalesce(array_position(nk2, fk), array_position(nk1, fk),
                                          (select u.o::int from unnest(nk1, nk2) with ordinality u(a, b, o) where fk between u.a and u.b limit 1))];
                         end if;
                         -- walk the chain of right halves; resume from the last hit when it is
                         -- on the same chain and not past the key (ascending lookups stay linear)
-                        fh := p;
-                        if p = fhead and fk >= ((mm[7 * fslot - 6]::int8 << 32) | mm[7 * fslot - 5]) then
-                            p := fslot;
+                        fh := q;
+                        if q = fhead and fk >= ((mm[7 * fslot - 6]::int8 << 32) | mm[7 * fslot - 5]) then
+                            q := fslot;
                         end if;
-                        while fk > ((mm[7 * p - 6]::int8 << 32) | (mm[7 * p - 5] + abs(mm[7 * p - 4]) - 1)) loop
-                            p := sx[p];
+                        while fk > ((mm[7 * q - 6]::int8 << 32) | (mm[7 * q - 5] + abs(mm[7 * q - 4]) - 1)) loop
+                            q := sx[q];
                             nwalk := nwalk + 1;
                         end loop;
                         fhead := fh;
-                        fslot := p;
-                        if p = lft then
-                            ocl := case when mm[7 * cur - 2] - mm[7 * p - 5] = lastoff then 0 else -1 end;
-                        elsif mark[p] = gen then
-                            ocl := 1;
+                        fslot := q;
+                        if q = rgt then
+                            ocr := case when mm[7 * cur] = mm[7 * q - 5] then 0 else 1 end;
                         else
-                            ocl := -1;
-                        end if;
-                    end if;
-                    exit when ocl < 0;
-                    if ocl = 0 then
-                        -- originRight of cur against ours
-                        if mm[7 * cur - 1] = 0 then
-                            ocr := case when rgt = -1 then 0 else 1 end;
-                        elsif rgt = -1 then
-                            ocr := -1;
-                        else
-                            fk := (mm[7 * cur - 1]::int8 << 32) | mm[7 * cur];
-                            q := width_bucket(fk, sk);
-                            if q > 0 and fk <= oe[q] then
-                                q := sp[q];
-                            else
-                                q := nsl[coalesce(array_position(nk2, fk), array_position(nk1, fk),
-                                             (select u.o::int from unnest(nk1, nk2) with ordinality u(a, b, o) where fk between u.a and u.b limit 1))];
-                            end if;
-                            -- walk the chain of right halves; resume from the last hit when it is
-                            -- on the same chain and not past the key (ascending lookups stay linear)
-                            fh := q;
-                            if q = fhead and fk >= ((mm[7 * fslot - 6]::int8 << 32) | mm[7 * fslot - 5]) then
-                                q := fslot;
-                            end if;
-                            while fk > ((mm[7 * q - 6]::int8 << 32) | (mm[7 * q - 5] + abs(mm[7 * q - 4]) - 1)) loop
-                                q := sx[q];
-                                nwalk := nwalk + 1;
+                            -- which comes first after cur: q or rgt?
+                            z := cur;
+                            loop
+                                z := case when nx[z] <> 0 then nx[z] when z < nr0 then z + 1 else -1 end;
+                                exit when z = q or z = rgt or z = -1;
                             end loop;
-                            fhead := fh;
-                            fslot := q;
-                            if q = rgt then
-                                ocr := case when mm[7 * cur] = mm[7 * q - 5] then 0 else 1 end;
-                            else
-                                -- which comes first after cur: q or rgt?
-                                z := cur;
-                                loop
-                                    z := case when nx[z] <> 0 then nx[z] when z < nr0 then z + 1 else -1 end;
-                                    exit when z = q or z = rgt or z = -1;
-                                end loop;
-                                ocr := case when z = q then -1 else 1 end;
-                            end if;
-                        end if;
-                        if ocr < 0 then
-                            scanning := true;
-                        elsif ocr = 0 then
-                            exit when rk < rr[mm[7 * cur - 6]] collate "C";
-                            scanning := false;
-                        else
-                            scanning := false;
+                            ocr := case when z = q then -1 else 1 end;
                         end if;
                     end if;
-                    cur := case when nx[cur] <> 0 then nx[cur] when cur < nr0 then cur + 1 else -1 end;
-                end loop;
-
-                -- insert before dest (-1: at the end), as a new slot that carries
-                -- its text; the chunk text is rebuilt once at the end
-                pr := case when dest = -1 then tail when pv[dest] <> 0 then pv[dest] else dest - 1 end;
-                if pr < 0 then
-                    pr := 0;
+                    if ocr < 0 then
+                        scanning := true;
+                    elsif ocr = 0 then
+                        exit when rk < rr[mm[7 * cur - 6]] collate "C";
+                        scanning := false;
+                    else
+                        scanning := false;
+                    end if;
                 end if;
-                ns := ns + 1;
-                mm[7 * ns - 6] := ri;
-                mm[7 * ns - 5] := s;
-                mm[7 * ns - 4] := ln;
-                mm[7 * ns - 3] := olri;
-                mm[7 * ns - 2] := coalesce(ols, 0);
-                mm[7 * ns - 1] := orri;
-                mm[7 * ns] := coalesce(ors, 0);
-                nx[ns] := dest;
-                pv[ns] := case when pr = 0 then -1 else pr end;
-                mark[ns] := 0;
-                sx[ns] := 0;
-                nd[ns] := false;
-                nt[ns - nr0] := tx;
-                if pr = 0 then head := ns; else nx[pr] := ns; end if;
-                if dest = -1 then tail := ns; else pv[dest] := ns; end if;
-                if nch = 0 then
-                    nch := 1;
-                    nv := array[0];
-                    st := array[''];
-                    ms := array['{}'];
-                    dirty := array[true];
-                    chh := array[ns];
-                    jj := 1;
-                elsif pr = 0 then
-                    jj := 1;
-                    chh[1] := ns;
-                else
-                    jj := (case when pr <= nr0 then width_bucket(pr, cbh) else sca[pr - nr0] end);
-                end if;
-                sca[ns - nr0] := jj;
-                -- the new ids, for lookups
-                nne := nne + 1;
-                nk1[nne] := (ri::int8 << 32) | s;
-                nk2[nne] := (ri::int8 << 32) | (s + ln - 1);
-                nsl[nne] := ns;
-                dirty[jj] := true;
-                cc[ri] := s + ln - 1;
-                changed := true;
-                w_done[wi] := true;
-                progress := true;
-                wi := wi + 1;
+                cur := case when nx[cur] <> 0 then nx[cur] when cur < nr0 then cur + 1 else -1 end;
             end loop;
+
+            -- insert before dest (-1: at the end), as a new slot that carries
+            -- its text; the chunk text is rebuilt once at the end
+            pr := case when dest = -1 then tail when pv[dest] <> 0 then pv[dest] else dest - 1 end;
+            if pr < 0 then
+                pr := 0;
+            end if;
+            ns := ns + 1;
+            mm[7 * ns - 6] := ri;
+            mm[7 * ns - 5] := s;
+            mm[7 * ns - 4] := ln;
+            mm[7 * ns - 3] := olri;
+            mm[7 * ns - 2] := coalesce(ols, 0);
+            mm[7 * ns - 1] := orri;
+            mm[7 * ns] := coalesce(ors, 0);
+            nx[ns] := dest;
+            pv[ns] := case when pr = 0 then -1 else pr end;
+            mark[ns] := 0;
+            sx[ns] := 0;
+            nd[ns] := false;
+            nt[ns - nr0] := tx;
+            if pr = 0 then head := ns; else nx[pr] := ns; end if;
+            if dest = -1 then tail := ns; else pv[dest] := ns; end if;
+            if nch = 0 then
+                nch := 1;
+                nv := array[0];
+                st := array[''];
+                ms := array['{}'];
+                dirty := array[true];
+                chh := array[ns];
+                jj := 1;
+            elsif pr = 0 then
+                jj := 1;
+                chh[1] := ns;
+            else
+                jj := (case when pr <= nr0 then width_bucket(pr, cbh) else sca[pr - nr0] end);
+            end if;
+            sca[ns - nr0] := jj;
+            -- the new ids, for lookups
+            nne := nne + 1;
+            nk1[nne] := (ri::int8 << 32) | s;
+            nk2[nne] := (ri::int8 << 32) | (s + ln - 1);
+            nsl[nne] := ns;
+            dirty[jj] := true;
+            cc[ri] := s + ln - 1;
+            changed := true;
+            progress := true;
+            if act = 0 then
+                w_done[wi] := true;
+                wi := wi + 1;
+            else
+                vadv[ri] := s + ln - 1;
+            end if;
         end loop;
         select coalesce(jsonb_agg(distinct x), '[]'::jsonb) into pend_p
         from unnest(w_raw, w_done) u(x, d) where not d;
     end if;
+    -- validated ops: the incoming ones must not be rejected; the waiting ones
+    -- stay in q, within the writer's quota
+    vi := 1;
+    while vi <= nvo loop
+        if vo_inc[vi] and vo_st[vi] = 2 then
+            raise exception 'crdt.yseq_apply: op rejected (%)', vo_why[vi]
+                using errcode = '22023',
+                      hint = 'The op breaks a causal rule of research/text.md, Amendment 1 (experiments/text-ref/README.md, V0 to V7).';
+        end if;
+        vi := vi + 1;
+    end loop;
+    select coalesce(jsonb_agg(distinct jsonb_build_array(qw, qop)), '[]'::jsonb) into pend_q
+    from unnest(vo_w, vo_op, vo_st) u(qw, qop, qst) where qst = 0;
+    if exists (select 1 from unnest(vo_w, vo_inc, vo_st) u(qw, qinc, qst) where qinc and qst = 0) then
+        select qw, sum(jsonb_array_length(coalesce(qop -> 'i', '[]')) + jsonb_array_length(coalesce(qop -> 'd', '[]'))), sum(octet_length(qop::text))
+          into vk, lim_runs, lim_bytes
+        from (select x ->> 0 qw, x -> 1 qop from jsonb_array_elements(pend_q) x) z
+        where qw in (select qw from unnest(vo_w, vo_inc, vo_st) u(qw, qinc, qst) where qinc and qst = 0)
+        group by qw
+        having sum(jsonb_array_length(coalesce(qop -> 'i', '[]')) + jsonb_array_length(coalesce(qop -> 'd', '[]'))) > crdt._yseq_quota('runs')
+            or sum(octet_length(qop::text)) > crdt._yseq_quota('bytes')
+        limit 1;
+        if found then
+            raise exception 'crdt.yseq_apply: writer % has too much waiting (% runs and deletes, % bytes)', quote_literal(vk), lim_runs, lim_bytes
+                using errcode = '54000',
+                      hint = format('An op waits until the document has every character its v names. At most %s runs and deletes, and %s bytes, may wait per writer.',
+                                    crdt._yseq_quota('runs'), crdt._yseq_quota('bytes'));
+        end if;
+    end if;
+    if pend_q <> state -> 'q' then
+        changed := true;
+    end if;
+    dels := coalesce(dels, '[]'::jsonb) || acc_dels;
 
     -- ---- deletes --------------------------------------------------------
     -- dm[ri]: the ids to delete that are present; the rest stays pending
@@ -1072,7 +1357,7 @@ begin
         end loop;
     end if;
 
-    if not changed and pend_p = state -> 'p' and pend_x = state -> 'x' then
+    if not changed and pend_p = state -> 'p' and pend_x = state -> 'x' and pend_q = state -> 'q' then
         return state;
     end if;
 
@@ -1237,7 +1522,7 @@ begin
         't', 'yseq', 'v', 1,
         'r', to_jsonb(rr), 'c', to_jsonb(cc),
         'n', to_jsonb(out_n), 's', to_jsonb(out_s), 'm', to_jsonb(out_m),
-        'p', pend_p, 'x', pend_x)::crdt.yseq;
+        'p', pend_p, 'x', pend_x, 'q', pend_q)::crdt.yseq;
 end;
 $$;
 
@@ -1668,22 +1953,84 @@ begin
 end;
 $$;
 
--- The ops that take `old` to `new` (a later version of the same document):
--- the inserts new has beyond old's version, and the deletes new has that old
--- has not. For a local edit, `yseq_diff(s, crdt.yseq_insert(s, ...))` is
--- exactly the op it generated.
+-- The causal closure of `seed` ({replica: seq}) in `state`: the smallest
+-- version vector that covers seed and every origin of every character it
+-- covers. A run's cross-replica origins are on its first character, so each
+-- round is one scan of the runs; rounds repeat until nothing grows.
+create function crdt._yseq_closure(state crdt.yseq, seed jsonb)
+returns jsonb
+language plpgsql immutable parallel safe
+as $$
+declare
+    rr text[] := array(select jsonb_array_elements_text(state -> 'r'));
+    mm int[];
+    vv int[];
+    nv int[];
+begin
+    if coalesce(cardinality(rr), 0) = 0 then
+        return '{}'::jsonb;
+    end if;
+    mm := replace(array_to_string(array(select jsonb_array_elements_text(state -> 'm')), ','), '},{', ',')::int[];
+    vv := array(select coalesce((seed ->> x)::numeric::int, 0) from unnest(rr) x);
+    loop
+        select array_agg(greatest(vv[g], coalesce(d.m, 0)) order by g) into nv
+        from generate_series(1, cardinality(rr)) g
+        left join (select t, max(sq) m
+                   from (select mm[7 * i - 3] t, mm[7 * i - 2] sq from generate_series(1, cardinality(mm) / 7) i
+                         where mm[7 * i - 3] > 0 and mm[7 * i - 3] <> mm[7 * i - 6] and mm[7 * i - 5] <= vv[mm[7 * i - 6]]
+                         union all
+                         select mm[7 * i - 1], mm[7 * i] from generate_series(1, cardinality(mm) / 7) i
+                         where mm[7 * i - 1] > 0 and mm[7 * i - 1] <> mm[7 * i - 6] and mm[7 * i - 5] <= vv[mm[7 * i - 6]]) z
+                   group by t) d on d.t = g;
+        exit when nv = vv;
+        vv := nv;
+    end loop;
+    return (select coalesce(jsonb_object_agg(rr[g], vv[g]), '{}'::jsonb) from generate_series(1, cardinality(rr)) g where vv[g] > 0);
+end;
+$$;
+
+-- The op that takes `old` to `new` (a later version of the same document):
+-- the inserts new has beyond old's version, only the deletes old lacks, and
+-- v, for yseq_apply: the causal closure in old of what the op depends on
+-- (its origins, each replica's previous character, its delete targets).
+-- That is the smallest v the rules accept, and it is valid for any honest
+-- local edit, including yseq_set with base (whose origins were adjacent in
+-- the base, not necessarily in old). For a local edit,
+-- `yseq_diff(s, crdt.yseq_insert(s, ...))` is exactly the op it generated.
 create function crdt.yseq_diff(old crdt.yseq, new crdt.yseq)
 returns jsonb
-language sql immutable parallel safe
-return jsonb_build_object(
-    'i', crdt.yseq_ops_since(new, crdt.yseq_version(coalesce(old, crdt.yseq_empty()))) -> 'i',
-    'd', (select coalesce(jsonb_agg(jsonb_build_array(k, lower(g), upper(g) - lower(g)) order by k collate "C", lower(g)), '[]'::jsonb)
+language plpgsql immutable parallel safe
+as $$
+declare
+    ov jsonb;
+    i jsonb;
+    d jsonb;
+begin
+    old := coalesce(old, crdt.yseq_empty());
+    ov := crdt.yseq_version(old);
+    i := crdt.yseq_ops_since(new, ov) -> 'i';
+    d := (select coalesce(jsonb_agg(jsonb_build_array(k, lower(g), upper(g) - lower(g)) order by k collate "C", lower(g)), '[]'::jsonb)
           from (select n.k, unnest(n.mr - coalesce(o.mr, '{}'::int8multirange)) g
                 from (select x ->> 0 k, range_agg(int8range((x ->> 1)::numeric::int8, (x ->> 1)::numeric::int8 + (x ->> 2)::numeric::int8)) mr
                       from jsonb_array_elements(crdt._yseq_delete_set(new)) x group by 1) n
                 left join (select x ->> 0 k, range_agg(int8range((x ->> 1)::numeric::int8, (x ->> 1)::numeric::int8 + (x ->> 2)::numeric::int8)) mr
                            from jsonb_array_elements(crdt._yseq_delete_set(coalesce(old, crdt.yseq_empty()))) x group by 1) o
-                  on o.k = n.k) z));
+                  on o.k = n.k) z);
+    return jsonb_build_object('v', crdt._yseq_closure(old, (
+        select coalesce(jsonb_object_agg(k, m), '{}'::jsonb)
+        from (select k, max(t) m
+              from (select x -> 2 ->> 0 k, (x -> 2 ->> 1)::int t from jsonb_array_elements(i) x where x -> 2 <> 'null'::jsonb
+                    union all
+                    select x -> 3 ->> 0, (x -> 3 ->> 1)::int from jsonb_array_elements(i) x where x -> 3 <> 'null'::jsonb
+                    union all
+                    select x ->> 0, (x ->> 1)::int - 1 from jsonb_array_elements(i) x
+                    union all
+                    select y ->> 0, (y ->> 1)::int + (y ->> 2)::int - 1 from jsonb_array_elements(d) y) z
+              where t > 0 and t <= coalesce((ov ->> k)::int, 0)
+              group by k) w)),
+        'i', i, 'd', d);
+end;
+$$;
 
 -- What yseq_merge needs of a state beyond the domain, which it cannot check
 -- cheaply: chunk lengths that are integers, chunk texts that are strings,
@@ -1732,6 +2079,10 @@ begin
     perform crdt._yseq_check(a, 'yseq_merge: argument a');
     perform crdt._yseq_check(b, 'yseq_merge: argument b');
     ops := crdt.yseq_ops_since(b, crdt.yseq_version(a));
+    if jsonb_array_length(b -> 'q') > 0 then
+        -- b's waiting validated ops wait in the result too (or run now)
+        a := jsonb_set(a, '{q}', (a -> 'q') || (b -> 'q'));
+    end if;
     return crdt._yseq_integrate(a, (ops -> 'i') || (b -> 'p'), (ops -> 'd') || (b -> 'x'));
 end;
 $$;
@@ -1745,13 +2096,22 @@ create aggregate crdt.yseq_merge_agg(crdt.yseq) (
 
 -- The write path for untrusted writers: ops from a writer whose identity is
 -- `replica` (default crdt.current_replica_id()). `ops` is one op
--- {"i": [...], "d": [...]} or an array of them. Every insert run must belong
--- to `replica` (its key is the id or <id>:<device>); deletes may target
--- anyone's characters. Ops already applied are skipped, so a retry is a
--- no-op. Inserts whose origins are missing wait in the state.
+-- {"v": {...}, "i": [...], "d": [...]} or an array of them; v is the
+-- sender's version vector before the op (research/text.md, Amendment 1).
+-- Every insert run must belong to `replica` (its key is the id or
+-- <id>:<device>); deletes may target anyone's characters. Each op is
+-- accepted or rejected whole, by the causal rules V0 to V7
+-- (experiments/text-ref/README.md): V0, V1, V2 and V6 here, on arrival; V7
+-- (wait until the document has everything v names), V3, V4 and V5 in
+-- crdt._yseq_integrate. A waiting op is kept in the state ("q") within a
+-- quota per writer (crdt._yseq_quota). Re-applying an op is a no-op. Ops
+-- from yseq_ops_since carry no v: they are for trusted catch-up
+-- (yseq_merge or crdt._yseq_integrate), not for this function.
 --
 -- Errors: 42501 no replica (null), or an insert run of another replica;
--- 22023 a replica that is empty or contains ":", or a malformed op.
+-- 22023 a replica that is empty or contains ":", a malformed op, or an op
+-- rejected by a causal rule (when it arrives, or when it stops waiting in
+-- this call); 54000 the writer's waiting ops exceed the quota.
 create function crdt.yseq_apply(state crdt.yseq, ops jsonb, replica text default crdt.current_replica_id())
 returns crdt.yseq
 language plpgsql immutable parallel safe
@@ -1761,6 +2121,10 @@ declare
     ins jsonb;
     dels jsonb;
     bad jsonb;
+    op1 jsonb;
+    run1 jsonb;
+    vadv jsonb;
+    why text;
 begin
     if replica is null then
         raise exception 'crdt.yseq_apply: the writer has no replica id'
@@ -1817,10 +2181,47 @@ begin
             using errcode = '42501',
                   hint = 'Insert runs may only carry the writer''s own replica id, or <replica id>:<device>.';
     end if;
+    -- the static causal rules, op by op (experiments/text-ref/README.md):
+    -- V0 v is a version vector, V1 origins covered by v advanced run by run,
+    -- V2 a run's first seq is v[replica] + 1, V6 delete targets covered
+    for op1 in select y from jsonb_array_elements(ops) y loop
+        if jsonb_typeof(op1 -> 'v') is distinct from 'object'
+           or exists (select 1 from jsonb_each(op1 -> 'v') e
+                      where e.key !~ '^[^:]+(:.+)?$' or jsonb_typeof(e.value) <> 'number'
+                         or (e.value #>> '{}')::numeric not between 1 and 2147483647
+                         or (e.value #>> '{}')::numeric <> floor((e.value #>> '{}')::numeric)) then
+            why := 'V0: the op has no version vector v of replica keys and counts from 1';
+        else
+            vadv := op1 -> 'v';
+            why := null;
+            for run1 in select y from jsonb_array_elements(coalesce(op1 -> 'i', '[]'::jsonb)) y loop
+                if (run1 -> 2 <> 'null'::jsonb and (run1 -> 2 ->> 1)::numeric > coalesce((vadv ->> (run1 -> 2 ->> 0))::numeric, 0))
+                   or (run1 -> 3 <> 'null'::jsonb and (run1 -> 3 ->> 1)::numeric > coalesce((vadv ->> (run1 -> 3 ->> 0))::numeric, 0)) then
+                    why := 'V1: an origin is not covered by v';
+                    exit;
+                end if;
+                if coalesce((vadv ->> (run1 ->> 0))::numeric, 0) <> (run1 ->> 1)::numeric - 1 then
+                    why := 'V2: a run does not start at v[replica] + 1';
+                    exit;
+                end if;
+                vadv := vadv || jsonb_build_object(run1 ->> 0, (run1 ->> 1)::numeric + length(run1 ->> 4) - 1);
+            end loop;
+            if why is null and exists (select 1 from jsonb_array_elements(coalesce(op1 -> 'd', '[]'::jsonb)) y
+                                       where (y ->> 1)::numeric + (y ->> 2)::numeric - 1 > coalesce((vadv ->> (y ->> 0))::numeric, 0)) then
+                why := 'V6: a delete target is not covered by v';
+            end if;
+        end if;
+        if why is not null then
+            raise exception 'crdt.yseq_apply: op rejected (%)', why
+                using errcode = '22023',
+                      hint = 'The op breaks a causal rule of research/text.md, Amendment 1 (experiments/text-ref/README.md, V0 to V7).';
+        end if;
+    end loop;
     if jsonb_array_length(ins) = 0 and jsonb_array_length(dels) = 0 then
         return coalesce(state, crdt.yseq_empty());
     end if;
-    return crdt._yseq_integrate(coalesce(state, crdt.yseq_empty()), ins, dels);
+    return crdt._yseq_integrate(coalesce(state, crdt.yseq_empty()), '[]', '[]',
+        (select jsonb_agg(jsonb_build_array(replica, x) order by o) from jsonb_array_elements(ops) with ordinality a(x, o)));
 end;
 $$;
 
@@ -1853,8 +2254,8 @@ begin
         return null;
     end if;
     if not coalesce(jsonb_typeof(state) = 'object'
-        and state @> '{"t": "yseq", "v": 1, "r": [], "c": [], "n": [], "s": [], "m": [], "p": [], "x": []}'
-        and (state - '{t,v,r,c,n,s,m,p,x}'::text[]) = '{}'::jsonb, false) then
+        and state @> '{"t": "yseq", "v": 1, "r": [], "c": [], "n": [], "s": [], "m": [], "p": [], "x": [], "q": []}'
+        and (state - '{t,v,r,c,n,s,m,p,x,q}'::text[]) = '{}'::jsonb, false) then
         return false;
     end if;
     if state @? '$.r[*] ? (@.type() != "string")'
@@ -2005,6 +2406,7 @@ begin
         'c', to_jsonb(coalesce(array(select cc[array_position(rr, x)] from unnest(sr) x), '{}')),
         'n', to_jsonb(out_n), 's', to_jsonb(out_s), 'm', to_jsonb(out_m),
         'p', (select coalesce(jsonb_agg(distinct x), '[]'::jsonb) from jsonb_array_elements(state -> 'p') x),
+        'q', (select coalesce(jsonb_agg(distinct x), '[]'::jsonb) from jsonb_array_elements(state -> 'q') x),
         'x', (select coalesce(jsonb_agg(jsonb_build_array(k, lower(g), upper(g) - lower(g)) order by k collate "C", lower(g)), '[]'::jsonb)
               from (select k, unnest(range_agg(rg)) g
                     from (select x ->> 0 k, int8range((x ->> 1)::numeric::int8, (x ->> 1)::numeric::int8 + (x ->> 2)::numeric::int8) rg
