@@ -1130,7 +1130,7 @@ Two passes over the finished Cedar build, both landed in the working tree uncomm
 
 ## Session 12 (2026-11-03 to 11-04): an independent security review
 
-A second review, done separately from session 11, of the extension and the JavaScript client at `d061c62` (after the session 11 fixes merged). It found two high and two medium issues that session 11 had missed, plus some JavaScript client hardening. The full report is in [`SECURITY_REVIEW.md`](../SECURITY_REVIEW.md).
+A second review, done separately from session 11, of the extension and the JavaScript client at `d061c62` (after the session 11 fixes merged). It found two high and two medium issues that session 11 had missed, plus some JavaScript client hardening. The full report is in [security review of 2026-11-03](security/2026-11-03-SECURITY_REVIEW.md).
 
 ### 1. Findings and fixes
 

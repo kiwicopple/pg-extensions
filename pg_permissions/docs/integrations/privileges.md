@@ -167,3 +167,5 @@ revoke all on function permissions.my_function(text) from public;
 ```
 
 In your own `security definer` functions, set `search_path = pg_catalog, pg_temp` and qualify each name with its schema. Do not set `search_path` to an empty value: Postgres then searches the temporary schema of the caller first for types and tables.
+
+The [2026-11-03 security review](../../research/security/2026-11-03-SECURITY_REVIEW.md) records how these properties were tested, the findings it fixed, and the deployment boundaries that remain.

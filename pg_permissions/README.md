@@ -122,4 +122,4 @@ To run the tests, see [`test/README.md`](test/README.md). To run Postgres 16, 17
 
 For the design history and the benchmarks, see [`research/README.md`](research/README.md).
 
-The [2026-11-03 security review](SECURITY_REVIEW.md) records the findings, fixes, regression coverage and remaining deployment boundaries.
+The [2026-11-03 security review](research/security/2026-11-03-SECURITY_REVIEW.md) records the findings, fixes, regression coverage and remaining deployment boundaries.

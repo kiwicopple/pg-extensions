@@ -1,6 +1,6 @@
 # Security review — 2026-11-03
 
-Reviewed the extension and JavaScript client at `d061c62`, including the earlier security work in `873cd09`. The fixes and regressions from this review are on `codex/permissions-security-review`. The build journal was not edited.
+Reviewed the extension and JavaScript client at `d061c62`, including the earlier security work in `873cd09`. The fixes and regressions from this review are on `codex/permissions-security-review`. The [build journal](../journal.md) session 12 summarizes it.
 
 ## Findings and fixes
 
@@ -10,7 +10,7 @@ A database owner can configure default grants globally or for one schema. Instal
 
 New objects now discard grants to every non-owner role before the script exposes the intended client functions. The upgrade applies this to new Cedar objects and shared helpers while preserving explicit grants on existing RBAC and OpenFGA functions. The installer's defaults for unrelated objects are unchanged. Direct-install examples now use one transaction, so partially installed functions are not exposed between statements.
 
-Regression: [`07_security_default_privileges.sql`](test/spec/d/07_security_default_privileges.sql) exercises global and schema-local grants, fresh installs, upgrades, private sequences and the cache secret, intended public functions, and preservation of an existing backend grant. Five assertions failed before the fix. PostgreSQL documents the underlying behavior in [ALTER DEFAULT PRIVILEGES](https://www.postgresql.org/docs/current/sql-alterdefaultprivileges.html).
+Regression: [`07_security_default_privileges.sql`](../../test/spec/d/07_security_default_privileges.sql) exercises global and schema-local grants, fresh installs, upgrades, private sequences and the cache secret, intended public functions, and preservation of an existing backend grant. Five assertions failed before the fix. PostgreSQL documents the underlying behavior in [ALTER DEFAULT PRIVILEGES](https://www.postgresql.org/docs/current/sql-alterdefaultprivileges.html).
 
 ### High: a concurrent template link could retain a revoked permit
 
@@ -18,7 +18,7 @@ One transaction could replace a permit template with a forbid while another copi
 
 Linking now performs a no-op update on the template before copying it. Replacement takes its write lock before validating slots or reading links. At `READ COMMITTED`, the operations serialize on that template and the replacement sees previously committed links. At stronger isolation levels, the row write makes a stale snapshot fail with `40001`. A shared lock alone still allowed the stale permit under repeatable-read isolation. PostgreSQL's foreign-key key-share lock also does not block a non-key update; see [row-level locks](https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-ROWS).
 
-Regressions: [`security.test.ts`](js/test/integration/security.test.ts) uses two database connections and observes actual lock waits. It tests both operation orders at all three isolation levels, retries after serialization failures, and incompatible slot changes. Restoring the original functions made the three initial read-committed tests fail. Two more tests reproduced the stale allow at stronger isolation levels with a lock-only fix. Links to the same template now serialize with one another as well as with replacements.
+Regressions: [`security.test.ts`](../../js/test/integration/security.test.ts) uses two database connections and observes actual lock waits. It tests both operation orders at all three isolation levels, retries after serialization failures, and incompatible slot changes. Restoring the original functions made the three initial read-committed tests fail. Two more tests reproduced the stale allow at stronger isolation levels with a lock-only fix. Links to the same template now serialize with one another as well as with replacements.
 
 ### Medium: malformed resource attributes could pass Cedar's fast path
 
@@ -26,7 +26,7 @@ Regressions: [`security.test.ts`](js/test/integration/security.test.ts) uses two
 
 The fast validator now requires a definite `true`, and attribute validation happens before an unconditional allow. Explicitly empty ids remain valid, as Cedar requires. This protects validation of supplied attributes; it does not make caller-supplied attributes trustworthy.
 
-Regressions: [`58_cedar_security_inputs.sql`](test/spec/d/58_cedar_security_inputs.sql) tests malformed entity references, null values, fractions, out-of-range integers, wrong top-level shapes, valid attributes and forbids. A direct PostgREST test reproduces the missing-id case without the JavaScript client. The failing SQL cases and HTTP case were verified against the original implementation.
+Regressions: [`58_cedar_security_inputs.sql`](../../test/spec/d/58_cedar_security_inputs.sql) tests malformed entity references, null values, fractions, out-of-range integers, wrong top-level shapes, valid attributes and forbids. A direct PostgREST test reproduces the missing-id case without the JavaScript client. The failing SQL cases and HTTP case were verified against the original implementation.
 
 ### Medium: concurrent hierarchy writes could commit a cycle
 
