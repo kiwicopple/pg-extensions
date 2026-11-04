@@ -13,6 +13,8 @@ Evaluation can fail because a parameter is missing, a request value has the wron
 
 The search of Check goes top down. It reads the tuples of the subject. From the object down, it also reads every userset tuple and every parent tuple. For this reason the tuple that fails can be a tuple that the subject is not behind. An example is a conditioned team that the subject is not in.
 
+For example, suppose Anne owns document 1. Document 2 has a conditional block on Anne but no owner grant. With a viewer rule of “owner but not blocked”, Check allows document 1 and denies document 2 without needing the block's context. Explicit ListObjects can still visit the block and raise a missing-context error for the entire list. The current-subject list returns document 1.
+
 ## Stale context
 
 A tuple can become stale when you write a new model. The tuple is stale in these cases:

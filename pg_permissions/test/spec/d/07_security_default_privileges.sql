@@ -25,7 +25,7 @@ begin;
 commit;
 select count(*)::int as exposed_admins from pg_proc p
 where p.pronamespace = 'permissions'::regnamespace
-  and p.proname in ('rbac_assign_role', 'fga_write', 'cedar_put_policy', '_cedar_mac')
+  and p.proname in ('rbac_assign_role', 'fga_write', 'cedar_put_policy', '_cedar_mac', '_fga_cel_regex')
   and (has_function_privilege('authenticated', p.oid, 'execute')
        or has_function_privilege('anon', p.oid, 'execute')) \gset
 select count(*)::int as exposed_tables from pg_class c
@@ -55,7 +55,7 @@ begin;
 commit;
 select count(*)::int as upgraded_admins from pg_proc p
 where p.pronamespace = 'permissions'::regnamespace
-  and (p.proname ~ '^_?cedar_' or p.proname in ('_ip_canon', '_ts_canon', '_duration_ns'))
+  and (p.proname ~ '^_?cedar_' or p.proname in ('_ip_canon', '_ts_canon', '_duration_ns', '_fga_cel_regex'))
   and p.proname not in ('cedar_is_authorized_current', 'cedar_list_resources_current', 'cedar_uid')
   and (has_function_privilege('authenticated', p.oid, 'execute')
        or has_function_privilege('anon', p.oid, 'execute')) \gset

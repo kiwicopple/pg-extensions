@@ -74,6 +74,54 @@ model_json() {  # label json: a model the DSL can't express
     MODEL=$m
 }
 
+# Reproduce the reference answers behind research/security/2026-11-04-CORRECTNESS.md.
+# Keep these independent of Postgres; the SQL suite pins the extension's answers.
+if [ "${1:-}" = '--correctness' ]; then
+    new_store
+    model 'accept JSON direct subtract' '.type_definitions |= map(if .type == "doc" then .relations.viewer = {difference:{base:{computedUserset:{relation:"owner"}},subtract:{this:{}}}} else . end)' <<'M'
+model
+  schema 1.1
+type user
+type doc
+  relations
+    define owner: [user]
+    define viewer: [user]
+    define blocked: [user with cc]
+    define safe: owner but not blocked
+condition cc(x: bool) { x }
+M
+    call 'write list fixtures' write '{"writes":{"tuple_keys":[{"user":"user:a","relation":"owner","object":"doc:1"},{"user":"user:a","relation":"owner","object":"doc:2"},{"user":"user:a","relation":"viewer","object":"doc:1"},{"user":"user:a","relation":"blocked","object":"doc:3","condition":{"name":"cc"}}]}}'
+    call 'direct exclusion: check doc:1' check '{"tuple_key":{"user":"user:a","relation":"viewer","object":"doc:1"}}' .allowed
+    call 'direct exclusion: list (doc:2)' list-objects '{"user":"user:a","relation":"viewer","type":"doc"}' .objects
+    call 'conditional exclusion: unreachable doc:3' check '{"tuple_key":{"user":"user:a","relation":"safe","object":"doc:3"}}' .allowed
+    call 'conditional exclusion: list (missing context)' list-objects '{"user":"user:a","relation":"safe","type":"doc"}' .objects
+    new_store
+    model 'CEL boundary conditions' <<'M'
+model
+  schema 1.1
+type user
+type doc
+  relations
+    define quotient: [user with divide]
+    define date_string: [user with parse_date]
+    define date_param: [user with compare_date]
+    define offset: [user with large_offset]
+    define pattern: [user with regex_dot]
+condition divide(run: bool) { run && 9223372036854775807 / 2 == 4611686018427387903 }
+condition parse_date(s: string) { timestamp(s) < timestamp("2024-01-01T00:00:00Z") }
+condition compare_date(t: timestamp) { t < timestamp("2024-01-01T00:00:00Z") }
+condition large_offset(s: string) { timestamp(s) == timestamp("2023-12-31T04:00:00Z") }
+condition regex_dot(run: bool) { run && "user-\nadmin".matches("^user-.*admin$") }
+M
+    call 'write CEL fixtures' write '{"writes":{"tuple_keys":[{"user":"user:a","relation":"quotient","object":"doc:1","condition":{"name":"divide"}},{"user":"user:a","relation":"date_string","object":"doc:1","condition":{"name":"parse_date"}},{"user":"user:a","relation":"date_param","object":"doc:1","condition":{"name":"compare_date"}},{"user":"user:a","relation":"offset","object":"doc:1","condition":{"name":"large_offset"}},{"user":"user:a","relation":"pattern","object":"doc:1","condition":{"name":"regex_dot"}}]}}'
+    call 'int64 division' check '{"tuple_key":{"user":"user:a","relation":"quotient","object":"doc:1"},"context":{"run":true}}' .allowed
+    call 'UTC overflow in timestamp(s)' check '{"tuple_key":{"user":"user:a","relation":"date_string","object":"doc:1"},"context":{"s":"9999-12-31T23:59:59-01:00"}}' .allowed
+    call 'UTC overflow in typed comparison' check '{"tuple_key":{"user":"user:a","relation":"date_param","object":"doc:1"},"context":{"t":"9999-12-31T23:59:59-01:00"}}' .allowed
+    call 'offset +20:00' check '{"tuple_key":{"user":"user:a","relation":"offset","object":"doc:1"},"context":{"s":"2024-01-01T00:00:00+20:00"}}' .allowed
+    call 'dot and newline (CEL literal)' check '{"tuple_key":{"user":"user:a","relation":"pattern","object":"doc:1"},"context":{"run":true}}' .allowed
+    exit 0
+fi
+
 new_store
 model_json 'model: a bytes parameter (JSON; the DSL has no bytes)' \
     '{"schema_version":"1.1","type_definitions":[{"type":"user"},{"type":"doc","relations":{"viewer":{"this":{}}},"metadata":{"relations":{"viewer":{"directly_related_user_types":[{"type":"user","condition":"cc"}]}}}}],"conditions":{"cc":{"name":"cc","expression":"size(b) > 0","parameters":{"b":{"type_name":"TYPE_NAME_BYTES"}}}}}'

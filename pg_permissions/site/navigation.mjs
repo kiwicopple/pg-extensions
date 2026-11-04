@@ -321,6 +321,11 @@ export const pages = [
     "label": "Security review (2026-11-03)"
   },
   {
+    "src": "research/security/2026-11-04-CORRECTNESS.md",
+    "route": "research/correctness-review-2026-11-04",
+    "label": "Correctness review (2026-11-04)"
+  },
+  {
     "src": "research/upstream/openfga-cycle-but-not-inconsistency.md",
     "route": "research/upstream/openfga-cycle-but-not",
     "label": "OpenFGA upstream report"
@@ -734,6 +739,10 @@ export const sidebar = [
       {
         "label": "Security review (2026-11-03)",
         "slug": "research/security-review-2026-11-03"
+      },
+      {
+        "label": "Correctness review (2026-11-04)",
+        "slug": "research/correctness-review-2026-11-04"
       },
       {
         "label": "OpenFGA upstream report",

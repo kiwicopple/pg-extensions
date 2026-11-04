@@ -112,6 +112,7 @@ The author does not claim which answer is correct. The report says that the APIs
 | [`benchmarks/cedar.md`](./benchmarks/cedar.md) | Design E (Cedar) benchmarked on the same data, and compared with D. |
 | [`upstream/openfga-cycle-but-not-inconsistency.md`](./upstream/openfga-cycle-but-not-inconsistency.md) | The report to OpenFGA about the `but not` cycle problem. The script [`upstream/openfga-cycle-but-not-repro.sh`](./upstream/openfga-cycle-but-not-repro.sh) reproduces it. |
 | [`security/2026-11-03-SECURITY_REVIEW.md`](./security/2026-11-03-SECURITY_REVIEW.md) | The independent security review of 2026-11-03: findings, fixes, regression tests and remaining deployment boundaries. |
+| [Correctness review (2026-11-04)](./security/2026-11-04-CORRECTNESS.md) | Nine reported differences checked against the merged code and a live OpenFGA server. |
 | [`journal.md`](./journal.md) | The raw build record. It keeps its original style and is not in simplified English. |
 
 The per-run benchmark reports are in [`../bench/baselines/`](../bench/baselines/). The benchmark harness writes them, and they keep the format of the harness.

@@ -1166,3 +1166,41 @@ A second review, done separately from session 11, of the extension and the JavaS
 - 22 SQL assertions, 11 unit and 13 integration cases added; 5 default-privilege assertions failing before the fix.
 - 266 files, 170,009 assertions (PG 16.4); 4,598 upgrade assertions on each of PG 16, 17, 18.
 - `write_nest_team` p95 4.08 to 5.37 ms.
+
+## Session 13 (2026-11-04): an external correctness review
+
+An external tester sent nine discrepancies, found against an earlier 0.1.0 snapshot. We rechecked each one against main after session 12 (`119a0fa`) and against the pinned OpenFGA v1.22.1 server. Six needed code changes, two were already fixed by session 12, and one matched upstream. The full report is the [correctness review of 2026-11-04](security/2026-11-04-CORRECTNESS.md).
+
+### 1. Fixed
+
+- **Direct exclusion in ListObjects.** OpenFGA allows `but not` with a subtract operand that is directly assignable. Check excluded the document; ListObjects, both current-subject list functions and a real RLS query still returned it. The positive graph leaves out subtract edges on purpose, so the operand is now evaluated from its own type restrictions and tuples. Stored models do not need recompiling.
+- **A Cedar refresh brought back a deleted link.** A refresh could read a link before another transaction finished deleting it, then write it back. It reproduced with a direct delete, with subject cleanup, and with a move to another template. Refresh now locks the surviving links before validating slots, skips links that were deleted or moved, and an older conflicting snapshot has to retry. This is the same family as session 12's template race: the fix there covered link-versus-replace, not refresh-versus-delete.
+- **CEL integer division.** At the signed and unsigned limits, going through a rounded numeric quotient could be off by one before truncation. Now it uses the integer quotient directly.
+- **UTC year out of range.** A local date in year 9999 could become year 10000 UTC and then compare as earlier than 2024. Going below year one also broke ordering. The UTC instant is validated before formatting; out-of-range values are a condition error.
+- **Regex and newlines.** `.` matched a newline in Postgres and not in RE2. Patterns are now translated from the supported RE2 syntax explicitly (dot, word boundaries), and constructs RE2 lacks (backreferences, lookaround) are rejected. This can break conditions that relied on Postgres-only syntax; [CEL support](../docs/reference/cel.md) lists what is accepted.
+- **Large UTC offsets.** OpenFGA accepts `+20:00`; Postgres' time zone input rejected it before CEL could handle the error. The numeric offset is now applied to the local timestamp, valid through ±23:59.
+
+### 2. Not changed
+
+- **Link keeps an old template:** fixed in session 12; tests kept.
+- **Invalid Cedar attributes depend on resource id:** fixed in session 12, but `docs/reference/cedar.md` still described the old behavior. Doc corrected, and the cache-separator id case added to the malformed-input spec.
+- **Unreachable conditional exclusion breaks ListObjects:** the live server does the same thing. Check returns false, explicit ListObjects raises a missing-context error. Kept for compatibility, with regressions pinning it.
+
+### 3. Verification
+
+- New spec `44_fga_difference_correctness.sql` runs Check, lists and RLS on the same model (direct users, wildcards, usersets, conditional and contextual tuples). `38_fga_cel.sql`, `58_cedar_security_inputs.sql` and the two-connection `security.test.ts` were extended. `test/fga_abac/probe.sh --correctness` starts the pinned OpenFGA image and prints its answers for both model shapes.
+- Against the merged code: 19 SQL assertions failed and all three read-committed Cedar refresh races reproduced.
+- With the fixes: 170,045 SQL assertions passed on PG 16.4; 93 JS integration tests passed on PG 17 with PostgREST.
+
+### Possible angles for the blog post (session 13 additions)
+
+- **"Ask the reference server, not the spec."** Of nine reported bugs, one was upstream's own behavior. Only the live server could settle it.
+- **"Two reviews in, a third found a race in the same function."** Session 12 fixed link-versus-replace; refresh-versus-delete was still open.
+- **"Regex is not regex."** Postgres and RE2 disagree on `.` and newlines. Translating explicitly beats hoping two engines agree.
+- **"Year 10000."** A date that is valid locally can overflow when converted to UTC and then sort before 2024.
+
+### Numbers worth quoting (session 13)
+
+- 9 reports: 6 fixed, 2 already fixed, 1 matching upstream.
+- 19 failing SQL assertions and 3 races reproduced before the fixes.
+- 170,045 SQL assertions (PG 16.4), 93 JS integration tests.

@@ -213,6 +213,29 @@ insert into cases (expr, params, ctx, want, label) values
 ('true', '{}', '{}', 'true', 'a condition with no parameters'),
 ('true', '{}', '{"z": 1}', '2000', 'a condition with no parameters and a non-empty context is an error (P39)');
 
+-- Correctness review: test decisions via model compilation, tuple writes and Check.
+insert into cases (expr, params, ctx, want, label) values
+('9223372036854775807 / 2 == 4611686018427387903', '{}', '{}', 'true', 'integer division truncates without intermediate rounding'),
+('-9223372036854775807 / 2 == -4611686018427387903', '{}', '{}', 'true', 'negative quotient truncates toward zero'),
+('18446744073709551615u / 2u == 9223372036854775807u', '{}', '{}', 'true', 'unsigned division also retains the low bits'),
+('timestamp(s) < timestamp("2024-01-01T00:00:00Z")', '{"s":"string"}', '{"s":"9999-12-31T23:59:59-01:00"}', '2000', 'reject a UTC instant beyond year 9999'),
+('timestamp(s) > timestamp("0001-01-01T00:00:00Z")', '{"s":"string"}', '{"s":"0001-01-01T00:00:00+00:01"}', '2000', 'reject a UTC instant before year one'),
+('t < timestamp("2024-01-01T00:00:00Z")', '{"t":"timestamp"}', '{"t":"9999-12-31T23:59:59-01:00"}', '2000', 'out-of-range typed input cannot grant access'),
+('timestamp(s) == timestamp("2023-12-31T04:00:00Z")', '{"s":"string"}', '{"s":"2024-01-01T00:00:00+20:00"}', 'true', 'large positive offset crosses into the previous year'),
+('t == timestamp("2024-01-02T00:00:00Z")', '{"t":"timestamp"}', '{"t":"2024-01-01T00:01:00-23:59"}', 'true', 'largest negative offset crosses midnight'),
+('timestamp(s) < timestamp("2024-01-01T00:00:00Z") || true', '{"s":"string"}', '{"s":"9999-12-31T23:59:59-20:00"}', 'true', 'a conversion error is absorbed by true'),
+('s.matches(p)', '{"s":"string","p":"string"}', '{"s":"user-\nadmin","p":"^user-.*admin$"}', 'false', 'dot excludes a newline'),
+('s.matches(p)', '{"s":"string","p":"string"}', '{"s":"a\nb","p":"^[^x]+$"}', 'true', 'negated class still matches newline'),
+('s.matches(p)', '{"s":"string","p":"string"}', '{"s":"an admin!","p":"\\badmin\\b"}', 'true', 'ASCII word boundaries'),
+('s.matches(p)', '{"s":"string","p":"string"}', '{"s":"aa","p":"^(a)\\1$"}', '2000', 'reject a backreference'),
+('s.matches(p)', '{"s":"string","p":"string"}', '{"s":"ab","p":"a(?=b)"}', '2000', 'reject a lookahead'),
+('s.matches(p)', '{"s":"string","p":"string"}', '{"s":"b","p":"a)|(b"}', '2000', 'unbalanced parentheses cannot create a valid alternation'),
+('s.matches(p)', '{"s":"string","p":"string"}', '{"s":"aa","p":"a{02}"}', 'false', 'a leading zero is not a repeat count in RE2'),
+('s.matches(p)', '{"s":"string","p":"string"}', '{"s":"a{02}","p":"a{02}"}', 'true', 'a malformed repeat is literal text'),
+('s.matches(p)', '{"s":"string","p":"string"}', '{"s":"aa","p":"^a{2}$"}', 'true', 'a valid bounded repeat'),
+('s.matches(p)', '{"s":"string","p":"string"}', '{"s":".","p":"^[.]$"}', 'true', 'a dot in a character class is literal'),
+('s.matches(p)', '{"s":"string","p":"string"}', '{"s":"\n","p":"(?s)^.$"}', 'true', 'explicit dot-all matches newline');
+
 insert into cases (expr, params, ctx, want, label, tctx) values
 ('x < 100', '{"x": "int"}', '{"x": 200}', 'true', 'the tuple''s context wins over the request''s (P5)', '{"x": 10}'),
 ('x < 100 && y == 1', '{"x": "int", "y": "int"}', '{"x": 200, "y": 1}', 'true', 'the request supplies what the tuple''s context lacks', '{"x": 10}'),
