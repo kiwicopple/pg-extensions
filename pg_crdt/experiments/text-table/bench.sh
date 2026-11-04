@@ -161,13 +161,13 @@ for size in $SIZES; do
     P -d "$db" -c "vacuum full crdt.ydoc_items" -c "vacuum full crdt.ydoc_blocks" -c "vacuum full crdt.ydoc_docs" -c "analyze"
     st=$(PT -d "$db" -F ' ' -c "select octet_length(crdt.ydoc_value(1)),
         pg_relation_size('crdt.ydoc_items'), pg_total_relation_size('crdt.ydoc_items') - pg_relation_size('crdt.ydoc_items'),
-        pg_total_relation_size('crdt.ydoc_blocks') + pg_total_relation_size('crdt.ydoc_docs'),
-        round(avg(pg_column_size(i.*))), count(*)
+        pg_total_relation_size('crdt.ydoc_blocks') + pg_total_relation_size('crdt.ydoc_docs') + pg_total_relation_size('crdt.ydoc_deps'),
+        round(avg(pg_column_size(i.*))), count(*), (select count(*) from crdt.ydoc_deps), pg_total_relation_size('crdt.ydoc_deps')
         from crdt.ydoc_items i")
-    read -r tb heap idx other avgrow nrows <<<"$st"
+    read -r tb heap idx other avgrow nrows ndeps depsb <<<"$st"
     total=$((heap + idx + other))
     ratio=$(python3 -c "print(round($total / $tb, 1))")
-    STORROWS="$STORROWS| $size | $tb | $nrows | $avgrow | $heap | $idx | $other | $total | ${ratio}x |
+    STORROWS="$STORROWS| $size | $tb | $nrows | $avgrow | $heap | $idx | $ndeps | $depsb | $other | $total | ${ratio}x |
 "
     if [ "$size" -ge 1000000 ]; then n1=300; np=20; ns=10; nv=10; else n1=500; np=20; ns=30; nv=30; fi
     stats=$(PT -d "$db" -F ' ' -c "select count(*), count(*) filter (where del_gen is not null), (select count(*) from crdt.ydoc_blocks) from crdt.ydoc_items")
@@ -195,8 +195,8 @@ printf '%s' "$WALROWS"
 echo
 echo "Storage of the document as built (VACUUM FULL):"
 echo
-echo "| size (chars) | text bytes | rows | avg row bytes | items heap | items indexes | blocks + docs | total bytes | total / text |"
-echo "|---|---|---|---|---|---|---|---|---|"
+echo "| size (chars) | text bytes | rows | avg row bytes | items heap | items indexes | deps rows (V3) | deps bytes | blocks + docs + deps | total bytes | total / text |"
+echo "|---|---|---|---|---|---|---|---|---|---|---|"
 printf '%s' "$STORROWS"
 echo
 fi
@@ -593,16 +593,34 @@ begin
         extract(epoch from clock_timestamp() - t0) * 1000, pg_wal_lsn_diff(pg_current_wal_insert_lsn(), l0));
     commit;
 end \$\$;
+-- 3. the same ops through ydoc_apply (the untrusted path, rules V0-V7), commit per op
+create procedure bench.replay_apply(d bigint, tbl text) language plpgsql as \$\$
+declare r record; t0 timestamptz := clock_timestamp(); l0 pg_lsn := pg_current_wal_insert_lsn(); k int := 0;
+begin
+    for r in execute format('select op from bench.%I order by n', tbl) loop
+        perform crdt.ydoc_apply(d, r.op, 'paper');
+        k := k + 1;
+        commit;
+    end loop;
+    insert into bench.result values ('ydoc_apply (validated) of ' || tbl || ', commit per call', k,
+        extract(epoch from clock_timestamp() - t0) * 1000, pg_wal_lsn_diff(pg_current_wal_insert_lsn(), l0));
+    commit;
+end \$\$;
 SQL
-    P -d "$db" -c "select crdt.ydoc_create(), crdt.ydoc_create(), crdt.ydoc_create()" >/dev/null
+    P -d "$db" -c "select crdt.ydoc_create(), crdt.ydoc_create(), crdt.ydoc_create(), crdt.ydoc_create(), crdt.ydoc_create()" >/dev/null
     P -d "$db" -c checkpoint -c "call bench.replay_local(1)"
     P -d "$db" -c checkpoint -c "call bench.replay_merge(2, 'ops')"
     if [ $QUICK = 0 ]; then P -d "$db" -c checkpoint -c "call bench.replay_merge(3, 'batch')"; fi
+    P -d "$db" -c checkpoint -c "call bench.replay_apply(4, 'ops')"
+    if [ $QUICK = 0 ]; then P -d "$db" -c checkpoint -c "call bench.replay_apply(5, 'batch')"; fi
     P -d "$db" -c "vacuum analyze"
     echo "| replay | calls | total s | us per call | WAL bytes per call | final text md5 ok |"
     echo "|---|---|---|---|---|---|"
     PT -d "$db" -F ' ' -c "select what, ops, round(ms / 1000, 1), round(ms * 1000 / ops), round(wal / ops),
-        case when what like 'local%' then md5(crdt.ydoc_value(1)) when what like '%batch%' then md5(crdt.ydoc_value(3)) else md5(crdt.ydoc_value(2)) end = 'f6ee9cff45a87f3b7f29d60920bfce10'
+        case when what like 'local%' then md5(crdt.ydoc_value(1))
+             when what like 'ydoc_apply%batch%' then md5(crdt.ydoc_value(5))
+             when what like 'ydoc_apply%' then md5(crdt.ydoc_value(4))
+             when what like '%batch%' then md5(crdt.ydoc_value(3)) else md5(crdt.ydoc_value(2)) end = 'f6ee9cff45a87f3b7f29d60920bfce10'
         from bench.result order by what" | while read -r line; do
         what=$(printf '%s' "$line" | sed 's/ [0-9.]* [0-9.]* [0-9.]* [0-9.]* [tf]$//')
         rest=${line#"$what "}
@@ -614,9 +632,9 @@ SQL
     echo
     PT -d "$db" -F ' | ' -c "select '| ' || crdt.ydoc_length(1), octet_length(crdt.ydoc_value(1)), count(*), count(*) filter (where del_gen is not null),
         (select count(*) || ' (' || coalesce(sum(rows), 0) || ' rows rewritten)' from public.bench_relabel_log),
-        pg_size_pretty(pg_total_relation_size('crdt.ydoc_items') / 3) || ' |' from crdt.ydoc_items where doc = 1" \
+        pg_size_pretty(pg_total_relation_size('crdt.ydoc_items') / 5) || ' |' from crdt.ydoc_items where doc = 1" \
         | sed '1i\
-| chars | text bytes | rows | tombstone rows | relabels (all three replays) | items + indexes (per doc, approx) |\
+| chars | text bytes | rows | tombstone rows | relabels (all five replays) | items + indexes (per doc, approx) |\
 |---|---|---|---|---|---|'
     echo
 fi

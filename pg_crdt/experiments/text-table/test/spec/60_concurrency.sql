@@ -53,8 +53,12 @@ create function pg_temp.script(d bigint, who text, n int) returns text language 
     -- DO blocks: one transaction each, and no result rows to fill the socket
     select string_agg('do $x$ begin perform ' ||
         case when i % 10 = 0 then format('crdt.ydoc_delete(%s, 0, 1, %L)', d, who)
-             when i % 25 = 0 then format($f$crdt.ydoc_apply(%s, jsonb_build_object('i', jsonb_build_array(jsonb_build_array(%L,
-                                             coalesce((crdt.ydoc_version(%s) ->> %L)::int, 0) + 1, null, null, 'Z'))), %L)$f$, d, who, d, who, who)
+             -- an untrusted op inserted at the start: v and the first item from
+             -- the statement's snapshot; items committed after it are concurrent
+             when i % 25 = 0 then format($f$crdt.ydoc_apply(%s, jsonb_build_object('v', crdt.ydoc_version(%s), 'i', jsonb_build_array(jsonb_build_array(%L,
+                                             coalesce((crdt.ydoc_version(%s) ->> %L)::int, 0) + 1, null,
+                                             (select jsonb_build_array(r.name, i.seq) from crdt.ydoc_items i join crdt.ydoc_replicas r on r.id = i.replica
+                                              where i.doc = %s order by i.ord limit 1), 'Z'))), %L)$f$, d, d, who, d, who, d, who)
              when i % 15 = 0 then format('crdt.ydoc_set(%s, crdt.ydoc_value(%s) || %L, %L)', d, d, '#', who)
              else format('crdt.ydoc_insert(%s, (random() * crdt.ydoc_length(%s))::int, %L, %L)', d, d, chr(97 + i % 26), who)
         end || '; end $x$;', ' ')

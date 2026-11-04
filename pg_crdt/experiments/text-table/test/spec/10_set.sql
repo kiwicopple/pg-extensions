@@ -66,10 +66,10 @@ end $$;
 
 select tap.plan(17);
 select tap.is((select count(*)::int from setrun where not ok), 0, '300 random sets over multibyte characters: value equals the target');
-select tap.is(:'op1'::jsonb, '{"i": [["alice", 1, null, null, "The quick brown fox"]], "d": []}', 'set on an empty doc: one insert');
-select tap.is(:'op2'::jsonb, '{"i": [["bob", 1, ["alice", 10], ["alice", 11], "red"]], "d": [["alice", 11, 5]]}',
+select tap.is(:'op1'::jsonb, '{"v": {}, "i": [["alice", 1, null, null, "The quick brown fox"]], "d": []}', 'set on an empty doc: one insert');
+select tap.is(:'op2'::jsonb, '{"v": {"alice": 19}, "i": [["bob", 1, ["alice", 10], ["alice", 11], "red"]], "d": [["alice", 11, 5]]}',
               'set: one delete and one insert in the middle (prefix and suffix kept)');
-select tap.is(:'op3'::jsonb, '{"i": [], "d": []}', 'set to the same text: no ops');
+select tap.is(:'op3'::jsonb - 'v', '{"i": [], "d": []}', 'set to the same text: no ops');
 select tap.is(:'v4'::text, 'A quick red fox!', 'set: change at both ends');
 select tap.is(:'v5'::text, '', 'set to empty');
 select tap.is(:'op6'::jsonb -> 'd', '[["alice", 23, 1]]'::jsonb, 'set: diff in code points (non-BMP)');

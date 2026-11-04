@@ -1,5 +1,5 @@
 -- Goal: differential tests against the JS reference (experiments/text-ref),
--- on the trusted path (ydoc_merge).
+-- on the trusted path (ydoc_merge) and the untrusted path (ydoc_apply).
 -- Each fixture is a set of ops from several replicas and the text the
 -- reference produces. Every fixture must give exactly that text when its ops
 -- are merged:
@@ -66,7 +66,74 @@ begin
 end;
 $$;
 
-select tap.plan(9);
+-- The untrusted path: every op (rejected ones included) through ydoc_apply,
+-- as its own writer, in the fixture's two delivery orders. An op that
+-- raises 22023 is rejected on arrival; an op that waits ('pending') and is
+-- rejected later shows up in crdt.ydoc_rejected. The rejected positions must
+-- be exactly the reference's.
+create temp table vrun (name text, mode text, doc bigint, rejected int[], limited int);
+do $$
+declare
+    f record;
+    m text;
+    ops jsonb;
+    d bigint;
+    op jsonb;
+    st text;
+    rej int[];
+    pend int[];
+    pend_ops jsonb[];
+    lim int;
+begin
+    for f in select * from text_fixtures order by name loop
+        foreach m in array array['validated', 'validated causal'] loop
+            ops := case when m = 'validated' then f.ops else f.ops_causal end;
+            d := crdt.ydoc_create();
+            rej := '{}'; pend := '{}'; pend_ops := '{}'; lim := 0;
+            for k in 0 .. jsonb_array_length(ops) - 1 loop
+                op := ops -> k;
+                begin
+                    st := crdt.ydoc_apply(d, op, coalesce(split_part(op -> 'i' -> 0 ->> 0, ':', 1), 'deleter' || k));
+                    if st = 'pending' then
+                        pend := pend || k;
+                        pend_ops := pend_ops || op;
+                    end if;
+                exception
+                    when sqlstate '22023' then rej := rej || k;
+                    when sqlstate '54000' then lim := lim + 1;
+                end;
+            end loop;
+            for j in 1 .. coalesce(array_length(pend, 1), 0) loop
+                if exists (select 1 from crdt.ydoc_rejected x where x.doc = d and x.op = pend_ops[j]) then
+                    rej := rej || pend[j];
+                end if;
+            end loop;
+            insert into vrun values (f.name, m, d, (select coalesce(array_agg(x order by x), '{}') from unnest(rej) x), lim);
+        end loop;
+    end loop;
+end $$;
+
+select tap.plan(16);
+select tap.is((select count(*)::int from vrun where limited > 0), 0, 'validated: no op hit the waiting quota');
+select tap.is((select string_agg(v.name, ', ') from vrun v join text_fixtures f using (name)
+               where v.mode = 'validated' and crdt.ydoc_value(v.doc) is distinct from f.expected), null,
+              'validated, shuffled with duplicates: every fixture equals the reference');
+select tap.is((select string_agg(v.name, ', ') from vrun v join text_fixtures f using (name)
+               where v.mode = 'validated causal' and crdt.ydoc_value(v.doc) is distinct from f.expected), null,
+              'validated, causal: every fixture equals the reference');
+select tap.is((select string_agg(v.name || ' ' || v.rejected::text || ' want ' ||
+                      (select coalesce(array_agg(x::int order by x::int), '{}') from jsonb_array_elements_text(f.rejected) x)::text, '; ')
+               from vrun v join text_fixtures f using (name)
+               where v.mode = 'validated'
+                 and v.rejected <> (select coalesce(array_agg(x::int order by x::int), '{}') from jsonb_array_elements_text(f.rejected) x)), null,
+              'validated, shuffled: exactly the reference''s ops are rejected');
+select tap.is((select string_agg(v.name || ' ' || v.rejected::text, '; ')
+               from vrun v join text_fixtures f using (name)
+               where v.mode = 'validated causal'
+                 and v.rejected <> (select coalesce(array_agg(x::int order by x::int), '{}') from jsonb_array_elements_text(f.rejected_causal) x)), null,
+              'validated, causal: exactly the reference''s ops are rejected');
+select tap.is((select count(*)::int from crdt.ydoc_pending_ops p join vrun v on v.doc = p.doc), 0, 'validated: no op left waiting');
+select tap.ok((select sum(cardinality(rejected)) from vrun where mode = 'validated') > 100, 'validated: the malicious fixtures do reject ops');
 select tap.is((select count(*)::int from text_fixtures), 71, 'all 71 fixtures loaded (57 honest, 14 malicious with their rejected ops left out)');
 select tap.is((select string_agg(r.name, ', ') from runs r join fx f using (name)
                where r.mode = 'shuffled' and crdt.ydoc_value(r.doc) is distinct from f.expected), null,
