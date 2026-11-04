@@ -11,7 +11,7 @@ create role writer_alice nologin;
 create role writer_bob nologin;
 grant select, insert, update, delete on crdt.ydoc_docs, crdt.ydoc_replicas, crdt.ydoc_items, crdt.ydoc_blocks,
     crdt.ydoc_pending, crdt.ydoc_pending_deletes, crdt.ydoc_deps, crdt.ydoc_pending_ops, crdt.ydoc_rejected to app_owner;
-grant usage on sequence crdt.ydoc_ins, crdt.ydoc_docs_id_seq, crdt.ydoc_replicas_id_seq to app_owner;
+grant usage on sequence crdt.ydoc_ins, crdt.ydoc_docs_id_seq to app_owner;
 
 grant create on schema public to app_owner;
 create table public.posts (id int primary key, body_doc bigint not null references crdt.ydoc_docs (id), editors text[] not null);

@@ -155,7 +155,7 @@ for size in $SIZES; do
     t0=$(python3 -c 'import time; print(time.time())')
     P -d "$db" -c "select crdt.ydoc_create()" -c "call bench.grow(1, $size)" >/dev/null
     t1=$(python3 -c 'import time; print(time.time())')
-    edits=$(PT -d "$db" -c "select count(*) from crdt.ydoc_items i join crdt.ydoc_replicas r on r.id = i.replica where r.name like 'w%'")
+    edits=$(PT -d "$db" -c "select count(*) from crdt.ydoc_items i join crdt.ydoc_replicas r on r.doc = i.doc and r.id = i.replica where r.name like 'w%'")
     build_ms=$(python3 -c "print(round(($t1 - $t0) * 1000 / max(1, $edits), 2))")
     # storage of the document as built, compacted
     P -d "$db" -c "vacuum full crdt.ydoc_items" -c "vacuum full crdt.ydoc_blocks" -c "vacuum full crdt.ydoc_docs" -c "analyze"

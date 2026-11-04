@@ -6,7 +6,7 @@ Status: experiment, 2026-11-04. PL/pgSQL and SQL only; loads after `pg_crdt--0.0
 | --- | --- |
 | `impl.sql` | The implementation: tables, internals (`crdt._ydoc_*`), API (`crdt.ydoc_*`), privileges. |
 | `test/run.sh` | Test runner (a throwaway cluster from `test/lib/cluster.sh`; `-v`, name filters, `--impl`). |
-| `test/spec/*.sql` | Twelve spec files, 173 assertions (table below). |
+| `test/spec/*.sql` | Fourteen spec files, 195 assertions (table below). |
 | `bench.sh` | Benchmarks; prints the Markdown in the "Benchmarks" section. `--quick` skips 1M and most of the trace. |
 | `variants/bytea-keys.sql` | The first version, with byte-string fractional keys instead of bigint labels. Kept for the benchmark comparison only (the tests target `impl.sql`). |
 
@@ -28,7 +28,7 @@ Status: experiment, 2026-11-04. PL/pgSQL and SQL only; loads after `pg_crdt--0.0
 | `ydoc_compact(doc, horizon default null)` | `integer` | volatile | Maintenance: merges adjacent rows of one run with the same visibility; tombstones stamped at or before `horizon` (default: now) merge. Returns rows removed. See "Compaction". |
 | `ydoc_drop(doc)` | void | volatile | Deletes the document and its rows. |
 
-Positions and lengths count code points (`length()`), not UTF-16 units. Errors: `22004` null argument; `22023` malformed ops, a replica key that is not one, a position outside the text, a base that is not a version of the document, an insert whose originRight is not after its originLeft, an op that breaks a causal rule (the message names it: `V0`..`V6`), the same ids re-sent with other content or origins; `54000` a writer with too many waiting ops (`ydoc_apply`); `42501` no identity or a forged insert (`ydoc_apply`), or no table privileges (Postgres); `P0002` no such document.
+Positions and lengths count code points (`length()`), not UTF-16 units. Errors: `22004` null argument; `22023` malformed ops, a replica key that is not one (or is longer than 256 bytes), a number not written as digits, a base from another document, a position outside the text, a base that is not a version of the document, an insert whose originRight is not after its originLeft, an op that breaks a causal rule (the message names it: `V0`..`V6`), the same ids re-sent with other content or origins; `54000` a limit of the untrusted path (`ydoc_apply`): too many waiting ops for the writer, more than 256 runs in one op, more than 16 device keys per owner, origins further apart than the scan budget; `42501` no identity or a forged insert (`ydoc_apply`), or no table privileges (Postgres); `P0002` no such document.
 
 ## Design
 
@@ -36,7 +36,7 @@ Positions and lengths count code points (`length()`), not UTF-16 units. Errors: 
 
 ```
 ydoc_docs(id, len, gen, horizon)                one row per document; the row lock serializes writers
-ydoc_replicas(id int, name text unique)         replica ids (entry keys), interned for the database
+ydoc_replicas(doc, id int, name)                replica ids (entry keys), interned per document
 ydoc_items(doc, ord, ins, seq, replica,         one row per run of characters of one replica
            ol_seq, ol_replica, or_seq, or_replica,  replicas as interned ints; pk (doc, replica, seq); index (doc, ord)
            del_gen, len, content)
@@ -118,7 +118,7 @@ Amendment 1 of `research/text.md`: an untrusted writer could pick origins that e
 
 1. Shape (both paths), then the owner rule (42501).
 2. **Static rules** on the op alone (`_ydoc_vstatic`), before any lock or wait: V0 (`v` present, entry keys, counts >= 1), V1 (both origins covered by `v` advanced run by run), V2 (a run starts at `v[replica] + 1`), V6 (delete targets covered by the advanced `v`, so nobody can pre-delete text it has not seen).
-3. **V7.** If the document lacks an id that `v` names, the op is stored in `ydoc_pending_ops` and the call returns `'pending'`. Each writer may have `_ydoc_pending_max_ops()` = 100 waiting ops of at most `_ydoc_pending_max_bytes()` = 256 kB in total per document; beyond that, 54000. Every write to the document (trusted, untrusted, local) ends by deciding the waiting ops it made decidable (`_ydoc_drain_ops`), each in a subtransaction: an op rejected then is undone, logged in `ydoc_rejected` (writer, op, reason), and does not fail the innocent caller.
+3. **V7.** If the document lacks an id that `v` names, the op is stored in `ydoc_pending_ops` and the call returns `'pending'`. Each writer may have `_ydoc_pending_max_ops()` = 100 waiting ops of at most `_ydoc_pending_max_bytes()` = 256 kB in total per document; beyond that, 54000. Every write to the document (trusted, untrusted, local) ends by deciding the waiting ops it made decidable (`_ydoc_drain_ops`), each in a subtransaction: an op that fails then, with a rule or with any other error, is undone, logged in `ydoc_rejected` (writer, op, SQLSTATE and message; the last `_ydoc_rejected_max()` = 100 per writer and document are kept), and does not fail the innocent caller.
 4. **Dynamic rules** once the document covers `v` (`_ydoc_vapply`, lock held): V3 (`v` is causally closed: for each replica in `v`, the stored cumulative dependencies of its item `v[r]` are covered by `v`), then per run V4 (originLeft before originRight) and V5 (no row strictly between the origins holds an id covered by the advanced `v`). V4 and V5 run inside `_ydoc_integrate`, on the same `(l_ord, r_ord)` range the YjsMod scan walks; for honest typing it is empty. Then the deletes, whose targets V6 guarantees are present, so the untrusted path never needs `ydoc_pending_deletes`.
 
 The op is accepted or rejected as a whole: any rule raises 22023, which undoes everything the op did in the caller's statement (or in the subtransaction of a waiting op). The rule's id is in the message.
@@ -127,7 +127,7 @@ The op is accepted or rejected as a whole: any rule raises 22023, which undoes e
 
 **Equivocation.** `(doc, replica, seq)` is the primary key, so the first arrival wins. A run whose ids are already present must match what is stored (first char's origins, later chars' implied origins, text): an identical re-send is accepted as a no-op, anything else is refused with 22023, on both paths. A partial overlap is refused on the untrusted path (only equivocation produces one there); on the trusted path the overlap must match and the new tail is integrated. This turns a silent divergence on the trusted path into an error at the server that sees both versions; the README explains why `v` cannot prevent equivocation in general (it needs one writer per id: here, the owner rule plus the primary key).
 
-**Local edits emit `v`.** `ydoc_insert`, `ydoc_delete` and two-way `ydoc_set` put the document's version vector before the edit in the op (one probe per replica). The op passes the rules on any other document: on the trace, the generated ops equal the reference's ops including `v` (20,000 patches, spec `55_trace`). A three-way `ydoc_set` uses the base's vector plus the writer's own clock: its origins and delete targets are chosen in the base. If the writer has written since its base and those writes depend on newer text of others, that `v` is not causally closed and another server's `ydoc_apply` would reject the op (V3); fetch a new base after each save.
+**Local edits emit `v`.** `ydoc_insert`, `ydoc_delete` and two-way `ydoc_set` put the document's version vector before the edit in the op (one probe per replica). The op passes the rules on any other document: on the trace, the generated ops equal the reference's ops including `v` (20,000 patches, spec `55_trace`). A three-way `ydoc_set` works against an extended base: the base's vector, plus the writer's own items, plus their causal closure (repeatedly adding the stored dependencies of every replica's last covered item). It diffs against the text of that version and uses it as the op's `v`, so a second save from one base does not insert the first save's text again, and peers accept the op (it is closed, covers the writer's clock, and its origins are adjacent in it). A stale editor's text is then compared with everything the writer had seen: text the writer's own later edits depended on, and that the stale text lacks, is deleted by the save. The base token carries the document id; a base from another document is 22023.
 
 **Catch-up ops are trusted only.** `ydoc_ops_since` returns ops without `v`, joined from runs created under different claims; `ydoc_apply` refuses them (V0, or 42501 for other writers' ids). A server that relays over an untrusted link must forward the writers' original ops.
 
@@ -146,9 +146,11 @@ The op is accepted or rejected as a whole: any rule raises 22023, which undoes e
 
 The validated path costs about 80 us per op over the old untrusted path: the static checks, one probe per replica for V7 and V3, the V5 range query (empty for typing), and the re-keying of `v` by interned id. Local edits pay about 40 us for the version vector of their op (`ydoc_version` was rewritten for this: a backwards loose index scan, 23 us for three replicas instead of 134). The dependency vector is cheap because it is a cumulative maximum: it saturates, so it changes at a small fraction of runs.
 
+**Cost of the review fixes** (b8bffd2 against this version, same bench, one run each): insert 1 char 0.32 / 0.35 / 0.39 / 0.55 ms at 1k / 10k / 100k / 1M chars became 0.34 / 0.38 / 0.42 / 0.68 ms; delete 0.27 / 0.31 / 0.35 / 0.66 became 0.28 / 0.32 / 0.37 / 0.72 ms; the trace through `ydoc_apply` 300 became 348 us per op, through `ydoc_merge` 200 became 229, local edits 280 became 282. Most of it is the pinned `search_path` on every PL/pgSQL function (a GUC save and restore per call, about a dozen calls per op): measured alone on 60,000 trace ops in one transaction, pinning the internal functions too costs nothing measurable on `ydoc_merge` and 18% on `ydoc_apply` (568 against 674 us per op). The alternative, pinning only the API functions (the internals inherit their caller's pinned path), is safe only if nobody calls the internals directly with a hostile path; they must stay executable by the callers of the API, so it was not taken.
+
 ### Interned replica ids
 
-Rows named replicas by text three times (`replica`, `ol_replica`, `or_replica`), and the primary key once more. `crdt.ydoc_replicas(id integer identity, name text collate "C" unique)` interns them for the whole database: items hold 4-byte integers, and the integer columns sit together after the 8-byte ones (no padding). Names are translated at the boundary only: ops in (`_ydoc_try` interns the run's replica when it integrates, and looks up its origins), ops out (`ops_since`, the ops returned by local edits, `ydoc_version` join the names back), and `ydoc_set`'s base vector (re-keyed by integer once per call). The integer never leaves the database. The YjsMod tie-break compares the **names** (`collate "C"`), looked up for the one row being compared, only when originLeft and originRight both tie, which is rare; the unicode-replica and case-replica fixtures pin it. The buffers (`ydoc_pending`, `ydoc_pending_deletes`) keep names, so input that never becomes ready (forged or far-ahead ids) does not grow `ydoc_replicas`. A replica's first insert in the database writes one row there (and two writers inserting the same new name at once wait on each other once).
+Rows named replicas by text three times (`replica`, `ol_replica`, `or_replica`), and the primary key once more. `crdt.ydoc_replicas(doc, id, name)` interns them per document (dense ids: max + 1 under the document's lock): items hold 4-byte integers, and the integer columns sit together after the 8-byte ones (no padding). Names are translated at the boundary only: ops in (`_ydoc_try` interns the run's replica when it integrates, and looks up its origins), ops out (`ops_since`, the ops returned by local edits, `ydoc_version` join the names back), and `ydoc_set`'s base vector (re-keyed by integer once per call). The integer never leaves the database. The YjsMod tie-break compares the **names** (`collate "C"`), looked up for the one row being compared, only when originLeft and originRight both tie, which is rare; the unicode-replica and case-replica fixtures pin it. The buffers (`ydoc_pending`, `ydoc_pending_deletes`) keep names, so input that never becomes ready (forged or far-ahead ids) does not grow `ydoc_replicas`. A replica's first insert in a document writes one row there. The first version interned for the whole database with a unique name index: two transactions on different documents that interned the same new names in opposite orders deadlocked (review finding 9), and the names outlived `ydoc_drop`. Per document, interning happens under the lock the write already holds, and `ydoc_drop` deletes the names.
 
 Measured on the automerge-paper trace (bench section "Replica id length", two runs of each version, averages; the WAL columns of single runs vary by 30% with relabels and full-page images, so they are left out here):
 
@@ -160,6 +162,24 @@ Measured on the automerge-paper trace (bench section "Replica id length", two ru
 | 36-char UUID | interned | 134.5 | 29.0 | 0.40 ms | 0.45 ms | 4.2 ms | 336 |
 
 Kept: storage no longer depends on the length of replica ids (UUIDs: -49%, and -47% after compaction; `paper`: -10%), replay and render are as fast or faster, and single edits cost 0.02-0.05 ms more (the name lookups for the returned op and the interning probe; the writer's own id is not looked up again).
+
+### Review fixes (2026-11-05)
+
+An adversarial review of the validated version found the following. Each has a regression in `test/spec/36_review.sql` (or `37_relabel_small.sql`); the reviewer's differential fuzzer against `ref.mjs` (`/tmp/ydrev/fuzz.mjs`: honest and byzantine ops, two delivery orders with duplicates, compactions, local edits, a mid-way catch-up merge) now reports 0 failing seeds for seeds 1-150 and 1000-1100 with shrunk constants and 1-100 with the defaults.
+
+| Finding | Fix |
+| --- | --- |
+| A parked op whose decision raised something other than 22023 (a 6 kB device key overflowed the name index: 54000) escaped `_ydoc_drain_ops` and blocked every later write to the document | Replica keys are capped at `_ydoc_key_max()` = 256 bytes everywhere (ops, `v`, local edits, the identity); the drain catches every error, logs it, and never fails the caller |
+| A second three-way `set` from one base inserted the first save's text again, and its `v` (base + own clock) failed V3/V5 on peers | Extended base (base + own items + causal closure) for both the base text and the op's `v` |
+| Runs buffered on the trusted path stayed stuck when their origin arrived through `ydoc_apply` (decided later) or a local edit | `_ydoc_vapply`, `_ydoc_insert_at` and the three-way `set` drain the trusted buffer after integrating |
+| V5 cost: 3,000 chained one-char runs with `v` {} read the whole document once per run (4.6 s on 20k rows) | Runs that continue each other are joined before checking (47 ms); at most `_ydoc_runs_max()` = 256 runs per op; the rows an op may read for V5 and the YjsMod scan together are capped at `_ydoc_scan_max()` = 250,000 (54000 beyond) |
+| Device-key bloat: 300 keys of 2 kB made every later `v` 601 kB | The 256-byte cap, at most `_ydoc_devices_max()` = 16 device keys per owner and document (54000), names interned per document and deleted by `ydoc_drop` |
+| `_ydoc_relabel` moved block labels in one update and could hit the (doc, lo) primary key (23505) | Two phases: out of the label range, then onto the new labels |
+| `ydoc_version` (PL/pgSQL) had no pinned `search_path`: an exact-type `\|\|` on the caller's path ran inside it | Every PL/pgSQL function pins `search_path = pg_catalog, pg_temp`; every SQL function has a SQL-standard body; `02_security` asserts both |
+| `ydoc_rejected` grew without bound; `1.0` passed the number check and failed a cast with 22P02; a base from another document was accepted; `ydoc_delete` at position 2147483647 overflowed (22003) | The last 100 rejections per writer and document; numbers must be written as digits (22023); the base names its document; the range check is in bigint |
+| Interning deadlock between two documents | Interning per document (above) |
+
+originLeft = originRight used to be refused on arrival as malformed; it now goes through V7 and V4 like in the reference, so every server decides it the same way.
 
 ### Security model
 
@@ -189,7 +209,7 @@ Without a stored order, render must rebuild the YjsMod order from origins: a tre
 
 ## Tests
 
-`experiments/text-table/test/run.sh` (Postgres 16.4, Postgres.app): **All passed: 12/12 files, 173/173 assertions.**
+`experiments/text-table/test/run.sh` (Postgres 16.4, Postgres.app): **All passed: 14/14 files, 195/195 assertions.**
 
 | File | Goal |
 | --- | --- |
@@ -199,6 +219,8 @@ Without a stored order, render must rebuild the YjsMod order from origins: a tre
 | `20_convergence` | 30 trials: two servers editing with local positional ops by several replicas, exchanging `ops_since` split into single runs, shuffled, duplicated: same text and version; every op ever returned, shuffled, into a fresh doc; three-server non-interleaving |
 | `30_apply` | `ydoc_apply`: own ids, device keys, deletes of others; idempotent re-apply; identity from `crdt.current_replica_id()`; 42501 forged/no identity; 22023 for 13 kinds of malformed ops; buffering of missing origins and predecessors; early deletes; partial overlap; `ops_since` order and run joining |
 | `35_validate` | rules V0-V7 one case each (22023 with the rule in the message); the review's repro in both orders (abcY); V7 waits, then accepted, or rejected into `ydoc_rejected` without failing the caller; the waiting quota (54000); atomicity (second run breaks a rule, first not applied); equivocation refused on both paths, identical re-send accepted; catch-up ops refused by `ydoc_apply`; 150 honest local ops from three writers pass in order and shuffled |
+| `36_review` | regressions for the review findings above: over-long keys, a parked op failing with 54000 does not block the document, the device quota, repeated three-way saves accepted by peers, a base from another document, trusted buffers drained after the untrusted path, joined chained runs, the runs cap and the scan budget, an evil operator on the caller's `search_path`, the bounded rejection log, `1.0` numbers, delete overflow, no interning deadlock (dblink), originLeft = originRight decided by V4 |
+| `37_relabel_small` | 1,500 random edits with shrunk tuning constants (relabels all the time) against a model: block labels never collide |
 | `31_wrapper` | the deployment model: no privileges for clients (42501), an app SECURITY DEFINER wrapper with its own check, `session_user` identity, reads through an app function |
 | `40_order_keys` | `_ydoc_label` bounds; five adversarial patterns of 2,000 edits that force relabels (backward and forward at one spot, prepend, delete from the left and retype, backspace and retype) against a text model; 4,000 random edits against a model with every invariant every 50 steps; shuffled replay |
 | `45_compact` | two documents with the same 3,000 edits (backspace bursts), one compacted every 200: same text, version and `ops_since` text, fewer rows, invariants; three-way `set` with a base at the horizon equals the twin's result; an older base is refused (22023); the horizon keeps newer tombstones apart |
@@ -210,14 +232,14 @@ Invariants checked by `pg_temp.ydoc_check` (test/lib/helpers.sql): `docs.len` = 
 
 ## Benchmarks
 
-Environment (from `bench.sh`): Postgres 16.4 (Postgres.app), Apple M4, 10 CPU, 24 GB, macOS 27.0.1; throwaway cluster with `fsync=off`, `full_page_writes=on`, `shared_buffers=512MB`. 2026-11-04. Numbers are from one run of `experiments/text-table/bench.sh` on the benchmark machine, with interned replica ids and the causal rules (2026-11-05).
+Environment (from `bench.sh`): Postgres 16.4 (Postgres.app), Apple M4, 10 CPU, 24 GB, macOS 27.0.1; throwaway cluster with `fsync=off`, `full_page_writes=on`, `shared_buffers=512MB`. 2026-11-04. Numbers are from one run of `experiments/text-table/bench.sh` on the benchmark machine, with interned replica ids and the causal rules (2026-11-05); the size and trace sections were re-run after the review fixes (`ONLY=sizes,trace`).
 
 Reading the numbers:
 
-- **Edits are O(edit).** Insert and delete of one char cost 0.27-0.39 ms from 1k to 100k chars and 0.55-0.66 ms at 1M (the block running sum: 722 blocks), including the client round trip and commit. The WAL *records* of an edit stay at 0.5-1.5 kB at every size (one row insert, one or two HOT updates, two index entries, the block and document counters, the lock); what grows with the document is full-page images, because random positions touch pages that have not been written since the last checkpoint. Shape A rewrites the whole value.
+- **Edits are O(edit).** Insert and delete of one char cost 0.28-0.42 ms from 1k to 100k chars and 0.68-0.72 ms at 1M (the block running sum: 722 blocks), including the client round trip and commit. The WAL *records* of an edit stay at 0.5-1.5 kB at every size (one row insert, one or two HOT updates, two index entries, the block and document counters, the lock); what grows with the document is full-page images, because random positions touch pages that have not been written since the last checkpoint. Shape A rewrites the whole value.
 - **Reads are O(document).** `value()` is a `string_agg` over the rows: 3.5 ms at 100k chars (26k rows), 53 ms at 1M. `set` renders, diffs and edits: 12 ms at 100k. `ops_since` sends every delete, so even "nothing new" costs a scan of the tombstones (8.3 ms at 100k).
 - **Concurrency:** writers to one document serialize (about 3,300 inserts per second whatever the number of clients; latency grows with the queue); writers to different documents scale (11,700 per second with 8 clients). No lost insert, no deadlock.
-- **The trace:** 259,778 single-char edits replay locally in 73 s (280 us per edit, 698 bytes of WAL per edit with a commit each); the reference's ops go through the untrusted path (`ydoc_apply`, rules V0-V7) in 78 s (300 us) and the trusted path (`ydoc_merge`) in 52 s; the batched ops in about 1.7 s. The JS reference replays it in about 4.7 s in memory. Final text identical (md5) in all five replays.
+- **The trace:** 259,778 single-char edits replay locally in 73 s (282 us per edit, 701 bytes of WAL per edit with a commit each); the reference's ops go through the untrusted path (`ydoc_apply`, rules V0-V7) in 90 s (348 us) and the trusted path (`ydoc_merge`) in 60 s (229 us); the batched ops in about 2 s. The JS reference replays it in about 4.7 s in memory. Final text identical (md5) in all five replays.
 - **Storage was the weak point; compaction fixes the common case.** About 89 bytes of heap per row plus about 65 bytes of index. The real trace leaves 83k rows for 105k chars (15.6 MB, 149 bytes per char) because each backspaced char becomes its own tombstone row; `ydoc_compact` folds them (32 bytes per char in the table below, which includes 3,000 pgbench edits made before the compaction; 26 bytes per char right after the replay). It does not help the random-insert documents (45 times the text): their rows are live short runs separated by other runs, and nothing can merge them.
 - **Before and after compaction** (trace document, from "Storage: ydoc_compact"):
 
@@ -234,19 +256,19 @@ Document built by random-position inserts of 8-char words from three replicas, o
 
 | size (chars) | rows | tombstone rows | blocks | build ms per row | insert 1 char | delete 1 char | paste 1k | set (300-char paragraph) | value() | version() | ops_since(current) | ops_since({}) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1000 | 261 | 26 | 1 | 0.24 | 0.319 ms | 0.270 ms | 0.597 ms | 1.401 ms | 0.134 ms | 0.095 ms | 0.292 ms | 1.057 ms |
-| 10000 | 2602 | 269 | 8 | 0.13 | 0.353 ms | 0.307 ms | 0.677 ms | 3.721 ms | 0.382 ms | 0.098 ms | 1.092 ms | 8.795 ms |
-| 100000 | 25895 | 2704 | 69 | 0.13 | 0.386 ms | 0.351 ms | 0.742 ms | 12.081 ms | 3.642 ms | 0.099 ms | 9.570 ms | 86.504 ms |
-| 1000000 | 258473 | 26860 | 722 | 0.18 | 0.553 ms | 0.662 ms | 1.033 ms | 121.945 ms | 51.071 ms | 0.213 ms | 97.804 ms | 939.907 ms |
+| 1000 | 261 | 26 | 1 | 0.25 | 0.342 ms | 0.283 ms | 0.643 ms | 1.470 ms | 0.122 ms | 0.108 ms | 0.304 ms | 1.060 ms |
+| 10000 | 2602 | 269 | 8 | 0.14 | 0.375 ms | 0.321 ms | 0.708 ms | 3.797 ms | 0.400 ms | 0.102 ms | 1.122 ms | 8.573 ms |
+| 100000 | 25895 | 2704 | 69 | 0.14 | 0.422 ms | 0.367 ms | 0.831 ms | 12.278 ms | 3.577 ms | 0.105 ms | 10.128 ms | 86.984 ms |
+| 1000000 | 258473 | 26860 | 722 | 0.19 | 0.684 ms | 0.723 ms | 1.032 ms | 127.264 ms | 55.574 ms | 0.230 ms | 100.193 ms | 926.825 ms |
 
 WAL bytes per edit, one transaction each: total (records + full-page images, from pg_waldump). Full-page images are the first change of each page after a checkpoint; random positions in a large document touch many pages, so they dominate there.
 
 | size (chars) | insert 1 char | delete 1 char | paste 1k | set (300-char paragraph) |
 |---|---|---|---|---|
-| 1000 | 694 (671 + 0) | 489 (467 + 2) | 3284 (3224 + 0) | 3423 (3358 + 0) |
-| 10000 | 926 (896 + 0) | 958 (911 + 17) | 3641 (3244 + 336) | 9655 (8691 + 738) |
-| 100000 | 2222 (933 + 1252) | 2476 (1509 + 925) | 9490 (3318 + 6090) | 28790 (16733 + 11542) |
-| 1000000 | 15200 (912 + 14204) | 16258 (1069 + 15098) | 29149 (3053 + 25944) | 351526 (15290 + 334623) |
+| 1000 | 693 (670 + 0) | 522 (500 + 0) | 3272 (3215 + 0) | 2973 (2915 + 0) |
+| 10000 | 907 (879 + 0) | 954 (908 + 17) | 5936 (3507 + 2363) | 9299 (8252 + 829) |
+| 100000 | 2323 (1048 + 1237) | 2648 (1449 + 1157) | 14676 (3237 + 11338) | 28971 (15660 + 12821) |
+| 1000000 | 14157 (900 + 13177) | 16131 (1054 + 14986) | 26984 (2984 + 23858) | 342811 (14845 + 326389) |
 
 Storage of the document as built (VACUUM FULL):
 
@@ -348,14 +370,14 @@ automerge-paper, local replay as replica R (commit every 5,000 ops), then pgbenc
 
 | replay | calls | total s | us per call | WAL bytes per call | final text md5 ok |
 |---|---|---|---|---|---|
-| local insert/delete by position, commit per op | 259778 | 72.9 | 280 | 698 | t |
-| ydoc_apply (validated) of batch, commit per call | 2598 | 1.8 | 695 | 5083 | t |
-| ydoc_apply (validated) of ops, commit per call | 259778 | 77.9 | 300 | 759 | t |
-| ydoc_merge of batch, commit per call | 2598 | 1.6 | 629 | 4609 | t |
-| ydoc_merge of ops, commit per call | 259778 | 52.0 | 200 | 744 | t |
+| local insert/delete by position, commit per op | 259778 | 73.2 | 282 | 701 | t |
+| ydoc_apply (validated) of batch, commit per call | 2598 | 2.2 | 859 | 3826 | t |
+| ydoc_apply (validated) of ops, commit per call | 259778 | 90.3 | 348 | 788 | t |
+| ydoc_merge of batch, commit per call | 2598 | 1.8 | 699 | 3833 | t |
+| ydoc_merge of ops, commit per call | 259778 | 59.5 | 229 | 743 | t |
 
 Document after the trace (document 1, local replay):
 
 | chars | text bytes | rows | tombstone rows | relabels (all five replays) | items + indexes (per doc, approx) |
 |---|---|---|---|---|---|
-| 104852 | 104852 | 83253 | 77463 | 5242 (475246 rows rewritten) | 14 MB |
+| 104852 | 104852 | 83253 | 77463 | 5242 (475246 rows rewritten) | 15 MB |
