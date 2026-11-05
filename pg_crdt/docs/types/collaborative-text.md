@@ -21,7 +21,7 @@ An id names a document and grants nothing. Knowing it, or creating it, gives no 
 
 Each character has an id, `[key, seq]`: the [entry key](../guides/replicas-and-identity.md#replica-ids-and-entry-keys) of the writer that typed it, and that key's sequence number, counted from 1. Each insert also records its *origins*: the ids of the characters to its left and right when it was typed. The order of the document follows from the origins and the ids alone, so every server that has the same characters puts them in the same order, whatever order they arrived in. Deleted characters stay as tombstones, because a later insert may name them as its origin.
 
-Positions and lengths count Unicode code points, as `length()` and `substr()` do in Postgres, not bytes or UTF-16 units. An emoji outside the Basic Multilingual Plane is one position. A JavaScript client counts it as two (`'😀'.length` is 2), so convert positions with `Array.from(text)` or a code-point iterator.
+Positions and lengths count Unicode code points, as `length()` and `substr()` do in Postgres, not bytes or UTF-16 units. An emoji outside the Basic Multilingual Plane is one position. A JavaScript client counts it as two (`'😀'.length` is 2), so convert positions with `Array.from(text)` or a code-point iterator. The [JavaScript client](../reference/client.md) takes UTF-16 positions and converts them.
 
 The version of a document, `crdt.ydoc_version(doc)`, is its version vector: for each entry key, the highest sequence number the document has.
 
@@ -118,7 +118,7 @@ In the benchmarks, a 5 kB blog post took about 24 kB across the tables, and the 
 ## What it cannot do
 
 - **Rich text, cursors, presence, undo.** The document is plain text. Formatting, selections and undo are your editor's.
-- **Speak the Yjs wire format.** The ops are pg_crdt's own (see [Ops](#ops)). A client needs an implementation of the same algorithm; the JavaScript reference in [`experiments/text-ref`](../../experiments/text-ref/) is the one the extension is tested against. There is no client library.
+- **Speak the Yjs wire format.** The ops are pg_crdt's own (see [Ops](#ops)). A client needs an implementation of the same algorithm. The [JavaScript client](../reference/client.md) has one: its engine is the reference implementation that the extension is tested against.
 - **Forget deleted text.** Tombstones keep their characters, because a copy that has not seen an insert yet must receive it with its text. Compaction merges tombstone rows; it does not remove them.
 - **Be indexed directly.** `ydoc_value` reads tables, so it is `STABLE`, and generated columns and expression indexes need `IMMUTABLE` functions. Keep a text column for search, refreshed on save: see [Search the posts](../guides/collaborative-text.md#search-the-posts).
 - **Live in one row.** Your table holds an id. Row-level security, triggers and change feeds on your table do not see edits to the document.

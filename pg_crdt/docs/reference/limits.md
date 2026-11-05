@@ -36,11 +36,11 @@ Collaborative text has its own limits (document id and key length, quotas of the
 
 ### Collaborative text
 
-- **Plain text only.** No rich text, cursors, presence or undo, and the ops are not the Yjs wire format. There is no client library: a live editor needs its own implementation of the algorithm (the JavaScript reference in `experiments/text-ref` is the one the tests use). See [What it cannot do](../types/collaborative-text.md#what-it-cannot-do).
+- **Plain text only.** No rich text, cursors, presence or undo, and the ops are not the Yjs wire format. Outside JavaScript, a live editor needs its own implementation of the algorithm; in JavaScript, use the [JavaScript client](client.md). See [What it cannot do](../types/collaborative-text.md#what-it-cannot-do).
 - **Deleted text is kept.** Tombstones keep their characters for peers that have not seen them. `ydoc_compact` merges tombstone rows but does not remove them, and there is no garbage collection.
 - **Storage.** In the benchmarks a 5 kB post took about 24 kB across the tables, 3.8 times the experimental jsonb-column shape. `ydoc_value` reads every row of the document (about 0.4 ms at 10,000 characters, 3.6 ms at 100,000 on the benchmark machine).
 - **No index on the text.** `ydoc_value` is `STABLE`, so it cannot be in a generated column or an expression index. Search a cached text column instead.
 - **Compaction is a call you make.** Nothing compacts documents by itself. Schedule `ydoc_compact`.
 - **`ydoc_ops_since` sends every delete**, not only the new ones, because deletes carry no clock.
 - **One writer per entry key.** Two writers that use the same key make ops that other copies refuse (`22023`). Give each editor and device its own key.
-- **No client library.** The examples use plain node-postgres. Any driver works, because the state is `jsonb`.
+- **One client library, for text in JavaScript.** The [JavaScript client](client.md) syncs collaborative text through a transport you write. The PN-Counter needs none: the examples use plain node-postgres, and any driver works, because the state is `jsonb`. See also the client's [limits](client.md#limits).

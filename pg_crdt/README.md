@@ -68,6 +68,7 @@ Start with the [documentation map](docs/README.md), or the [quickstart](docs/get
 | The state, merge and the `crdt.pn` domain | [PN-Counter](docs/types/pn-counter.md) |
 | Edit a blog post with several people: form saves, live ops, search, compaction | [Collaborative text for a blog post](docs/guides/collaborative-text.md) |
 | How text documents merge, and what they cannot do | [Collaborative text](docs/types/collaborative-text.md) |
+| Connect a live editor from JavaScript (`client/`) | [JavaScript client](docs/reference/client.md) |
 | Look up a function, an error or a limit | [Shared](docs/reference/shared.md), [PN-Counter functions](docs/reference/pn.md), [Collaborative text functions](docs/reference/ydoc.md), [Errors](docs/reference/errors.md), [Limits](docs/reference/limits.md) |
 
 The design and the decisions behind it are in [`research/architecture.md`](research/architecture.md) and, for text, [`research/text.md`](research/text.md). Benchmarks: [`research/benchmarks/pn-counter.md`](research/benchmarks/pn-counter.md), [`research/benchmarks/text.md`](research/benchmarks/text.md). What changed: the [changelog](CHANGELOG.md).
@@ -77,6 +78,7 @@ The design and the decisions behind it are in [`research/architecture.md`](resea
 ```bash
 ./test/run.sh            # throwaway Postgres; pg_tle and the control-file install SKIP
 ./test/docker.sh         # Postgres 16, 17, 18 with pg_tle and the control file
+npm run test:client      # the JavaScript client: unit, convergence and Postgres tests
 make test.pg_crdt        # from the repository root
 ```
 

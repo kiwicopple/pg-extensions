@@ -5,7 +5,8 @@
   "scripts": {
     "test": "./test/run.sh",
     "test:docker": "./test/docker.sh",
-    "test:all": "npm run test && npm run test:docker",
+    "test:client": "npm test --prefix client && ./client/test/pg.sh",
+    "test:all": "npm run test && npm run test:client && npm run test:docker",
     "docs:install": "npm --prefix site ci",
     "docs:sync": "npm --prefix site run sync",
     "docs:dev": "npm --prefix site run dev",

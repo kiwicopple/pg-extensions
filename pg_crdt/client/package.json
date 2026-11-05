@@ -1,0 +1,19 @@
+{
+  "name": "pg-crdt-client",
+  "version": "0.0.1",
+  "private": true,
+  "description": "JavaScript client for pg_crdt collaborative text (ydoc_): a local replica, UTF-16 positions, an op queue and a sync loop over a transport you provide. No dependencies, no build step; Node and browsers.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./doc": "./src/doc.js"
+  },
+  "files": ["src"],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "test:pg": "./test/pg.sh"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

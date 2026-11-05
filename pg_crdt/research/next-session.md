@@ -7,6 +7,7 @@
 - **In the extension** (`pg_crdt--0.0.1.sql`):
   - `pn_` (PN-Counter).
   - `ydoc_`: collaborative text, table-backed. YjsMod order, causal validation V0–V7 for untrusted writers, three-way form saves (`ydoc_base` + `ydoc_set`), `ydoc_compact`, interned replica ids. Document ids are client-chosen text, and `ydoc_create` raises 23505 on an existing id.
+- **Client:** `client/` (session 8): `pg-crdt-client`, the JS client for `ydoc_`. Its engine `client/src/doc.js` is the reference; `experiments/text-ref/ref.mjs` re-exports it. Tests: `npm test --prefix client` (25 tests, incl. a 1,000-seed convergence fuzz) and `client/test/pg.sh` (4 tests on Postgres).
 - **Experiments:**
   - `experiments/text-column`: `yseq_`, the jsonb column alternative. Tested (221 assertions), not promoted.
   - `experiments/text-ref`: JS reference, fixtures, trace converter. `experiments/text-table`: notes, bench and the bytea-key variant (the code moved into the extension).
@@ -38,7 +39,7 @@
 
 ## Not built (follow-ups, roughly in priority order)
 
-1. A client library, or at least a JS snippet: op generation, UTF-16 to code-point conversion, `v` tracking, and the sync loop against `ydoc_apply`/`ydoc_ops_since`.
+1. ~~A client library~~ **Done (session 8):** `client/` (`pg-crdt-client`), docs `docs/reference/client.md`. Open points: persistence of the queue across reloads, a way for a client to learn that a waiting op it sent was refused later, and engine performance for large documents (one object per char, O(n) integration).
 2. Tombstone GC beyond `ydoc_compact`. Documents built from random-position inserts stay at about 45× the text size.
 3. Full-text search: a cached text column refreshed on save is the documented recipe. An automatic one may be worth adding.
 4. Rich text and marks, cursors and presence, undo.

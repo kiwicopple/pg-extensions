@@ -65,6 +65,26 @@ A file passes only when each planned assertion ran and passed, and no SQL error 
 
 The property tests use `setseed`, so a run is reproducible on one Postgres version. The generator (`fixtures/gen.sql`) draws replica ids from a small pool so random states overlap. The text files share `lib/text-helpers.sql`: `pg_temp.did(uid)` resolves a public document id to the internal bigint (for specs that read the tables), `pg_temp.ydoc_check(doc)` checks the structural invariants of a document (lengths, block counters, labels unique and in bounds, ids contiguous) and `pg_temp.merge_all(doc, ops)`.
 
+## The JavaScript client
+
+The [JavaScript client](../docs/reference/client.md) in `client/` has its own tests, in `client/test/`. They use Node's built-in test runner and need no npm packages.
+
+```bash
+npm test --prefix client      # unit tests and the convergence fuzz, no database (about 2 s)
+./client/test/pg.sh           # integration test on a throwaway Postgres with the extension
+./client/test/pg.sh --external  # the same on the server from PGHOST, PGPORT and PGUSER
+npm run test:client           # both
+```
+
+| File | Goal |
+| --- | --- |
+| `utf16.test.js` | UTF-16 to code point positions and back (emoji, ZWJ sequences, combining marks, lone surrogates); text Postgres cannot store refused |
+| `client.test.js` | the ops the client sends (code point positions, batching, runs joined), change events in UTF-16 ranges, retries after a lost request or a lost response (identical re-send), the 128-run batch cap, refusals (`42501` stops the client, reported once), serialized syncs, reopening a key; the engine's code point order and UTF-8 length against `Buffer` |
+| `convergence.test.js` | 1,000 seeds: 2 to 5 clients, random edits and overlapping syncs over an in-memory server that validates like `ydoc_apply` (the reference's untrusted path), with random delays and lost requests and responses; every client converges to the server's text and version, and its change events reproduce its text at every step |
+| `pg.test.js` | against Postgres, through the example transport `docs/examples/node-postgres-transport.mjs` (with a psql stand-in for node-postgres): two clients agree with `ydoc_value`, `ydoc_length` and `ydoc_version`; a lost response; a forged key (`42501`); 8 seeds of three clients with concurrent syncs, `ydoc_set` saves and `ydoc_compact`, with no waiting or refused ops left. Skipped unless `pg.sh` runs it |
+
+`pg.sh` uses `test/lib/cluster.sh`, like `run.sh`. Docker images without Node can still be tested: start the container with a published port and run `pg.sh --external` against it.
+
 ## Benchmark
 
 `bench/pn-counter.sh` measures merge latency against the number of replicas, the merge variants, and WAL per write for a state column and for an insert-only delta table. Results: `research/benchmarks/pn-counter.md`. `bench/text-compare.sh` compares `ydoc_` with the experimental jsonb-column shape (`experiments/text-column`): `research/benchmarks/text.md`. `experiments/text-table/bench.sh` has the `ydoc_` design measurements (`experiments/text-table/NOTES.md`).

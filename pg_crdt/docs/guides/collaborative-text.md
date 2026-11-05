@@ -448,7 +448,7 @@ rollback;
 
 ## Stream edits from an editor
 
-A live editor keeps its own replica of the document and sends each edit as an op as the user types. It needs an implementation of the same algorithm in the client: the op format and the YjsMod order are specified in [`research/text.md`](../../research/text.md), and [`experiments/text-ref`](../../experiments/text-ref/) has the JavaScript reference implementation that the extension is tested against. pg_crdt does not ship a client library.
+A live editor keeps its own replica of the document and sends each edit as an op as the user types. In JavaScript, the [JavaScript client](../reference/client.md) does this for you: it converts the editor's positions, queues the ops, and syncs them through a transport that calls `edit_post` and `sync_post`. This section shows the ops and the calls it makes, for a client in another language or for debugging. The op format and the YjsMod order are specified in [`research/text.md`](../../research/text.md).
 
 An op is a JSON object:
 
@@ -701,7 +701,7 @@ reset role;
 - The `crdt.ydoc_*` tables and sequences are granted to the owner of your wrappers only.
 - Every wrapper is `security definer`, pins `search_path`, checks your own rule, and passes an identity that your application trusts.
 - Forms pass the base they read with the text.
-- Live editors write under device keys (`bob:laptop`), and catch up with `ydoc_ops_since`.
+- Live editors write under device keys (`bob:laptop`), and catch up with `ydoc_ops_since` (the [JavaScript client](../reference/client.md) does both).
 - Search reads a cached text column, refreshed on save and by the maintenance job.
 - A scheduled job compacts documents, with a horizon no newer than the oldest base you want to accept.
 
