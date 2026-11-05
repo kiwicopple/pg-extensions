@@ -22,6 +22,8 @@ Accepts the RFC 9562 string form: 32 hexadecimal digits, either case, grouped 8-
 
 The `uuid` type's input function is more lenient than this: it also accepts braces, missing hyphens and hyphens after any group of four digits. `validate.uuid` accepts only the canonical layout, so text columns hold one form.
 
+**Input form:** hyphenated 8-4-4-4-12, in either case. Braces, missing hyphens and surrounding spaces are rejected. Case is not folded: a column can hold `ABC...` and `abc...` as different strings, so use `lower(btrim(value))` before the check if you need one stored form. See [Canonical forms and normalizing input](../guides/normalization.md).
+
 **Guarantees:** the value is in the canonical 8-4-4-4-12 layout and casts to `uuid`.
 
 **Does not guarantee:** a particular version or variant (use the two-argument form), uniqueness, or that the value was generated randomly or by any particular algorithm.
@@ -66,6 +68,8 @@ validate.ulid(value text) returns boolean
 Accepts a [ULID](https://github.com/ulid/spec): 26 characters of Crockford's Base32 (`0-9`, `A-Z` without `I`, `L`, `O`, `U`), in either case. The first character is `0` to `7`, because 26 characters hold 130 bits and a ULID has 128; `8ZZZZZZZZZZZZZZZZZZZZZZZZZ` overflows.
 
 Crockford's decoding of `I`, `L` and `O` as `1`, `1` and `0` is not applied: the ULID specification excludes them.
+
+**Input form:** 26 characters in either case, with no surrounding spaces. Case is not folded; use `upper(btrim(value))` or `lower(btrim(value))` before the check if you need one stored form. See [Canonical forms and normalizing input](../guides/normalization.md).
 
 **Guarantees:** the value decodes to a 128-bit ULID.
 
@@ -131,6 +135,8 @@ validate.git_sha(value text) returns boolean
 ```
 
 Accepts a full git object name: 40 lowercase hexadecimal digits (SHA-1) or 64 (SHA-256 repositories). Git prints object names in lowercase.
+
+**Input form:** lowercase hex only. Uppercase digits and surrounding spaces are rejected; use `lower(btrim(value))` before the check. See [Canonical forms and normalizing input](../guides/normalization.md).
 
 **Guarantees:** the length and lowercase hex digits.
 

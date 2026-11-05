@@ -44,7 +44,7 @@ select validate.email(value => 'te..st@example.com');
 -- false: two dots in a row
 ```
 
-Email addresses are case-insensitive in the domain and usually in practice in the local part. The validator does not normalize; compare with `lower(email)` in a unique index if you need case-insensitive uniqueness.
+**Input form:** the address with no leading or trailing space. Case is preserved and either case is accepted: the validator neither trims nor folds case. RFC 5321 treats the local part as case-sensitive, so lowercasing it is an application choice, not a validation fix; use `btrim(value)` to remove stray spaces. Email addresses are case-insensitive in the domain and usually in practice in the local part: compare with `lower(email)` in a unique index if you need case-insensitive uniqueness. See [Canonical forms and normalizing input](../guides/normalization.md).
 
 ### `url`
 
@@ -154,6 +154,8 @@ validate.mac(value text) returns boolean
 ```
 
 Accepts a MAC-48 / EUI-48 address as six pairs of hex digits, either case, separated by colons (`00:1a:2b:3c:4d:5e`) or by hyphens (`00-1A-2B-3C-4D-5E`, the IEEE 802 canonical form). The separator is the same throughout.
+
+**Input form:** either case, one separator throughout, no surrounding spaces. Case and separators are not normalized; use `lower(replace(btrim(value), '-', ':'))` before the check if you need one stored form. See [Canonical forms and normalizing input](../guides/normalization.md).
 
 **Guarantees:** the value is one 48-bit address that casts to `macaddr`.
 

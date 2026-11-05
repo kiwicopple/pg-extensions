@@ -62,7 +62,7 @@ alter table customers
 
 ## Normalize before you validate
 
-Validators do not normalize. `validate.country_code('gb')` is false, and `validate.iban` rejects spaces. Normalize in the application, or in a trigger, and keep the constraint strict:
+Validators do not normalize. `validate.country_code('gb')` is false, and `validate.iban` rejects spaces. Normalize in the application, or in a trigger, and keep the constraint strict. [Canonical forms and normalizing input](normalization.md) lists the form each validator accepts and covers triggers, domains and generated columns:
 
 ```sql
 create function public.normalize_customer()
@@ -81,7 +81,7 @@ before insert or update on customers
 for each row execute function public.normalize_customer();
 ```
 
-Do not put `upper()` or `lower()` inside the constraint unless you also store the normalized value; otherwise the table holds several spellings of one value.
+Do not put `upper()` or `lower()` inside the constraint: the table would then hold several spellings of one value.
 
 ## Combine rules
 

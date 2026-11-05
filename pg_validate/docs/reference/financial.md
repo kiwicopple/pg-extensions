@@ -11,7 +11,7 @@ Validators for bank accounts, book numbers and card numbers. Each takes `value t
 | [`card_number`](#card_number) | Payment card number | ISO/IEC 7812-1 |
 | [`luhn`](#luhn) | Any digit string with a Luhn check digit | ISO/IEC 7812-1 Annex B |
 
-All of them accept the compact electronic form only: no spaces or hyphens. Strip separators before checking, for example `validate.iban(replace(value, ' ', ''))`, and store the compact form.
+All of them accept the compact electronic form only: no spaces or hyphens. The validators never strip separators or change case. Normalize before the check, for example `validate.iban(upper(regexp_replace(value, '\s', '', 'g')))`, and store the normalized form: see [Canonical forms and normalizing input](../guides/normalization.md).
 
 ### `iban`
 
@@ -25,6 +25,8 @@ Accepts an IBAN in electronic format:
 2. An IBAN prefix from the SWIFT IBAN Registry (the 89 countries and territories of this release's snapshot, including `XK` for Kosovo and `YE`), and exactly the length the registry gives for that country (from 15 for Norway to 33 for Russia). Territories that the registry lists under another country use that country's prefix, so their own codes are rejected as prefixes: `GF`, `GP`, `MQ`, `RE`, `PF`, `TF`, `YT`, `NC`, `BL`, `MF`, `PM` and `WF` use `FR`; `IM`, `JE` and `GG` use `GB`; `AX` uses `FI`.
 3. Check digits `02` to `98` (ISO 13616: `00`, `01` and `99` are never issued, although some pass the arithmetic).
 4. The ISO 7064 MOD 97-10 check: move the first four characters to the end, replace letters with 10 to 35, and the number modulo 97 is 1.
+
+**Input form:** the ISO 13616 electronic format: uppercase, no spaces. Lowercase letters and the print format with spaces (`DE89 3704 0044 0532 0130 00`) are rejected; normalize with `upper(regexp_replace(value, '\s', '', 'g'))`. See [Canonical forms and normalizing input](../guides/normalization.md).
 
 The test suite checks the registry's example IBAN for each of the 89 countries.
 
@@ -53,6 +55,8 @@ validate.isbn(value text) returns boolean
 
 Accepts an ISBN-10 or an ISBN-13 in compact form; see the next two entries.
 
+**Input form:** digits only, with an uppercase `X` as the ISBN-10 check character. Hyphens, spaces and a lowercase `x` are rejected; normalize with `upper(regexp_replace(value, '[\s-]', '', 'g'))`. See [Canonical forms and normalizing input](../guides/normalization.md).
+
 **Guarantees:** a valid check digit for one of the two forms.
 
 **Does not guarantee:** that the ISBN was assigned to a book. Hyphenated forms (`978-0-306-40615-7`) are rejected, because the hyphen positions depend on the ISBN range tables, which change; strip hyphens first.
@@ -65,6 +69,8 @@ validate.isbn10(value text) returns boolean
 
 Accepts nine digits and a check character, `0`-`9` or uppercase `X` for 10, where the sum of each digit times its weight (10 down to 1) is divisible by 11.
 
+**Input form:** as for `isbn`: the check character `X` must be uppercase.
+
 **Guarantees and limits:** as for `isbn`. A lowercase `x` is rejected.
 
 ### `isbn13`
@@ -75,6 +81,8 @@ validate.isbn13(value text) returns boolean
 
 Accepts 13 digits starting with `978` or `979` and a valid EAN-13 check digit (weights 1 and 3, sum divisible by 10). The prefix `979-0` is reserved for ISMN (printed music), not ISBN, and is rejected.
 
+**Input form:** 13 digits with no hyphens or spaces, as for `isbn`.
+
 **Guarantees and limits:** as for `isbn`. Other EAN-13 barcodes are rejected; a general GTIN validator is on the [roadmap](../roadmap.md).
 
 ### `card_number`
@@ -84,6 +92,8 @@ validate.card_number(value text) returns boolean
 ```
 
 Accepts a payment card number (PAN): 12 to 19 digits (ISO/IEC 7812-1) with a valid Luhn check digit. The test suite uses the card networks' published test numbers.
+
+**Input form:** digits only. Spaces and hyphens are rejected; normalize with `regexp_replace(value, '[\s-]', '', 'g')`. See [Canonical forms and normalizing input](../guides/normalization.md).
 
 **Guarantees:** the number is well formed and has a valid check digit, so it was not mistyped in any way Luhn detects (all single-digit errors and most adjacent transpositions).
 
