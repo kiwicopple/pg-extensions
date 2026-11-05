@@ -44,7 +44,7 @@ test/
 | `2x_` | Registry: API, permissions and ownership, volatility markings |
 | `3x_` | `CHECK` constraints and domains |
 | `4x_` | JSON Schema: `40`-`42` are generated from the official JSON Schema Test Suite, `43` is hand-written |
-| `9x_` | The documentation's examples, as written (`90` quickstart, `91` custom formats and constraints guide, `92` JSON Schema) |
+| `9x_` | The documentation's examples, as written (`90` quickstart, `91` custom formats and constraints guide, `92` JSON Schema, `93` canonical forms and normalization) |
 
 ## The JSON Schema Test Suite
 

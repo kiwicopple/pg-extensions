@@ -27,7 +27,7 @@ Known exclusions, by policy:
 - `XK` (Kosovo) and other user-assigned codes are not ISO 3166-1 assignments, so `country_code` rejects them, as it rejects exceptionally reserved codes such as `UK` and `EU`. `XK` is a valid IBAN prefix: see [`iban`](financial.md#iban).
 - `currency_code` accepts List One only. Historic codes (List Three) are rejected, including codes withdrawn recently: `ANG` (replaced by `XCG` in 2025), `BGN` (Bulgaria adopted the euro on 2026-01-01) and `SLL` (replaced by `SLE`).
 
-Codes are case-sensitive, in the case the standard uses: uppercase for countries and currencies, lowercase for languages. To accept other cases, normalize in the constraint, for example `check (validate.country_code(upper(country)))`, or better, store the normalized value.
+Codes are case-sensitive, in the case the standard uses: uppercase for countries and currencies (ISO 3166, ISO 4217), lowercase for languages (ISO 639-1). The validators never trim or change case. Normalize before the check, for example in a trigger, and store the normalized value: see [Canonical forms and normalizing input](../guides/normalization.md).
 
 ### `e164`
 
@@ -36,6 +36,8 @@ validate.e164(value text) returns boolean
 ```
 
 Accepts an E.164 number in its international form: `+`, a country code that does not start with `0`, then the rest of the number, at most 15 digits in total (E.164 §6.1). No spaces, hyphens or parentheses: this is the form that Twilio and most SMS providers expect.
+
+**Input form:** `+` followed by digits only. Spaces, hyphens and parentheses are rejected, and so is a number without the `+`. Strip the punctuation first: see [Canonical forms and normalizing input](../guides/normalization.md).
 
 **Guarantees:** the value has the structure of an international number and fits E.164's 15-digit limit.
 
@@ -56,6 +58,8 @@ validate.country_code(value text) returns boolean
 
 Accepts one of the 249 officially assigned ISO 3166-1 alpha-2 codes, in uppercase (`US`, `GB`, `AX`).
 
+**Input form:** exactly two uppercase letters. `us`, `Us` and ` US` are rejected; use `upper(btrim(value))` before the check. See [Canonical forms and normalizing input](../guides/normalization.md).
+
 Rejected: lowercase codes, exceptionally reserved codes (`UK`, `EU`), transitionally reserved and withdrawn codes (`AN`, `YU`), and user-assigned codes, including `XK`, which many systems use for Kosovo. To accept `XK`, use `check (validate.country_code(country) or country = 'XK')`.
 
 **Guarantees:** the value is an assigned ISO 3166-1 alpha-2 code in the snapshot.
@@ -70,6 +74,8 @@ validate.country_code_alpha3(value text) returns boolean
 
 Accepts one of the 249 officially assigned ISO 3166-1 alpha-3 codes, in uppercase (`USA`, `GBR`, `ALA`). The same rules as `country_code` apply; user-assigned codes such as `XKX` are rejected.
 
+**Input form:** exactly three uppercase letters, no surrounding spaces. See [Canonical forms and normalizing input](../guides/normalization.md).
+
 **Guarantees and limits:** as for `country_code`.
 
 ### `currency_code`
@@ -79,6 +85,8 @@ validate.currency_code(value text) returns boolean
 ```
 
 Accepts an ISO 4217 alphabetic code from List One (current currencies and funds), in uppercase. List One includes fund codes (`BOV`, `CHE`, `USN`, `XAD`), precious metals (`XAU`, `XAG`), `XTS` (reserved for testing) and `XXX` (no currency). Exclude the ones you do not want in the constraint, for example `and currency not in ('XTS', 'XXX')`.
+
+**Input form:** exactly three uppercase letters, no surrounding spaces. `eur` is rejected. See [Canonical forms and normalizing input](../guides/normalization.md).
 
 **Guarantees:** the value is a List One code in the snapshot.
 
@@ -91,6 +99,8 @@ validate.language_code(value text) returns boolean
 ```
 
 Accepts one of the 183 ISO 639-1 two-letter codes, in lowercase (`en`, `fr`, `zh`). Withdrawn codes (`iw`, `in`, `ji`) and the deprecated `bh` are rejected.
+
+**Input form:** exactly two lowercase letters, no surrounding spaces. `EN` and `En` are rejected; use `lower(btrim(value))` before the check. See [Canonical forms and normalizing input](../guides/normalization.md).
 
 This is not a language tag. `en-US`, `zh-Hant` and three-letter ISO 639-2 and 639-3 codes (`eng`, `yue`) are rejected. For language tags as used by HTTP and HTML, BCP 47 (RFC 5646) is on the [roadmap](../roadmap.md); its syntax needs a grammar and its subtags need the IANA registry.
 

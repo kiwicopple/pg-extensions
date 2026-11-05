@@ -64,7 +64,7 @@ Start with the [documentation map](docs/README.md).
 | Task | Guide |
 | --- | --- |
 | Install | [Install](docs/install.md) |
-| Add constraints to a table | [Quickstart](docs/get-started/quickstart.md), [Use validators in constraints](docs/guides/constraints.md) |
+| Add constraints to a table | [Quickstart](docs/get-started/quickstart.md), [Use validators in constraints](docs/guides/constraints.md), [Canonical forms and normalizing input](docs/guides/normalization.md) |
 | Register your own formats | [Custom formats](docs/registry.md) |
 | Look up a validator | The [reference](docs/README.md#reference) |
 | Understand an error | [Errors and limits](docs/errors-and-limits.md) |

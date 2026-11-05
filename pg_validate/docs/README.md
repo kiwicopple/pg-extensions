@@ -11,6 +11,7 @@ New to the project? Read the [overview](overview.md), then [install the extensio
 | Install with `create extension`, pg_tle or psql | [Install](install.md) |
 | Add constraints to a table | [Quickstart](get-started/quickstart.md) |
 | Name constraints, use domains, constrain existing data, normalize input | [Use validators in constraints](guides/constraints.md) |
+| Know which spelling each validator accepts, and normalize input before the check | [Canonical forms and normalizing input](guides/normalization.md) |
 | Register your own format and control who can | [Custom formats](registry.md) |
 | Validate `jsonb` documents against a JSON Schema | [JSON Schema](json-schema.md) |
 | Understand an error or a limit | [Errors and limits](errors-and-limits.md) |
@@ -38,6 +39,6 @@ The [roadmap](roadmap.md) lists candidate formats and the rules new validators f
 
 ## Example conventions
 
-SQL examples use named arguments and lowercase keywords. Comments after a statement show its result (`-- true`). Each task page states its prerequisites; run its blocks in order unless one is marked as an expected error. The test suite runs the quickstart, custom formats and JSON Schema examples (`test/spec/90_usage_quickstart.sql`, `91_usage_registry.sql`, `92_usage_json_schema.sql`).
+SQL examples use named arguments and lowercase keywords. Comments after a statement show its result (`-- true`). Each task page states its prerequisites; run its blocks in order unless one is marked as an expected error. The test suite runs the quickstart, custom formats, JSON Schema and normalization examples (`test/spec/90_usage_quickstart.sql`, `91_usage_registry.sql`, `92_usage_json_schema.sql`, `93_usage_normalization.sql`).
 
 The examples call the role that installed the extension the extension owner. It owns the registry and can let other roles register formats.

@@ -6,6 +6,7 @@ export const pages = [
   { src: 'docs/install.md', route: 'install', label: 'Install' },
   { src: 'docs/get-started/quickstart.md', route: 'get-started/quickstart', label: 'Quickstart: validate a table' },
   { src: 'docs/guides/constraints.md', route: 'guides/constraints', label: 'Use validators in constraints' },
+  { src: 'docs/guides/normalization.md', route: 'guides/normalization', label: 'Canonical forms and normalizing input' },
   { src: 'docs/registry.md', route: 'guides/custom-formats', label: 'Custom formats' },
   { src: 'docs/reference/identifiers.md', route: 'reference/identifiers', label: 'Identifiers' },
   { src: 'docs/reference/internet.md', route: 'reference/internet', label: 'Internet' },
@@ -30,7 +31,7 @@ export const sidebar = [
   },
   {
     label: 'Guides',
-    items: [item('guides/constraints'), item('guides/custom-formats')],
+    items: [item('guides/constraints'), item('guides/normalization'), item('guides/custom-formats')],
   },
   {
     label: 'Reference',

@@ -44,6 +44,8 @@ validate.hex(value text) returns boolean
 
 Accepts bytes encoded as hexadecimal: an even number of hex digits in either case, with no `0x` prefix and no separators. The empty string is zero bytes. This is what `decode(value, 'hex')` accepts, minus the white space that `decode` ignores.
 
+**Input form:** an even number of hex digits, in either case. Spaces, line breaks and a `0x` prefix are rejected; strip white space with `regexp_replace(value, '\s', '', 'g')`, and use `lower` only if you want one stored case. See [Canonical forms and normalizing input](../guides/normalization.md).
+
 **Guarantees:** the value decodes to whole bytes.
 
 **Does not guarantee:** a length. An odd-length string such as a CSS color `abc` fails; use your own check for hex numbers that are not byte strings.
