@@ -1,20 +1,20 @@
 # Collaborative text functions
 
-Every function of collaborative text, in schema `crdt`. A document lives in the extension's tables and is named by a `bigint` id: see [Collaborative text](../types/collaborative-text.md) for the model, the op format and what it cannot do, [Shared](shared.md) for naming and replica ids, and [Errors](errors.md) for every SQLSTATE. To build an application with them, follow [Collaborative text for a blog post](../guides/collaborative-text.md).
+Every function of collaborative text, in schema `crdt`. A document lives in the extension's tables and is named by a `text` id, which the client may choose: see [Collaborative text](../types/collaborative-text.md) for the model, the op format and what it cannot do, [Shared](shared.md) for naming and replica ids, and [Errors](errors.md) for every SQLSTATE. To build an application with them, follow [Collaborative text for a blog post](../guides/collaborative-text.md).
 
 Unless an entry says otherwise, a function:
 
 - is `VOLATILE`, not `STRICT`, and not `security definer`;
 - pins `search_path` to `pg_catalog, pg_temp`;
 - has `EXECUTE` granted to `public`, and runs with the caller's privileges on the [tables](#tables), which nobody but their owner has at install. Without them, a call fails with `42501` (`permission denied for table ydoc_docs`);
-- raises `P0002` for a document that does not exist;
-- locks the document's row when it writes, so writes to one document run one at a time (see [Concurrency](../types/collaborative-text.md#concurrency)).
+- raises `P0002` for a document that does not exist (the read-only [`ydoc_value`](#ydoc_value), [`ydoc_length`](#ydoc_length), [`ydoc_version`](#ydoc_version) and [`ydoc_base`](#ydoc_base) return null or `{}` instead);
+- looks the document up by its id and locks its row in one step when it writes, so writes to one document run one at a time (see [Concurrency](../types/collaborative-text.md#concurrency)).
 
 Positions and lengths count Unicode code points. A `replica` argument of a local edit is an [entry key](shared.md#replica-ids-and-entry-keys) of at most 256 bytes, which trusted code supplies.
 
 | Function | Returns | Purpose |
 | --- | --- | --- |
-| [`ydoc_create()`](#ydoc_create) | `bigint` | A new, empty document. |
+| [`ydoc_create(id)`](#ydoc_create) | `text` | A new, empty document, with the id you give or a random UUID. |
 | [`ydoc_value(doc)`](#ydoc_value) | `text` | The text. |
 | [`ydoc_length(doc)`](#ydoc_length) | `integer` | The length of the text, in code points. |
 | [`ydoc_version(doc)`](#ydoc_version) | `jsonb` | The version vector. |
@@ -36,7 +36,7 @@ The extension creates these tables in `crdt`. They are its members: `drop extens
 
 | Table | Holds |
 | --- | --- |
-| `ydoc_docs` | One row per document: `id`, visible length, write counter, compaction horizon. Reference `ydoc_docs (id)` from your tables. |
+| `ydoc_docs` | One row per document: `uid` (the public id, `text`), `id` (an internal `bigint`, which the other tables use), visible length, write counter, compaction horizon. Reference `ydoc_docs (uid)` from your tables. |
 | `ydoc_replicas` | The entry keys of each document, as small integers. |
 | `ydoc_items` | One row per run of characters: ids, origins, text, tombstone, order label. |
 | `ydoc_blocks` | A positional index over the rows. |
@@ -57,33 +57,58 @@ grant select, insert, update, delete
      crdt.ydoc_pending_deletes, crdt.ydoc_deps,
      crdt.ydoc_pending_ops, crdt.ydoc_rejected
   to app_owner;
-grant references on crdt.ydoc_docs to app_owner;
+grant references on crdt.ydoc_docs to app_owner;  -- for foreign keys to ydoc_docs (uid)
 grant usage on all sequences in schema crdt to app_owner;
 ```
 
 ## Functions
 
-The examples on this page continue from each other. Run them in order, as the database owner, in a test database where the first one creates document 1.
+The examples on this page continue from each other. Run them in order, as the database owner, in a test database. They use the document ids `welcome` and `other`.
 
 ### `ydoc_create`
 
 ```text
-crdt.ydoc_create() returns bigint
+crdt.ydoc_create(id text default gen_random_uuid()::text) returns text
 ```
 
-Creates an empty document and returns its id. Ids come from an identity column and are never reused.
+Creates an empty document and returns its id: `id`, or a random UUID in text form when you pass none. The argument is named `id`, so `ydoc_create(id => 'post:123')` works.
 
-**Privileges.** `EXECUTE` to `public`, and the [table grants](#tables). **Errors.** None of its own.
+An id is non-empty, at most 256 bytes, with no control characters (the C0 controls, DEL and the C1 controls), and is compared byte for byte: `Post` and `post` are two documents. Anything that fits is allowed, so a UUID, a UUIDv7 or ULID, a Yjs room name or an application key all work. When the client chooses the id, it should be random, so that nobody can guess it.
+
+Creating is not idempotent. An id that exists raises `23505`, and the function never returns, resets or replaces the existing document. That is deliberate: if it returned the existing document, anyone could take over a document by creating its predictable id first. If you chose the id, check in your application that you own the document (record the owner when you create it, in your own table), and handle `23505` in your wrapper: see [Create a document with a client-chosen id](../guides/collaborative-text.md#create-a-document-with-a-client-chosen-id). Two sessions that create the same id at once get one success and one `23505`.
+
+An id names a document and grants nothing: knowing or creating it gives no right to read or edit it, and that a document exists is never proof that the caller owns it. Access is decided by the table privileges and your wrappers.
+
+The default is evaluated in the caller's context, so it names `pg_catalog.gen_random_uuid()`; a function of that name earlier in the caller's `search_path` is not used.
+
+**Privileges.** `EXECUTE` to `public`, and the [table grants](#tables).
+
+**Errors**
+
+| SQLSTATE | When |
+| --- | --- |
+| `22023` | `id` is null, empty, longer than 256 bytes or has a control character. |
+| `23505` | A document with this id exists. The message says so and the hint explains why creating is not idempotent. |
 
 ```sql
-select crdt.ydoc_create();
--- 1
+select crdt.ydoc_create('welcome');
+-- welcome
+select crdt.ydoc_create('welcome');
+-- ERROR:  crdt.ydoc_create: document 'welcome' already exists
+-- HINT:  Documents are not created idempotently. If you chose this id, check in your app that you own the document.
+select crdt.ydoc_create('');
+-- ERROR:  crdt.ydoc_create: '' is not a document id
+-- HINT:  A document id is non-empty text of at most 256 bytes without control characters. Omit it for a random UUID.
+select crdt.ydoc_create('other');
+-- other
+select length(crdt.ydoc_create());
+-- 36
 ```
 
 ### `ydoc_value`
 
 ```text
-crdt.ydoc_value(doc bigint) returns text
+crdt.ydoc_value(doc text) returns text
 ```
 
 The text of the document: its visible characters in order. `''` for an empty document, null for a document that does not exist or a null `doc`.
@@ -95,7 +120,7 @@ The text of the document: its visible characters in order. `''` for an empty doc
 ### `ydoc_length`
 
 ```text
-crdt.ydoc_length(doc bigint) returns integer
+crdt.ydoc_length(doc text) returns integer
 ```
 
 The length of the text in code points, from a counter on the document's row (it does not read the text). Null for a document that does not exist.
@@ -105,7 +130,7 @@ The length of the text in code points, from a counter on the document's row (it 
 ### `ydoc_version`
 
 ```text
-crdt.ydoc_version(doc bigint) returns jsonb
+crdt.ydoc_version(doc text) returns jsonb
 ```
 
 The version vector `{key: highest seq}` of the characters the document has integrated, one index probe per entry key. `{}` for an empty document, and for a document that does not exist. Pass it to another copy's [`ydoc_ops_since`](#ydoc_ops_since) to get what this copy lacks.
@@ -115,25 +140,25 @@ The version vector `{key: highest seq}` of the characters the document has integ
 ### `ydoc_base`
 
 ```text
-crdt.ydoc_base(doc bigint) returns jsonb
+crdt.ydoc_base(doc text) returns jsonb
 ```
 
-The version a form starts from: `{"d": doc, "g": write counter, "v": version vector}`. Read it in the same statement as the text and pass it back to [`ydoc_set`](#ydoc_set). `g` counts the write calls to the document, and is the value that [`ydoc_compact`](#ydoc_compact)'s horizon is compared with. Null for a document that does not exist.
+The version a form starts from: `{"d": the document's id, "g": write counter, "v": version vector}`. Read it in the same statement as the text and pass it back to [`ydoc_set`](#ydoc_set). `g` counts the write calls to the document, and is the value that [`ydoc_compact`](#ydoc_compact)'s horizon is compared with. Null for a document that does not exist.
 
 **Labels.** `STABLE PARALLEL SAFE`, `LANGUAGE sql` with a SQL-standard body. **Privileges.** `select` on the [tables](#tables). **Errors.** None of its own.
 
 ```sql
-select crdt.ydoc_value(1), crdt.ydoc_base(1);
---  ydoc_value |         ydoc_base
--- ------------+---------------------------
---             | {"d": 1, "g": 0, "v": {}}
+select crdt.ydoc_value('welcome'), crdt.ydoc_base('welcome');
+--  ydoc_value |             ydoc_base
+-- ------------+-----------------------------------
+--             | {"d": "welcome", "g": 0, "v": {}}
 ```
 
 ### `ydoc_insert`
 
 ```text
 crdt.ydoc_insert(
-  doc bigint,
+  doc text,
   pos integer,
   chars text,
   replica text
@@ -155,11 +180,11 @@ An empty `chars` changes nothing and returns an op with no inserts. The key must
 | `P0002` | The document does not exist. |
 
 ```sql
-select crdt.ydoc_insert(1, 0, 'Hello', replica => 'alice');
+select crdt.ydoc_insert('welcome', 0, 'Hello', replica => 'alice');
 -- {"d": [], "i": [["alice", 1, null, null, "Hello"]], "v": {}}
-select crdt.ydoc_insert(1, 5, ' world', replica => 'alice:phone');
+select crdt.ydoc_insert('welcome', 5, ' world', replica => 'alice:phone');
 -- {"d": [], "i": [["alice:phone", 1, ["alice", 5], null, " world"]], "v": {"alice": 5}}
-select crdt.ydoc_insert(1, 99, 'x', replica => 'alice');
+select crdt.ydoc_insert('welcome', 99, 'x', replica => 'alice');
 -- ERROR:  crdt.ydoc_insert: position 99 is outside the document (length 11)
 ```
 
@@ -167,7 +192,7 @@ select crdt.ydoc_insert(1, 99, 'x', replica => 'alice');
 
 ```text
 crdt.ydoc_delete(
-  doc bigint,
+  doc text,
   pos integer,
   len integer,
   replica text
@@ -187,9 +212,9 @@ Deletes `len` characters from `pos` and returns the op: `{"v": ..., "i": [], "d"
 | `P0002` | The document does not exist. |
 
 ```sql
-select crdt.ydoc_delete(1, 0, 6, replica => 'bob');
+select crdt.ydoc_delete('welcome', 0, 6, replica => 'bob');
 -- {"d": [["alice", 1, 5], ["alice:phone", 1, 1]], "i": [], "v": {"alice": 5, "alice:phone": 6}}
-select crdt.ydoc_value(1);
+select crdt.ydoc_value('welcome');
 -- world
 ```
 
@@ -197,7 +222,7 @@ select crdt.ydoc_value(1);
 
 ```text
 crdt.ydoc_set(
-  doc bigint,
+  doc text,
   new_text text,
   replica text,
   base jsonb default null
@@ -220,22 +245,22 @@ Replaces the text with `new_text`: it keeps the common prefix and suffix and mak
 | `P0002` | The document does not exist. |
 
 ```sql
-select crdt.ydoc_set(1, 'Hello, world', replica => 'carol');
+select crdt.ydoc_set('welcome', 'Hello, world', replica => 'carol');
 -- {"d": [], "i": [["carol", 1, null, ["alice", 1], "Hello, "]], "v": {"alice": 5, "alice:phone": 6}}
 select crdt.ydoc_set(
-  1,
+  'welcome',
   'x',
   replica => 'carol',
-  base => '{"d": 2, "g": 0, "v": {}}'
+  base => '{"d": "other", "g": 0, "v": {}}'
 );
--- ERROR:  crdt.ydoc_set: base is not a version of document 1
+-- ERROR:  crdt.ydoc_set: base is not a version of document 'welcome'
 ```
 
 ### `ydoc_apply`
 
 ```text
 crdt.ydoc_apply(
-  doc bigint,
+  doc text,
   ops jsonb,
   replica text default crdt.current_replica_id()
 ) returns text
@@ -268,7 +293,7 @@ Applies ops from a writer you do not trust, whose identity is `replica`. The wri
 
 ```sql
 select crdt.ydoc_apply(
-  1,
+  'welcome',
   '{
     "v": {"alice": 5, "alice:phone": 6, "carol": 7},
     "i": [["dave", 1, ["alice:phone", 6], null, "!"]],
@@ -278,7 +303,7 @@ select crdt.ydoc_apply(
 );
 -- accepted
 select crdt.ydoc_apply(
-  1,
+  'welcome',
   '{"v": {}, "i": [["erin", 1, null, null, "?"]], "d": []}',
   replica => 'dave'
 );
@@ -288,7 +313,7 @@ select crdt.ydoc_apply(
 ### `ydoc_merge`
 
 ```text
-crdt.ydoc_merge(doc bigint, ops jsonb) returns void
+crdt.ydoc_merge(doc text, ops jsonb) returns void
 ```
 
 Applies ops from a peer you trust: another server's [`ydoc_ops_since`](#ydoc_ops_since), a sync job, a replay of ops you stored. It checks only the shape of the op and ignores `v`. Inserts whose origins have not arrived, and deletes of characters not seen yet, are kept and applied when they arrive. Ops may come in any order and any number of times. Ids that are already present must carry the same text and origins. A null `ops` changes nothing.
@@ -307,7 +332,7 @@ Applies ops from a peer you trust: another server's [`ydoc_ops_since`](#ydoc_ops
 ### `ydoc_ops_since`
 
 ```text
-crdt.ydoc_ops_since(doc bigint, vv jsonb default '{}') returns jsonb
+crdt.ydoc_ops_since(doc text, vv jsonb default '{}') returns jsonb
 ```
 
 The ops that a copy at version `vv` lacks, as one op without `v`: `{"i": [...], "d": [...]}`. The inserts are the characters above `vv`, in the order this document integrated them, which is causal, so the receiver can apply them without waiting; consecutive rows of one run are joined. The deletes are every delete this document knows, because deletes carry no clock (applying one twice is harmless). With the default `{}` (or null), it returns the whole document.
@@ -324,16 +349,16 @@ Give the result to [`ydoc_merge`](#ydoc_merge) on a server, or to a client's own
 | `P0002` | The document does not exist. |
 
 ```sql
-select crdt.ydoc_ops_since(1, crdt.ydoc_version(1));
+select crdt.ydoc_ops_since('welcome', crdt.ydoc_version('welcome'));
 -- {"d": [["alice", 1, 5], ["alice:phone", 1, 1]], "i": []}
-select crdt.ydoc_ops_since(1, '{"alice": 5, "alice:phone": 6}');
+select crdt.ydoc_ops_since('welcome', '{"alice": 5, "alice:phone": 6}');
 -- {"d": [["alice", 1, 5], ["alice:phone", 1, 1]], "i": [["carol", 1, null, ["alice", 1], "Hello, "], ["dave", 1, ["alice:phone", 6], null, "!"]]}
 ```
 
 ### `ydoc_compact`
 
 ```text
-crdt.ydoc_compact(doc bigint, horizon bigint default null) returns integer
+crdt.ydoc_compact(doc text, horizon bigint default null) returns integer
 ```
 
 Maintenance. Merges adjacent rows that continue one run (consecutive ids of one key, typed one after the other) and have the same visibility: both visible, both deleted by the same write, or both deleted at or before `horizon`, a value of the document's write counter (`g` in [`ydoc_base`](#ydoc_base)). The default is the current write counter. Returns the number of rows removed. The text, the version and the text of `ydoc_ops_since` do not change.
@@ -350,14 +375,14 @@ The horizon is stored on the document, and [`ydoc_set`](#ydoc_set) refuses a bas
 | `P0002` | The document does not exist. |
 
 ```sql
-select crdt.ydoc_compact(1);
+select crdt.ydoc_compact('welcome');
 -- 0
 ```
 
 ### `ydoc_drop`
 
 ```text
-crdt.ydoc_drop(doc bigint) returns void
+crdt.ydoc_drop(doc text) returns void
 ```
 
 Deletes the document and every row that belongs to it, including its waiting ops and rejections. If a row of your table references the document with a foreign key, delete that row first.
@@ -365,8 +390,8 @@ Deletes the document and every row that belongs to it, including its waiting ops
 **Privileges.** `EXECUTE` to `public`, and the [table grants](#tables). **Errors.** `P0002`: the document does not exist; `23503` (from Postgres): a row of yours still references it.
 
 ```sql
-select crdt.ydoc_drop(1);
-select crdt.ydoc_value(1) is null as gone;
+select crdt.ydoc_drop('welcome');
+select crdt.ydoc_value('welcome') is null as gone;
 -- t
 ```
 
@@ -374,6 +399,7 @@ select crdt.ydoc_value(1) is null as gone;
 
 | Limit | Value | Past it |
 | --- | --- | --- |
+| A document id | 256 bytes; no control characters | `22023` |
 | An entry key | 256 bytes; the replica id without `:` | `22023` |
 | Device keys per owner and document (`ydoc_apply`) | 16 | `54000` |
 | Runs in one op (`ydoc_apply`, after joining runs that continue each other) | 256 | `54000` |

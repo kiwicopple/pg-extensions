@@ -20,19 +20,19 @@ insert into client_api values
     ('crdt.pn_merge_agg(crdt.pn)'),
     ('crdt.pn_is_valid(jsonb)'),
     ('crdt.pn_apply_delta(crdt.pn, crdt.pn, text)'),
-    ('crdt.ydoc_create()'),
-    ('crdt.ydoc_value(bigint)'),
-    ('crdt.ydoc_length(bigint)'),
-    ('crdt.ydoc_version(bigint)'),
-    ('crdt.ydoc_base(bigint)'),
-    ('crdt.ydoc_insert(bigint, integer, text, text)'),
-    ('crdt.ydoc_delete(bigint, integer, integer, text)'),
-    ('crdt.ydoc_set(bigint, text, text, jsonb)'),
-    ('crdt.ydoc_apply(bigint, jsonb, text)'),
-    ('crdt.ydoc_merge(bigint, jsonb)'),
-    ('crdt.ydoc_ops_since(bigint, jsonb)'),
-    ('crdt.ydoc_compact(bigint, bigint)'),
-    ('crdt.ydoc_drop(bigint)');
+    ('crdt.ydoc_create(text)'),
+    ('crdt.ydoc_value(text)'),
+    ('crdt.ydoc_length(text)'),
+    ('crdt.ydoc_version(text)'),
+    ('crdt.ydoc_base(text)'),
+    ('crdt.ydoc_insert(text, integer, text, text)'),
+    ('crdt.ydoc_delete(text, integer, integer, text)'),
+    ('crdt.ydoc_set(text, text, text, jsonb)'),
+    ('crdt.ydoc_apply(text, jsonb, text)'),
+    ('crdt.ydoc_merge(text, jsonb)'),
+    ('crdt.ydoc_ops_since(text, jsonb)'),
+    ('crdt.ydoc_compact(text, bigint)'),
+    ('crdt.ydoc_drop(text)');
 
 create temp table ydoc_tables (rel regclass);
 insert into ydoc_tables values
@@ -122,7 +122,7 @@ select tap.is(
 select tap.is(
     (select string_agg(p.proname, ', ' order by 1) from pg_proc p
      where p.oid in ('crdt.current_replica_id()'::regprocedure, 'crdt.pn_apply_delta(crdt.pn, crdt.pn, text)'::regprocedure,
-                     'crdt.ydoc_apply(bigint, jsonb, text)'::regprocedure)
+                     'crdt.ydoc_apply(text, jsonb, text)'::regprocedure)
        and not exists (select 1 from unnest(p.proconfig) c where c = 'search_path=pg_catalog, pg_temp')),
     null, 'functions that decide on identity pin search_path to pg_catalog, pg_temp');
 -- PL/pgSQL bodies are parsed at run time with the caller's search_path, so an
@@ -137,17 +137,17 @@ select tap.is(
     null, 'every ydoc_ PL/pgSQL function pins search_path; every ydoc_ SQL function has a SQL-standard body');
 select tap.is(
     (select string_agg(proname, ', ' order by proname) from pg_proc
-     where oid in ('crdt.ydoc_create()'::regprocedure, 'crdt.ydoc_insert(bigint, integer, text, text)'::regprocedure,
-                   'crdt.ydoc_delete(bigint, integer, integer, text)'::regprocedure, 'crdt.ydoc_set(bigint, text, text, jsonb)'::regprocedure,
-                   'crdt.ydoc_apply(bigint, jsonb, text)'::regprocedure, 'crdt.ydoc_merge(bigint, jsonb)'::regprocedure,
-                   'crdt.ydoc_compact(bigint, bigint)'::regprocedure, 'crdt.ydoc_drop(bigint)'::regprocedure)
+     where oid in ('crdt.ydoc_create(text)'::regprocedure, 'crdt.ydoc_insert(text, integer, text, text)'::regprocedure,
+                   'crdt.ydoc_delete(text, integer, integer, text)'::regprocedure, 'crdt.ydoc_set(text, text, text, jsonb)'::regprocedure,
+                   'crdt.ydoc_apply(text, jsonb, text)'::regprocedure, 'crdt.ydoc_merge(text, jsonb)'::regprocedure,
+                   'crdt.ydoc_compact(text, bigint)'::regprocedure, 'crdt.ydoc_drop(text)'::regprocedure)
        and provolatile <> 'v'), null,
     'ydoc_ writers are VOLATILE');
 select tap.is(
     (select string_agg(proname, ', ' order by proname) from pg_proc
-     where oid in ('crdt.ydoc_value(bigint)'::regprocedure, 'crdt.ydoc_length(bigint)'::regprocedure,
-                   'crdt.ydoc_version(bigint)'::regprocedure, 'crdt.ydoc_base(bigint)'::regprocedure,
-                   'crdt.ydoc_ops_since(bigint, jsonb)'::regprocedure)
+     where oid in ('crdt.ydoc_value(text)'::regprocedure, 'crdt.ydoc_length(text)'::regprocedure,
+                   'crdt.ydoc_version(text)'::regprocedure, 'crdt.ydoc_base(text)'::regprocedure,
+                   'crdt.ydoc_ops_since(text, jsonb)'::regprocedure)
        and provolatile <> 's'), null,
     'ydoc_ readers are STABLE (they read tables)');
 select tap.is(

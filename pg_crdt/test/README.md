@@ -2,7 +2,7 @@
 
 The tests are the spec. Each file in `spec/` is one goal, named in its header comment. The PN-Counter files (01 to 40) were written before the extension, for the PN-Counter slice (`research/architecture.md`, section 8). The collaborative-text files (`50_text_*` to `62_text_*`) came with `ydoc_` from `experiments/text-table`, where they were written with the implementation.
 
-The tests need only the Postgres binaries `initdb`, `pg_ctl` and `psql` (and `pg_dump`, for the control-file branch of `03_install`). The runner finds Postgres.app by itself; otherwise set `PGBIN`. `20_concurrency`, `56_text_review` and `62_text_concurrency` also need the `dblink` contrib extension (it is in Postgres.app and the Docker images); without it the text files pass with `SKIP` assertions for those parts.
+The tests need only the Postgres binaries `initdb`, `pg_ctl` and `psql` (and `pg_dump`, for the control-file branch of `03_install`). The runner finds Postgres.app by itself; otherwise set `PGBIN`. `20_concurrency`, `56_text_review`, `62_text_concurrency` and `63_text_ids` also need the `dblink` contrib extension (it is in Postgres.app and the Docker images); without it the text files pass with `SKIP` assertions for those parts.
 
 Two text files read data from `experiments/text-ref/`:
 
@@ -59,8 +59,9 @@ A file passes only when each planned assertion ran and passed, and no SQL error 
 | `60_text_fixtures` | the 71 reference fixtures (57 honest, 14 malicious) on the untrusted and the trusted path, in shuffled, duplicated and causal orders |
 | `61_text_trace` | automerge-paper: local edits produce exactly the reference's ops; its ops through `ydoc_apply` and `ydoc_merge` give the same text (SKIP without the generated trace) |
 | `62_text_concurrency` | dblink: a waiting writer integrates against the lock holder's version; four sessions on one document lose nothing and do not deadlock |
+| `63_text_ids` | `ydoc_create`: generated UUID ids, client-chosen ids (uuid, `post:123`, unicode), 23505 for an id that exists (and for two dblink sessions creating one id at once: one succeeds), 22023 for empty, null, over-long and control-character ids, `Post` and `post` distinct, unknown documents, a base token from another document |
 
-The property tests use `setseed`, so a run is reproducible on one Postgres version. The generator (`fixtures/gen.sql`) draws replica ids from a small pool so random states overlap. The text files share `lib/text-helpers.sql`: `pg_temp.ydoc_check(doc)` checks the structural invariants of a document (lengths, block counters, labels unique and in bounds, ids contiguous) and `pg_temp.merge_all(doc, ops)`.
+The property tests use `setseed`, so a run is reproducible on one Postgres version. The generator (`fixtures/gen.sql`) draws replica ids from a small pool so random states overlap. The text files share `lib/text-helpers.sql`: `pg_temp.did(uid)` resolves a public document id to the internal bigint (for specs that read the tables), `pg_temp.ydoc_check(doc)` checks the structural invariants of a document (lengths, block counters, labels unique and in bounds, ids contiguous) and `pg_temp.merge_all(doc, ops)`.
 
 ## Benchmark
 

@@ -5,7 +5,7 @@ CRDTs (conflict-free replicated data types) for Postgres, written in SQL and PL/
 Version 0.0.1 has two types:
 
 - the **PN-Counter**: a counter that can go up and down, where every writer (replica) keeps its own running totals. Use it for likes, votes, stock levels or quotas that are updated from several devices, regions or offline clients;
-- **collaborative text** (`ydoc_`): a plain-text document that several people edit at once, from forms or live editors, stored in the extension's tables and referenced by id from yours. See [Collaborative text for a blog post](docs/guides/collaborative-text.md).
+- **collaborative text** (`ydoc_`): a plain-text document that several people edit at once, from forms or live editors, stored in the extension's tables and referenced from yours by a text id that your clients may choose. See [Collaborative text for a blog post](docs/guides/collaborative-text.md).
 
 pg_crdt is plain Postgres. It works with any client, driver or API layer, needs no superuser and no C, and assumes no identity provider or platform roles. It runs on Postgres 16, 17 and 18.
 

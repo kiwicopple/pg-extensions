@@ -14,7 +14,7 @@ select crdt.ydoc_create() as rl \gset
 select set_config('ydoc.rl', :'rl', false) \g /dev/null
 create temp table rlres (ok boolean, msg text);
 do $$
-declare d bigint := current_setting('ydoc.rl')::bigint; model text := ''; p int; n int;
+declare d text := current_setting('ydoc.rl'); model text := ''; p int; n int;
 begin
     perform setseed(0.42);
     for i in 1 .. 1500 loop

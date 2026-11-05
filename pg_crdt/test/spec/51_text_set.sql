@@ -7,40 +7,40 @@
 \i :ext_dir/test/lib/text-helpers.sql
 
 select crdt.ydoc_create() as d \gset
-select crdt.ydoc_set(:d, 'The quick brown fox', 'alice') as op1 \gset
-select crdt.ydoc_set(:d, 'The quick red fox', 'bob') as op2 \gset
-select crdt.ydoc_set(:d, 'The quick red fox', 'bob') as op3 \gset
-select crdt.ydoc_set(:d, 'A quick red fox!', 'carol') \g /dev/null
-select crdt.ydoc_value(:d) as v4 \gset
-select crdt.ydoc_set(:d, '', 'carol') \g /dev/null
-select crdt.ydoc_value(:d) as v5 \gset
-select crdt.ydoc_set(:d, 'ça 😀 marche', 'alice') \g /dev/null
-select crdt.ydoc_set(:d, 'ça 🎉🎉 marche', 'bob') as op6 \gset
+select crdt.ydoc_set(:'d', 'The quick brown fox', 'alice') as op1 \gset
+select crdt.ydoc_set(:'d', 'The quick red fox', 'bob') as op2 \gset
+select crdt.ydoc_set(:'d', 'The quick red fox', 'bob') as op3 \gset
+select crdt.ydoc_set(:'d', 'A quick red fox!', 'carol') \g /dev/null
+select crdt.ydoc_value(:'d') as v4 \gset
+select crdt.ydoc_set(:'d', '', 'carol') \g /dev/null
+select crdt.ydoc_value(:'d') as v5 \gset
+select crdt.ydoc_set(:'d', 'ça 😀 marche', 'alice') \g /dev/null
+select crdt.ydoc_set(:'d', 'ça 🎉🎉 marche', 'bob') as op6 \gset
 
 -- Two editors read the same version, change different paragraphs, save.
 select crdt.ydoc_create() as p \gset
-select crdt.ydoc_set(:p, E'Para one.\nPara two.\nPara three.', 'alice') \g /dev/null
-select crdt.ydoc_value(:p) as base_text, crdt.ydoc_base(:p) as base \gset
-select crdt.ydoc_set(:p, E'Para ONE, edited.\nPara two.\nPara three.', 'alice', :'base') \g /dev/null
-select crdt.ydoc_set(:p, E'Para one.\nPara two.\nPara three, edited.', 'bob', :'base') \g /dev/null
-select crdt.ydoc_value(:p) as merged \gset
+select crdt.ydoc_set(:'p', E'Para one.\nPara two.\nPara three.', 'alice') \g /dev/null
+select crdt.ydoc_value(:'p') as base_text, crdt.ydoc_base(:'p') as base \gset
+select crdt.ydoc_set(:'p', E'Para ONE, edited.\nPara two.\nPara three.', 'alice', :'base') \g /dev/null
+select crdt.ydoc_set(:'p', E'Para one.\nPara two.\nPara three, edited.', 'bob', :'base') \g /dev/null
+select crdt.ydoc_value(:'p') as merged \gset
 -- The same without base: bob's save reverts alice's paragraph.
 select crdt.ydoc_create() as q \gset
-select crdt.ydoc_set(:q, E'Para one.\nPara two.\nPara three.', 'alice') \g /dev/null
-select crdt.ydoc_set(:q, E'Para ONE, edited.\nPara two.\nPara three.', 'alice') \g /dev/null
-select crdt.ydoc_set(:q, E'Para one.\nPara two.\nPara three, edited.', 'bob') \g /dev/null
+select crdt.ydoc_set(:'q', E'Para one.\nPara two.\nPara three.', 'alice') \g /dev/null
+select crdt.ydoc_set(:'q', E'Para ONE, edited.\nPara two.\nPara three.', 'alice') \g /dev/null
+select crdt.ydoc_set(:'q', E'Para one.\nPara two.\nPara three, edited.', 'bob') \g /dev/null
 -- base: a delete by one editor and an edit next to it by another
 select crdt.ydoc_create() as r \gset
-select crdt.ydoc_set(:r, 'abc def ghi', 'alice') \g /dev/null
-select crdt.ydoc_base(:r) as base2 \gset
-select crdt.ydoc_set(:r, 'abc ghi', 'alice', :'base2') \g /dev/null
-select crdt.ydoc_set(:r, 'abc def ghi jkl', 'bob', :'base2') \g /dev/null
+select crdt.ydoc_set(:'r', 'abc def ghi', 'alice') \g /dev/null
+select crdt.ydoc_base(:'r') as base2 \gset
+select crdt.ydoc_set(:'r', 'abc ghi', 'alice', :'base2') \g /dev/null
+select crdt.ydoc_set(:'r', 'abc def ghi jkl', 'bob', :'base2') \g /dev/null
 -- base: both insert at the same place
 select crdt.ydoc_create() as s \gset
-select crdt.ydoc_set(:s, 'ab', 'x') \g /dev/null
-select crdt.ydoc_base(:s) as base3 \gset
-select crdt.ydoc_set(:s, 'a123b', 'bob', :'base3') \g /dev/null
-select crdt.ydoc_set(:s, 'aXYZb', 'alice', :'base3') \g /dev/null
+select crdt.ydoc_set(:'s', 'ab', 'x') \g /dev/null
+select crdt.ydoc_base(:'s') as base3 \gset
+select crdt.ydoc_set(:'s', 'a123b', 'bob', :'base3') \g /dev/null
+select crdt.ydoc_set(:'s', 'aXYZb', 'alice', :'base3') \g /dev/null
 
 -- random targets from a multibyte alphabet whose characters share UTF-8
 -- lead or continuation bytes (é è © ¨ 😀 😁): value always equals the target
@@ -48,7 +48,7 @@ select setseed(0.9);
 create temp table setrun (ok boolean);
 do $$
 declare
-    d bigint := crdt.ydoc_create();
+    d text := crdt.ydoc_create();
     t text := '';
 begin
     for i in 1..300 loop
@@ -73,15 +73,15 @@ select tap.is(:'op3'::jsonb - 'v', '{"i": [], "d": []}', 'set to the same text: 
 select tap.is(:'v4'::text, 'A quick red fox!', 'set: change at both ends');
 select tap.is(:'v5'::text, '', 'set to empty');
 select tap.is(:'op6'::jsonb -> 'd', '[["alice", 23, 1]]'::jsonb, 'set: diff in code points (non-BMP)');
-select tap.is(crdt.ydoc_value(:d), 'ça 🎉🎉 marche', 'set: unicode text');
-select tap.is(pg_temp.ydoc_check(:d), '', 'invariants hold');
+select tap.is(crdt.ydoc_value(:'d'), 'ça 🎉🎉 marche', 'set: unicode text');
+select tap.is(pg_temp.ydoc_check(:'d'), '', 'invariants hold');
 select tap.is(:'merged'::text, E'Para ONE, edited.\nPara two.\nPara three, edited.', 'with base: concurrent saves to different paragraphs both survive');
-select tap.is(crdt.ydoc_value(:q), E'Para one.\nPara two.\nPara three, edited.', 'without base: the stale save reverts the other paragraph (documented)');
-select tap.is(crdt.ydoc_value(:r), 'abc ghi jkl', 'with base: a delete and an append by two editors both survive');
-select tap.is(crdt.ydoc_value(:s), 'aXYZ123b', 'with base: concurrent inserts at one place are not interleaved (alice < bob)');
-select tap.is(pg_temp.ydoc_check(:p) || pg_temp.ydoc_check(:r) || pg_temp.ydoc_check(:s), '', 'invariants hold (base)');
-select tap.throws_ok(format('select crdt.ydoc_set(%s, %L, %L, %L)', :p, 'x', 'alice', '{"g": 999, "v": {}}'), '22023', 'base from the future');
-select tap.throws_ok(format('select crdt.ydoc_set(%s, %L, %L, %L)', :p, 'x', 'alice', '{"g": 1, "v": {"zed": 5}}'), '22023', 'base with ids the doc does not have');
-select tap.throws_ok(format('select crdt.ydoc_set(%s, %L, %L, %L)', :p, 'x', 'alice', '[1]'), '22023', 'malformed base');
+select tap.is(crdt.ydoc_value(:'q'), E'Para one.\nPara two.\nPara three, edited.', 'without base: the stale save reverts the other paragraph (documented)');
+select tap.is(crdt.ydoc_value(:'r'), 'abc ghi jkl', 'with base: a delete and an append by two editors both survive');
+select tap.is(crdt.ydoc_value(:'s'), 'aXYZ123b', 'with base: concurrent inserts at one place are not interleaved (alice < bob)');
+select tap.is(pg_temp.ydoc_check(:'p') || pg_temp.ydoc_check(:'r') || pg_temp.ydoc_check(:'s'), '', 'invariants hold (base)');
+select tap.throws_ok(format('select crdt.ydoc_set(%L, %L, %L, %L)', :'p', 'x', 'alice', '{"g": 999, "v": {}}'), '22023', 'base from the future');
+select tap.throws_ok(format('select crdt.ydoc_set(%L, %L, %L, %L)', :'p', 'x', 'alice', '{"g": 1, "v": {"zed": 5}}'), '22023', 'base with ids the doc does not have');
+select tap.throws_ok(format('select crdt.ydoc_set(%L, %L, %L, %L)', :'p', 'x', 'alice', '[1]'), '22023', 'malformed base');
 
 select * from tap.finish();

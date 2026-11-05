@@ -20,10 +20,10 @@ insert into lb (lo, hi) values (null, null), (5, null), (null, 5), (5, 6), (5, 7
 update lb set k = crdt._ydoc_label(lo, hi);
 
 -- 2. adversarial patterns against a model
-create temp table pat (name text, doc bigint, model text);
+create temp table pat (name text, doc text, model text);
 create function pg_temp.run(name text, n int) returns void language plpgsql as $$
 declare
-    d bigint := crdt.ydoc_create();
+    d text := crdt.ydoc_create();
     model text := '';
     p int;
 begin
@@ -77,7 +77,7 @@ create temp table gen_ops (n serial, op jsonb);
 select setseed(0.3);
 do $$
 declare
-    d bigint := crdt.ydoc_create();
+    d text := crdt.ydoc_create();
     model text := '';
     rep text;
     pos int;
@@ -107,9 +107,9 @@ begin
     insert into model_run values (-1, crdt.ydoc_value(d) = model and crdt.ydoc_length(d) = length(model), pg_temp.ydoc_check(d));
 end;
 $$;
-select current_setting('ydoc.test_doc')::bigint as d \gset
+select current_setting('ydoc.test_doc') as d \gset
 select crdt.ydoc_create() as z \gset
-select pg_temp.merge_all(:z, (select jsonb_agg(op order by random()) from gen_ops)) \g /dev/null
+select pg_temp.merge_all(:'z', (select jsonb_agg(op order by random()) from gen_ops)) \g /dev/null
 
 select tap.plan(10);
 select tap.is((select count(*)::int from lb where not ((lo is null or lo < k) and (hi is null or k < hi))), 0,
@@ -121,9 +121,9 @@ select tap.is((select string_agg(name || ': ' || pg_temp.ydoc_check(doc), '; ') 
               'adversarial patterns: unique labels, blocks and counters correct');
 select tap.ok((select bool_and(ord between -crdt._ydoc_label_bound() and crdt._ydoc_label_bound()) from crdt.ydoc_items), 'labels within bounds');
 select tap.is((select count(*)::int from model_run where not ok or msg <> ''), 0, '4,000 random edits: text equals the model and invariants hold at every check');
-select tap.ok((select count(*) from crdt.ydoc_items where doc = :d) > 1500, 'many rows (run splits)');
-select tap.ok((select count(*) from crdt.ydoc_blocks where doc = :d) > 3, 'several blocks (block splits)');
-select tap.is(crdt.ydoc_value(:z), crdt.ydoc_value(:d), 'the generated ops replayed in a shuffled order give the same text');
-select tap.is(pg_temp.ydoc_check(:z), '', 'invariants hold in the replay');
+select tap.ok((select count(*) from crdt.ydoc_items where doc = pg_temp.did(:'d')) > 1500, 'many rows (run splits)');
+select tap.ok((select count(*) from crdt.ydoc_blocks where doc = pg_temp.did(:'d')) > 3, 'several blocks (block splits)');
+select tap.is(crdt.ydoc_value(:'z'), crdt.ydoc_value(:'d'), 'the generated ops replayed in a shuffled order give the same text');
+select tap.is(pg_temp.ydoc_check(:'z'), '', 'invariants hold in the replay');
 
 select * from tap.finish();

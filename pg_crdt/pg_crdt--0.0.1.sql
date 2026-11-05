@@ -378,12 +378,14 @@ $$;
 
 -- A text CRDT (YjsMod order, the contract in research/text.md) whose state
 -- lives in the tables below, one row per run of characters, not in a column.
--- An app's table holds a document id (posts.body_doc bigint references
--- crdt.ydoc_docs (id)); every function takes that id. Design, measurements
+-- An app's table holds a document id (posts.body_doc text references
+-- crdt.ydoc_docs (uid)); every function takes that id, a text the client may
+-- choose (ydoc_create). Design, measurements
 -- and the review history: experiments/text-table/NOTES.md. User docs:
 -- docs/types/collaborative-text.md, docs/reference/ydoc.md.
 --
---   ydoc_docs     one row per document: visible length, write counter (gen)
+--   ydoc_docs     one row per document: public id (uid, text), visible length,
+--                 write counter (gen); `id`, a bigint, is the internal id
 --   ydoc_replicas replica ids (entry keys), interned: rows hold an integer
 --   ydoc_items    one row per run of characters: id (replica, seq), length,
 --                 origins of its first character, content, tombstone (del_gen),
@@ -392,6 +394,12 @@ $$;
 --   ydoc_pending  inserts waiting for their origins (causal buffering)
 --   ydoc_pending_deletes  deletes of ids not seen yet
 --   ydoc_deps, ydoc_pending_ops, ydoc_rejected  the untrusted path (ydoc_apply)
+--
+-- The public document id is text (uid) and the tables below it use the
+-- internal bigint (id): 45 columns name a document, and 8 bytes keep their
+-- rows and indexes small. Every public function resolves uid to id once, in
+-- the probe that also locks the document row (_ydoc_lock); the internals
+-- take the id.
 --
 -- The order label is a cache of the YjsMod order, local to this database; it
 -- is not part of the wire format. Every write locks the document row first,
@@ -416,11 +424,22 @@ $$;
 -- ydoc_: tables
 -- ============================================================================
 
+-- A public document id: non-empty, at most 256 bytes, no control characters
+-- (C0, DEL, C1). Immutable, so a CHECK constraint can use it.
+create function crdt._ydoc_uid_valid(p_uid text)
+returns boolean
+language sql immutable parallel safe
+return p_uid is not null and p_uid <> '' and pg_catalog.octet_length(p_uid) <= 256
+       and p_uid !~ E'[\\x01-\\x1f\\x7f-\\x9f]';
+
 create table crdt.ydoc_docs (
     id  bigint generated always as identity primary key,
+    uid text collate "C" not null,    -- the public id, chosen by the client or a uuid
     len integer not null default 0,   -- visible code points
     gen bigint not null default 0,    -- +1 per write call; stamps deletes
-    horizon bigint not null default 0 -- ydoc_compact: deletes at or before it may be merged
+    horizon bigint not null default 0, -- ydoc_compact: deletes at or before it may be merged
+    constraint ydoc_docs_uid_key unique (uid),
+    constraint ydoc_docs_uid_valid check (crdt._ydoc_uid_valid(uid))
 );
 
 -- Integration order of rows. Writes to one document are serialized, so per
@@ -1297,15 +1316,16 @@ begin
 end;
 $$;
 
--- Locks the document row; returns its gen and length. Every write starts here.
-create function crdt._ydoc_lock(p_doc bigint, p_fn text, out gen bigint, out len integer)
+-- Resolves the public id and locks the document row in one probe; returns
+-- the internal id, gen and length. Every write starts here.
+create function crdt._ydoc_lock(p_uid text, p_fn text, out id bigint, out gen bigint, out len integer)
 language plpgsql volatile
 set search_path = pg_catalog, pg_temp
 as $$
 begin
-    select d.gen, d.len into gen, len from crdt.ydoc_docs d where d.id = p_doc for no key update;
+    select d.id, d.gen, d.len into id, gen, len from crdt.ydoc_docs d where d.uid = p_uid for no key update;
     if not found then
-        raise exception 'crdt.%: document % does not exist', p_fn, p_doc
+        raise exception 'crdt.%: document % does not exist', p_fn, pg_catalog.quote_literal(pg_catalog.left(p_uid, 256))
             using errcode = 'P0002', hint = 'Create documents with crdt.ydoc_create().';
     end if;
 end;
@@ -1615,12 +1635,13 @@ $$;
 
 -- The trusted path (ydoc_merge): integrates inserts in array order
 -- (buffering those that are not ready), then deletes. "v" is ignored.
-create function crdt._ydoc_apply(p_doc bigint, p_ops jsonb, p_fn text)
+create function crdt._ydoc_apply(p_uid text, p_ops jsonb, p_fn text)
 returns void
 language plpgsql volatile
 set search_path = pg_catalog, pg_temp
 as $$
 declare
+    p_doc bigint;
     lk record;
     g bigint;
     has_pending boolean;
@@ -1636,7 +1657,8 @@ begin
     end if;
     perform crdt._ydoc_check_ops(p_ops, p_fn);
 
-    select * into lk from crdt._ydoc_lock(p_doc, p_fn);
+    select * into lk from crdt._ydoc_lock(p_uid, p_fn);
+    p_doc := lk.id;
     g := lk.gen + 1;
     has_pending := exists (select 1 from crdt.ydoc_pending p where p.doc = p_doc);
 
@@ -1908,40 +1930,64 @@ $$;
 -- ydoc_: API
 -- ============================================================================
 
-create function crdt.ydoc_create()
-returns bigint
+-- Creates a document and returns its id: the id given, or a random UUID (as
+-- text). The id is the client's to choose (a UUID, a UUIDv7, a ULID, a room
+-- name, an app key), non-empty, at most 256 bytes, no control characters
+-- (22023). An id that exists raises 23505 and never returns the existing
+-- document: creating is not idempotent, so that nobody can take over a
+-- document by creating its predictable id first. The default is evaluated in
+-- the caller's context, hence the qualified name.
+create function crdt.ydoc_create(id text default pg_catalog.gen_random_uuid()::text)
+returns text
 language plpgsql volatile
 set search_path = pg_catalog, pg_temp
 as $$
 declare
     d bigint;
 begin
-    insert into crdt.ydoc_docs default values returning id into d;
+    if not crdt._ydoc_uid_valid(id) then
+        raise exception 'crdt.ydoc_create: % is not a document id', pg_catalog.quote_literal(pg_catalog.left(id, 256))
+            using errcode = '22023',
+                  hint = 'A document id is non-empty text of at most 256 bytes without control characters. Omit it for a random UUID.';
+    end if;
+    -- on conflict waits for a concurrent creator of the same id: if that one
+    -- commits there is no row to return and we raise, if it rolls back we insert.
+    insert into crdt.ydoc_docs as t (uid) values (id) on conflict (uid) do nothing returning t.id into d;
+    if not found then
+        raise exception 'crdt.ydoc_create: document % already exists', pg_catalog.quote_literal(id)
+            using errcode = '23505',
+                  hint = 'Documents are not created idempotently. If you chose this id, check in your app that you own the document.';
+    end if;
     insert into crdt.ydoc_blocks (doc, lo) values (d, -9223372036854775808);
-    return d;
+    return id;
 end;
 $$;
 
--- The plain text, or null for a document that does not exist.
-create function crdt.ydoc_value(doc bigint)
+-- The plain text of the document with internal id p_doc.
+create function crdt._ydoc_value(p_doc bigint)
 returns text
 language sql stable parallel safe
-return case when exists (select 1 from crdt.ydoc_docs d where d.id = ydoc_value.doc)
-            then coalesce((select string_agg(i.content, '' order by i.ord) from crdt.ydoc_items i
-                           where i.doc = ydoc_value.doc and i.del_gen is null), '') end;
+return coalesce((select string_agg(i.content, '' order by i.ord) from crdt.ydoc_items i
+                 where i.doc = p_doc and i.del_gen is null), '');
+
+-- The plain text, or null for a document that does not exist.
+create function crdt.ydoc_value(doc text)
+returns text
+language sql stable parallel safe
+return (select crdt._ydoc_value(d.id) from crdt.ydoc_docs d where d.uid = ydoc_value.doc);
 
 -- Visible length in code points, or null for a document that does not exist.
-create function crdt.ydoc_length(doc bigint)
+create function crdt.ydoc_length(doc text)
 returns integer
 language sql stable parallel safe
-return (select d.len from crdt.ydoc_docs d where d.id = ydoc_length.doc);
+return (select d.len from crdt.ydoc_docs d where d.uid = ydoc_length.doc);
 
 -- The version vector {replica: highest seq}. A loose index scan, backwards
 -- on the primary key (doc, replica, seq): each probe returns the last row of
 -- the next replica, so one probe per replica. (A recursive CTE with a clock
 -- lookup per replica took 134 us for three replicas; this takes 23.) Local
 -- edits call it for the "v" of their op.
-create function crdt.ydoc_version(doc bigint)
+create function crdt._ydoc_version(p_doc bigint)
 returns jsonb
 language plpgsql stable parallel safe
 set search_path = pg_catalog, pg_temp
@@ -1955,33 +2001,39 @@ declare
 begin
     loop
         select i.replica, i.seq + i.len - 1 into rr, mx from crdt.ydoc_items i
-        where i.doc = ydoc_version.doc and i.replica < r order by i.replica desc, i.seq desc limit 1;
+        where i.doc = p_doc and i.replica < r order by i.replica desc, i.seq desc limit 1;
         exit when not found;
         ids := ids || rr;
         mxs := mxs || mx;
         r := rr;
     end loop;
     return (select coalesce(pg_catalog.jsonb_object_agg(n.name, m.mx), '{}'::jsonb)
-            from unnest(ids, mxs) m(id, mx) join crdt.ydoc_replicas n on n.doc = ydoc_version.doc and n.id = m.id);
+            from unnest(ids, mxs) m(id, mx) join crdt.ydoc_replicas n on n.doc = p_doc and n.id = m.id);
 end;
 $$;
+
+-- The version vector of a document; '{}' for one that does not exist.
+create function crdt.ydoc_version(doc text)
+returns jsonb
+language sql stable parallel safe
+return coalesce((select crdt._ydoc_version(d.id) from crdt.ydoc_docs d where d.uid = ydoc_version.doc), '{}'::jsonb);
 
 -- The version an editor starts from, for ydoc_set's base argument: the
 -- document, the write counter and the version vector. Read it in the same statement as the text:
 --   select crdt.ydoc_value(d), crdt.ydoc_base(d)
-create function crdt.ydoc_base(doc bigint)
+create function crdt.ydoc_base(doc text)
 returns jsonb
 language sql stable parallel safe
-return (select jsonb_build_object('d', d.id, 'g', d.gen, 'v', crdt.ydoc_version(d.id))
-        from crdt.ydoc_docs d where d.id = ydoc_base.doc);
+return (select jsonb_build_object('d', d.uid, 'g', d.gen, 'v', crdt._ydoc_version(d.id))
+        from crdt.ydoc_docs d where d.uid = ydoc_base.doc);
 
-create function crdt.ydoc_insert(doc bigint, pos integer, chars text, replica text)
+create function crdt.ydoc_insert(doc text, pos integer, chars text, replica text)
 returns jsonb
 language plpgsql volatile
 set search_path = pg_catalog, pg_temp
 as $$
 declare
-    v_doc bigint := ydoc_insert.doc;
+    v_doc bigint;
     lk record;
     g bigint;
     res record;
@@ -1991,12 +2043,13 @@ begin
     if pos is null or chars is null then
         raise exception 'crdt.ydoc_insert: pos and chars must not be null' using errcode = '22004';
     end if;
-    select * into lk from crdt._ydoc_lock(v_doc, 'ydoc_insert');
+    select * into lk from crdt._ydoc_lock(ydoc_insert.doc, 'ydoc_insert');
+    v_doc := lk.id;
     if pos < 0 or pos > lk.len then
         raise exception 'crdt.ydoc_insert: position % is outside the document (length %)', pos, lk.len
             using errcode = '22023';
     end if;
-    vv := crdt.ydoc_version(v_doc);
+    vv := crdt._ydoc_version(v_doc);
     if chars = '' then
         return jsonb_build_object('v', vv, 'i', '[]'::jsonb, 'd', '[]'::jsonb);
     end if;
@@ -2009,13 +2062,13 @@ $$;
 
 -- `replica` is accepted for symmetry with ydoc_insert; a delete op does not
 -- name its writer.
-create function crdt.ydoc_delete(doc bigint, pos integer, len integer, replica text)
+create function crdt.ydoc_delete(doc text, pos integer, len integer, replica text)
 returns jsonb
 language plpgsql volatile
 set search_path = pg_catalog, pg_temp
 as $$
 declare
-    v_doc bigint := ydoc_delete.doc;
+    v_doc bigint;
     lk record;
     g bigint;
     ops jsonb;
@@ -2025,12 +2078,13 @@ begin
     if pos is null or len is null then
         raise exception 'crdt.ydoc_delete: pos and len must not be null' using errcode = '22004';
     end if;
-    select * into lk from crdt._ydoc_lock(v_doc, 'ydoc_delete');
+    select * into lk from crdt._ydoc_lock(ydoc_delete.doc, 'ydoc_delete');
+    v_doc := lk.id;
     if pos < 0 or len < 0 or pos::bigint + len > lk.len then
         raise exception 'crdt.ydoc_delete: range % + % is outside the document (length %)', pos, len, lk.len
             using errcode = '22023';
     end if;
-    vv := crdt.ydoc_version(v_doc);
+    vv := crdt._ydoc_version(v_doc);
     if len = 0 then
         return jsonb_build_object('v', vv, 'i', '[]'::jsonb, 'd', '[]'::jsonb);
     end if;
@@ -2048,13 +2102,13 @@ $$;
 -- base (crdt.ydoc_base, read with the text), the diff is against the text at
 -- base, and the insert's origins are taken in that version, so concurrent
 -- saves to different places both survive (the CRDT merges them).
-create function crdt.ydoc_set(doc bigint, new_text text, replica text, base jsonb default null)
+create function crdt.ydoc_set(doc text, new_text text, replica text, base jsonb default null)
 returns jsonb
 language plpgsql volatile
 set search_path = pg_catalog, pg_temp
 as $$
 declare
-    v_doc bigint := ydoc_set.doc;
+    v_doc bigint;
     lk record;
     g bigint;
     cur text;
@@ -2088,12 +2142,13 @@ begin
     if new_text is null then
         raise exception 'crdt.ydoc_set: new_text must not be null' using errcode = '22004';
     end if;
-    select * into lk from crdt._ydoc_lock(v_doc, 'ydoc_set');
+    select * into lk from crdt._ydoc_lock(ydoc_set.doc, 'ydoc_set');
+    v_doc := lk.id;
     g := lk.gen + 1;
 
     if base is null then
-        vv := crdt.ydoc_version(v_doc);
-        cur := crdt.ydoc_value(v_doc);
+        vv := crdt._ydoc_version(v_doc);
+        cur := crdt._ydoc_value(v_doc);
         if cur = new_text then
             return jsonb_build_object('v', vv, 'i', '[]'::jsonb, 'd', '[]'::jsonb);
         end if;
@@ -2115,13 +2170,13 @@ begin
 
     -- Three-way: diff against the text at base.
     if jsonb_typeof(base) is distinct from 'object' or not crdt._ydoc_is_int(base -> 'g', 0, 9223372036854775807)
-       or not crdt._ydoc_is_int(base -> 'd', 1, 9223372036854775807) or (base ->> 'd')::bigint <> v_doc
+       or jsonb_typeof(base -> 'd') is distinct from 'string' or (base ->> 'd') <> ydoc_set.doc
        or jsonb_typeof(base -> 'v') is distinct from 'object'
        or exists (select 1 from jsonb_each(base -> 'v') e
                   where not crdt._ydoc_is_int(e.value, 0, 2147483647)
                      or (e.value)::integer > crdt._ydoc_clock_name(v_doc, e.key))
        or (base ->> 'g')::bigint > lk.gen then
-        raise exception 'crdt.ydoc_set: base is not a version of document %', v_doc
+        raise exception 'crdt.ydoc_set: base is not a version of document %', pg_catalog.quote_literal(ydoc_set.doc)
             using errcode = '22023', hint = 'Pass the value of crdt.ydoc_base(doc), read together with the text.';
     end if;
     bg := (base ->> 'g')::bigint;
@@ -2155,7 +2210,7 @@ begin
     -- text at an older base cannot be rebuilt. Refuse rather than guess: a
     -- wrong base text widens the diff and reverts or duplicates text.
     if bg < (select d.horizon from crdt.ydoc_docs d where d.id = v_doc) then
-        raise exception 'crdt.ydoc_set: base % of document % is older than its last compaction', bg, v_doc
+        raise exception 'crdt.ydoc_set: base % of document % is older than its last compaction', bg, pg_catalog.quote_literal(ydoc_set.doc)
             using errcode = '22023',
                   hint = 'Read the text and crdt.ydoc_base(doc) again, or call ydoc_set without base (a two-way diff against the current text).';
     end if;
@@ -2238,13 +2293,13 @@ $$;
 -- have yet waits (V7) and is decided by a later write; returns 'accepted'
 -- or 'pending'. At most _ydoc_pending_max_ops() waiting ops (and
 -- _ydoc_pending_max_bytes()) per writer and document: 54000 beyond.
-create function crdt.ydoc_apply(doc bigint, ops jsonb, replica text default crdt.current_replica_id())
+create function crdt.ydoc_apply(doc text, ops jsonb, replica text default crdt.current_replica_id())
 returns text
 language plpgsql volatile
 set search_path = pg_catalog, pg_temp
 as $$
 declare
-    v_doc bigint := ydoc_apply.doc;
+    v_doc bigint;
     r text;
     lk record;
     g bigint;
@@ -2281,12 +2336,13 @@ begin
             crdt._ydoc_runs_max() using errcode = '54000';
     end if;
 
-    select * into lk from crdt._ydoc_lock(v_doc, 'ydoc_apply');
+    select * into lk from crdt._ydoc_lock(ydoc_apply.doc, 'ydoc_apply');
+    v_doc := lk.id;
     if not crdt._ydoc_covers(v_doc, ops -> 'v') then
         select count(*), coalesce(sum(w.bytes), 0) into c, b from crdt.ydoc_pending_ops w
         where w.doc = v_doc and w.writer = replica;
         if c + 1 > crdt._ydoc_pending_max_ops() or b + octet_length(ops::text) > crdt._ydoc_pending_max_bytes() then
-            raise exception 'crdt.ydoc_apply: replica % has too many ops waiting in document %', quote_literal(replica), v_doc
+            raise exception 'crdt.ydoc_apply: replica % has too many ops waiting in document %', quote_literal(replica), quote_literal(ydoc_apply.doc)
                 using errcode = '54000',
                       hint = 'Ops wait while their "v" names ids this document does not have. Send the missing ops first.';
         end if;
@@ -2307,7 +2363,7 @@ $$;
 -- buffered. Not safe against a byzantine writer. Ids already present must
 -- carry the same content and origins (first arrival wins; a different run
 -- under the same ids raises 22023 instead of being dropped).
-create function crdt.ydoc_merge(doc bigint, ops jsonb)
+create function crdt.ydoc_merge(doc text, ops jsonb)
 returns void
 language plpgsql volatile
 set search_path = pg_catalog, pg_temp
@@ -2321,18 +2377,20 @@ $$;
 -- in integration order (causal, so the peer applies them without buffering),
 -- and every delete this document knows (deletes carry no clock; they are
 -- idempotent).
-create function crdt.ydoc_ops_since(doc bigint, vv jsonb default '{}')
+create function crdt.ydoc_ops_since(doc text, vv jsonb default '{}')
 returns jsonb
 language plpgsql stable
 set search_path = pg_catalog, pg_temp
 as $$
 declare
-    v_doc bigint := ydoc_ops_since.doc;
+    v_doc bigint;
     ins jsonb;
     dels jsonb;
 begin
-    if not exists (select 1 from crdt.ydoc_docs d where d.id = v_doc) then
-        raise exception 'crdt.ydoc_ops_since: document % does not exist', v_doc using errcode = 'P0002';
+    select d.id into v_doc from crdt.ydoc_docs d where d.uid = ydoc_ops_since.doc;
+    if not found then
+        raise exception 'crdt.ydoc_ops_since: document % does not exist', pg_catalog.quote_literal(pg_catalog.left(ydoc_ops_since.doc, 256))
+            using errcode = 'P0002', hint = 'Create documents with crdt.ydoc_create().';
     end if;
     vv := coalesce(vv, '{}');
     if jsonb_typeof(vv) <> 'object'
@@ -2406,19 +2464,20 @@ $$;
 -- bases (22023). Rows do not merge across a block boundary, and a merged row
 -- holds at most about twice the run cap. Returns the number of rows removed.
 -- The text, the ids and ops_since's text are unchanged.
-create function crdt.ydoc_compact(doc bigint, horizon bigint default null)
+create function crdt.ydoc_compact(doc text, horizon bigint default null)
 returns integer
 language plpgsql volatile
 set search_path = pg_catalog, pg_temp
 as $$
 declare
-    v_doc bigint := ydoc_compact.doc;
+    v_doc bigint;
     lk record;
     h bigint;
     removed integer;
     cap integer := crdt._ydoc_run_cap();
 begin
-    select * into lk from crdt._ydoc_lock(v_doc, 'ydoc_compact');
+    select * into lk from crdt._ydoc_lock(ydoc_compact.doc, 'ydoc_compact');
+    v_doc := lk.id;
     h := coalesce(horizon, lk.gen);
     if h < 0 or h > lk.gen then
         raise exception 'crdt.ydoc_compact: horizon % is outside 0 .. % (the document''s write counter)', h, lk.gen
@@ -2479,15 +2538,15 @@ begin
 end;
 $$;
 
-create function crdt.ydoc_drop(doc bigint)
+create function crdt.ydoc_drop(doc text)
 returns void
 language plpgsql volatile
 set search_path = pg_catalog, pg_temp
 as $$
 declare
-    v_doc bigint := ydoc_drop.doc;
+    v_doc bigint;
 begin
-    perform crdt._ydoc_lock(v_doc, 'ydoc_drop');
+    v_doc := (crdt._ydoc_lock(ydoc_drop.doc, 'ydoc_drop')).id;
     delete from crdt.ydoc_items i where i.doc = v_doc;
     delete from crdt.ydoc_blocks b where b.doc = v_doc;
     delete from crdt.ydoc_pending p where p.doc = v_doc;
@@ -2561,7 +2620,7 @@ to public;
 --   grant select, insert, update, delete on crdt.ydoc_docs, crdt.ydoc_replicas,
 --       crdt.ydoc_items, crdt.ydoc_blocks, crdt.ydoc_pending, crdt.ydoc_pending_deletes,
 --       crdt.ydoc_deps, crdt.ydoc_pending_ops, crdt.ydoc_rejected to app_owner;
---   grant references on crdt.ydoc_docs to app_owner;  -- posts.body_doc references it
+--   grant references on crdt.ydoc_docs to app_owner;  -- posts.body_doc references ydoc_docs (uid)
 --   grant usage on all sequences in schema crdt to app_owner;
 do $$
 declare

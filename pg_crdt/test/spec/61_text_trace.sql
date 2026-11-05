@@ -30,7 +30,7 @@ do $$
 declare
     r record;
     op jsonb;
-    d bigint := current_setting('ydoc.a')::bigint;
+    d text := current_setting('ydoc.a');
 begin
     for r in select p.n, p.p, o.op as want from patches p join ops o using (n) order by n loop
         if (r.p ->> 1)::int > 0 then op := crdt.ydoc_delete(d, (r.p ->> 0)::int, (r.p ->> 1)::int, 'paper');
@@ -40,12 +40,12 @@ begin
     end loop;
 end $$;
 do $$
-declare r record; d bigint := current_setting('ydoc.b')::bigint;
+declare r record; d text := current_setting('ydoc.b');
 begin
     for r in select op from ops order by n loop perform crdt.ydoc_merge(d, r.op); end loop;
 end $$;
 do $$
-declare r record; d bigint := current_setting('ydoc.c')::bigint;
+declare r record; d text := current_setting('ydoc.c');
 begin
     for r in select op from batch order by n loop perform crdt.ydoc_merge(d, r.op); end loop;
 end $$;
@@ -53,7 +53,7 @@ end $$;
 create temp table ust (s text);
 select set_config('ydoc.u', :'u', false) \g /dev/null
 do $$
-declare r record; d bigint := current_setting('ydoc.u')::bigint;
+declare r record; d text := current_setting('ydoc.u');
 begin
     for r in select op from ops order by n loop insert into ust values (crdt.ydoc_apply(d, r.op, 'paper')); end loop;
 end $$;
@@ -61,10 +61,10 @@ end $$;
 select tap.plan(6);
 select tap.is((select count(*)::int from patches), 20000, '20,000 patches loaded');
 select tap.is((select count(*)::int from mismatch), 0, 'local insert/delete by position, compacted every 2,000 patches: every op (v, i, d) equals the reference''s op');
-select tap.is(crdt.ydoc_value(:b), crdt.ydoc_value(:a), 'the reference''s ops merged one by one give the same text');
+select tap.is(crdt.ydoc_value(:'b'), crdt.ydoc_value(:'a'), 'the reference''s ops merged one by one give the same text');
 select tap.is((select string_agg(distinct s, ',') from ust), 'accepted', 'the reference''s ops through the untrusted path (ydoc_apply, rules V0-V7): all accepted');
-select tap.is(crdt.ydoc_value(:u), crdt.ydoc_value(:a), 'and give the same text');
-select tap.is(md5(crdt.ydoc_value(:c)), 'f6ee9cff45a87f3b7f29d60920bfce10', 'the whole trace (batched ops) gives the trace''s final text (104,852 chars)');
+select tap.is(crdt.ydoc_value(:'u'), crdt.ydoc_value(:'a'), 'and give the same text');
+select tap.is(md5(crdt.ydoc_value(:'c')), 'f6ee9cff45a87f3b7f29d60920bfce10', 'the whole trace (batched ops) gives the trace''s final text (104,852 chars)');
 \else
 \echo '# trace files missing (run experiments/text-ref/regen-traces.sh); NOT tested'
 select tap.plan(1);

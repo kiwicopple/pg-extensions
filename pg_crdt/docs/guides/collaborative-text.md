@@ -16,7 +16,7 @@ The wrappers are `security definer` functions of `app_owner`. Each one checks yo
 
 ## Set up the roles and grants
 
-A text document lives in the extension's tables, not in a column of yours. At install nobody but their owner has privileges on them, and the `ydoc_` functions run with the caller's privileges, so a role without grants gets `42501` from every `ydoc_` function. Grant the tables and sequences to the role that owns your wrappers, and to no client role. `references` on `crdt.ydoc_docs` lets that role's tables point at documents with a foreign key.
+A text document lives in the extension's tables, not in a column of yours. At install nobody but their owner has privileges on them, and the `ydoc_` functions run with the caller's privileges, so a role without grants gets `42501` from every `ydoc_` function. Grant the tables and sequences to the role that owns your wrappers, and to no client role. `references` on `crdt.ydoc_docs` lets that role's tables point at documents with a foreign key, to the document id `uid`.
 
 > **Warning:** do not grant these tables to `app_writer`, `public` or a role that your API layer exposes. A role with privileges on them can rewrite any document directly, under any writer's name.
 
@@ -37,7 +37,7 @@ grant create on schema public to app_owner;
 
 ## Create the posts table
 
-The post keeps the document id in `body_doc`, a foreign key to `crdt.ydoc_docs`. Editors are listed in `post_editors`: that is your application's rule, and the wrappers check it. `body_text` is a copy of the text for search, refreshed on save (see [Search the posts](#search-the-posts)). `text_gen` and `compact_gen` record the document's write counter at the last refresh and compaction.
+The post keeps the document id in `body_doc`, a foreign key to `crdt.ydoc_docs (uid)`. The id is text: the client may choose it (see [Create a post](#create-a-post)). That the post's `body_doc` names a document, and that the author is its editor, is how your application records who owns the document: the extension does not. Editors are listed in `post_editors`: that is your application's rule, and the wrappers check it. `body_text` is a copy of the text for search, refreshed on save (see [Search the posts](#search-the-posts)). `text_gen` and `compact_gen` record the document's write counter at the last refresh and compaction.
 
 ```sql
 set role app_owner;
@@ -45,7 +45,7 @@ set role app_owner;
 create table public.posts (
   id bigint generated always as identity primary key,
   title text not null,
-  body_doc bigint not null references crdt.ydoc_docs (id),
+  body_doc text not null references crdt.ydoc_docs (uid),
   body_text text not null default '',
   text_gen bigint not null default 0,
   compact_gen bigint not null default 0
@@ -64,12 +64,18 @@ The writer's identity in these examples is the setting `crdt.replica_id`, which 
 
 ## Write the wrappers
 
-Create every wrapper as `app_owner`, pin `search_path`, and qualify every name. `create_post` makes the document, the post and its first editor in one transaction. It writes the first text with `crdt.ydoc_set` under the author's replica id.
+Create every wrapper as `app_owner`, pin `search_path`, and qualify every name. `create_post` makes the document, the post and its first editor in one transaction. It writes the first text with `crdt.ydoc_set` under the author's replica id. The client may pass the id of the document, `doc_id`, so that it knows the id before the server answers and can retry safely. Without one, the document gets a random UUID.
+
+`crdt.ydoc_create(id)` raises `23505` when a document with that id exists, and never returns the existing document: if it did, a client could pick the id of someone else's document and be handed it. The wrapper decides what that means for your application. Here, the author who already made a post with this id gets that post back (a retry after a lost response), and anyone else is refused.
 
 ```sql
 set role app_owner;
 
-create function public.create_post(title text, body text)
+create function public.create_post(
+  title text,
+  body text,
+  doc_id text default null
+)
 returns bigint
 language plpgsql
 security definer
@@ -77,13 +83,30 @@ set search_path = pg_catalog, pg_temp
 as $$
 declare
   author text := crdt.current_replica_id();
-  doc bigint;
+  doc text;
   post_id bigint;
 begin
   if author is null then
     raise exception 'no user' using errcode = '42501';
   end if;
-  doc := crdt.ydoc_create();
+  if doc_id is null then
+    doc := crdt.ydoc_create();
+  else
+    begin
+      doc := crdt.ydoc_create(doc_id);
+    exception when unique_violation then
+      select p.id into post_id
+      from public.posts p
+      join public.post_editors e on e.post_id = p.id
+      where p.body_doc = doc_id and e.editor = author;
+      if found then
+        return post_id;
+      end if;
+      raise exception 'document id % is already in use', doc_id
+        using errcode = '23505',
+              hint = 'Choose another id, such as a random UUID.';
+    end;
+  end if;
   perform crdt.ydoc_set(doc, body, replica => author);
   insert into public.posts (title, body_doc, body_text)
   values (title, doc, body)
@@ -129,7 +152,7 @@ set search_path = pg_catalog, pg_temp
 as $$
 declare
   writer text := crdt.current_replica_id();
-  doc bigint;
+  doc text;
   merged text;
 begin
   select p.body_doc into doc
@@ -162,7 +185,7 @@ set search_path = pg_catalog, pg_temp
 as $$
 declare
   writer text := crdt.current_replica_id();
-  doc bigint;
+  doc text;
 begin
   select p.body_doc into doc
   from public.posts p
@@ -202,14 +225,14 @@ Postgres grants `execute` on a new function to `public`. Take that away and gran
 
 ```sql
 revoke all on function
-  public.create_post(text, text),
+  public.create_post(text, text, text),
   public.open_post(bigint),
   public.save_post(bigint, text, jsonb),
   public.edit_post(bigint, jsonb),
   public.sync_post(bigint, jsonb)
 from public;
 grant execute on function
-  public.create_post(text, text),
+  public.create_post(text, text, text),
   public.open_post(bigint),
   public.save_post(bigint, text, jsonb),
   public.edit_post(bigint, jsonb),
@@ -221,7 +244,7 @@ to app_writer;
 
 ```sql
 set role app_writer;
-select crdt.ydoc_value(1);
+select crdt.ydoc_value('0192f1c4-7b3e-7c1a-9d52-3f6a8e1b2c4d');
 -- ERROR:  permission denied for table ydoc_docs
 reset role;
 ```
@@ -230,15 +253,19 @@ reset role;
 
 Your server authenticates the user, then sets the identity and calls the wrapper in one transaction. Run the statements on one client: a pool hands each `pool.query` a different connection.
 
+The client chooses the id of the document. A random UUID is a good id: `crypto.randomUUID()` in a browser or Node.js, or a UUIDv7 or ULID if you want ids that sort by time. The examples use a fixed one so that their output is the same every time.
+
 ```js tab="JavaScript"
+const docId = '0192f1c4-7b3e-7c1a-9d52-3f6a8e1b2c4d' // crypto.randomUUID() in a real client
+
 await client.query('begin')
 await client.query(
   "select set_config('crdt.replica_id', $1, true)",
   ['alice'],
 )
 const { rows: [created] } = await client.query(
-  'select public.create_post($1, $2) as id',
-  ['Launch notes', 'We launch on Monday.\nBring snacks.'],
+  'select public.create_post($1, $2, $3) as id',
+  ['Launch notes', 'We launch on Monday.\nBring snacks.', docId],
 )
 await client.query(
   'insert into public.post_editors values ($1, $2)',
@@ -254,7 +281,8 @@ set local role app_writer;
 set local crdt.replica_id = 'alice';
 select public.create_post(
   'Launch notes',
-  E'We launch on Monday.\nBring snacks.'
+  E'We launch on Monday.\nBring snacks.',
+  '0192f1c4-7b3e-7c1a-9d52-3f6a8e1b2c4d'
 );
 -- 1
 commit;
@@ -263,9 +291,15 @@ insert into public.post_editors values (1, 'bob');
 
 Alice is the author, and bob is added as a second editor. (Adding editors is an ordinary write to your own table; here the database owner does it.)
 
-## Save from a form
+### Create a document with a client-chosen id
 
-Alice and bob open the post at the same time. Each form gets the text and the base.
+The id is the client's to choose, and the extension does not decide whose it is: an id names a document and grants nothing, and that a document exists is never proof that the caller owns it. What protects a document is your wrapper (it records the owner, here in `posts` and `post_editors`, and checks it on every call) and the tables' privileges (clients have none).
+
+- **A retry returns the same post.** If alice's request succeeded but the response was lost, she sends it again with the same id. `ydoc_create` raises `23505`, and the wrapper finds that she is already an editor of the post with that id, so it returns that post. Nothing is created twice.
+- **Someone else's id is refused.** The wrapper raises `23505` again, and does not say whose document it is or what it contains.
+- **Pick random ids.** `ydoc_create` never hands out an existing document, but an id that others can guess (`post:1`) lets them take it before you do, and then your create fails. A UUID, UUIDv7 or ULID cannot be guessed.
+
+`asUser` runs one statement as a user, in its own transaction. The sections below use it too.
 
 ```js tab="JavaScript"
 async function asUser(user, sql, params) {
@@ -279,6 +313,52 @@ async function asUser(user, sql, params) {
   return rows
 }
 
+const [retried] = await asUser(
+  'alice',
+  'select public.create_post($1, $2, $3) as id',
+  ['Launch notes', 'We launch on Monday.\nBring snacks.', docId],
+)
+console.log(retried.id) // '1'
+
+try {
+  await asUser(
+    'mallory',
+    'select public.create_post($1, $2, $3) as id',
+    ['Mine now', 'Spam', docId],
+  )
+} catch (err) {
+  await client.query('rollback')
+  console.log(err.code, err.message)
+  // 23505 document id 0192f1c4-7b3e-7c1a-9d52-3f6a8e1b2c4d is already in use
+}
+```
+
+```sql tab="SQL"
+begin;
+set local role app_writer;
+set local crdt.replica_id = 'alice';
+select public.create_post(
+  'Launch notes',
+  E'We launch on Monday.\nBring snacks.',
+  '0192f1c4-7b3e-7c1a-9d52-3f6a8e1b2c4d'
+);
+-- 1
+commit;
+
+begin;
+set local role app_writer;
+set local crdt.replica_id = 'mallory';
+select public.create_post('Mine now', 'Spam', '0192f1c4-7b3e-7c1a-9d52-3f6a8e1b2c4d');
+-- ERROR:  document id 0192f1c4-7b3e-7c1a-9d52-3f6a8e1b2c4d is already in use
+-- HINT:  Choose another id, such as a random UUID.
+rollback;
+```
+
+## Save from a form
+
+Alice and bob open the post at the same time. Each form gets the text and the base.
+
+```js tab="JavaScript"
 const [aliceForm] = await asUser(
   'alice',
   'select body, base from public.open_post($1)',
@@ -290,7 +370,7 @@ const [bobForm] = await asUser(
   [1],
 )
 console.log(aliceForm.base)
-// { d: 1, g: 1, v: { alice: 34 } }
+// { d: '0192f1c4-7b3e-7c1a-9d52-3f6a8e1b2c4d', g: 1, v: { alice: 34 } }
 ```
 
 ```sql tab="SQL"
@@ -298,14 +378,14 @@ begin;
 set local role app_writer;
 set local crdt.replica_id = 'alice';
 select body, base from public.open_post(1);
---          body         |                 base
--- ----------------------+--------------------------------------
---  We launch on Monday.+| {"d": 1, "g": 1, "v": {"alice": 34}}
+--          body         |                                   base
+-- ----------------------+---------------------------------------------------------------------------
+--  We launch on Monday.+| {"d": "0192f1c4-7b3e-7c1a-9d52-3f6a8e1b2c4d", "g": 1, "v": {"alice": 34}}
 --  Bring snacks.        |
 commit;
 ```
 
-`d` is the document, `g` its write counter and `v` its version vector: alice's replica id has written 34 characters. Alice changes the first line and saves. Then bob, whose form still shows the old text, changes the second line and saves with the same base:
+`d` is the document's id, `g` its write counter and `v` its version vector: alice's replica id has written 34 characters. Alice changes the first line and saves. Then bob, whose form still shows the old text, changes the second line and saves with the same base:
 
 ```js tab="JavaScript"
 await asUser(
@@ -330,7 +410,7 @@ set local crdt.replica_id = 'alice';
 select public.save_post(
   1,
   E'We launch on Tuesday.\nBring snacks.',
-  '{"d": 1, "g": 1, "v": {"alice": 34}}'
+  '{"d": "0192f1c4-7b3e-7c1a-9d52-3f6a8e1b2c4d", "g": 1, "v": {"alice": 34}}'
 );
 commit;
 
@@ -340,7 +420,7 @@ set local crdt.replica_id = 'bob';
 select public.save_post(
   1,
   E'We launch on Monday.\nBring cake.',
-  '{"d": 1, "g": 1, "v": {"alice": 34}}'
+  '{"d": "0192f1c4-7b3e-7c1a-9d52-3f6a8e1b2c4d", "g": 1, "v": {"alice": 34}}'
 );
 --        save_post
 -- -----------------------
@@ -361,7 +441,7 @@ A user who is not an editor is refused by your rule, before the extension is cal
 begin;
 set local role app_writer;
 set local crdt.replica_id = 'mallory';
-select public.save_post(1, 'Spam', '{"d": 1, "g": 1, "v": {}}');
+select public.save_post(1, 'Spam', '{"d": "0192f1c4-7b3e-7c1a-9d52-3f6a8e1b2c4d", "g": 1, "v": {}}');
 -- ERROR:  not an editor of post 1
 rollback;
 ```
@@ -588,7 +668,7 @@ security definer
 set search_path = pg_catalog, pg_temp
 as $$
 declare
-  doc bigint;
+  doc text;
 begin
   delete from public.posts p
   where p.id = delete_post.post_id

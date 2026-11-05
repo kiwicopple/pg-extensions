@@ -102,9 +102,9 @@ update counters set s = crdt.pn_merge(s, crdt.pn_decrement(crdt.pn_empty(), 'b',
 select (crdt.pn_value(s) = 3 and crdt.pn_value((select crdt.pn_merge_agg(s) from counters)) = 3)::text as smoke
 from counters where id = 1 \gset
 select crdt.ydoc_create() as yd \gset
-select crdt.ydoc_insert(:yd, 0, 'hello', 'a') \g /dev/null
-select crdt.ydoc_set(:yd, 'hello, world', 'b') \g /dev/null
-select (crdt.ydoc_value(:yd) = 'hello, world')::text as ydoc_smoke \gset
+select crdt.ydoc_insert(:'yd', 0, 'hello', 'a') \g /dev/null
+select crdt.ydoc_set(:'yd', 'hello, world', 'b') \g /dev/null
+select (crdt.ydoc_value(:'yd') = 'hello, world')::text as ydoc_smoke \gset
 select (select count(*) from pg_class c
         cross join lateral aclexplode(coalesce(c.relacl, acldefault(case c.relkind when 'S' then 's' else 'r' end::"char", c.relowner))) x
         where c.relnamespace = 'crdt'::regnamespace and x.grantee = 'crdt_other'::regrole)
@@ -153,8 +153,8 @@ grant create on schema crdt to crdt_other;
         or (d.classid = 'pg_class'::regclass and d.objid in (select oid from pg_class where relnamespace = 'crdt'::regnamespace))) \gset
     select coalesce(cardinality(extconfig), 0)::text as tle_config from pg_extension where extname = :'tle_name' \gset
     select crdt.ydoc_create() as yd \gset
-    select crdt.ydoc_insert(:yd, 0, 'tle', 'a') \g /dev/null
-    select (crdt.ydoc_value(:yd) = 'tle')::text as tle_ydoc_smoke \gset
+    select crdt.ydoc_insert(:'yd', 0, 'tle', 'a') \g /dev/null
+    select (crdt.ydoc_value(:'yd') = 'tle')::text as tle_ydoc_smoke \gset
     create table counters (id int primary key, s crdt.pn not null default crdt.pn_empty());
     insert into counters values (1);
     update counters set s = crdt.pn_increment(s, 'a', 2) where id = 1;
@@ -192,9 +192,11 @@ grant create on schema crdt to crdt_other;
 
     -- pg_dump and restore (as the superuser): the documents come back, and
     -- the restored sequences continue after them (a new document gets a new
-    -- id; new rows integrate after the restored ones).
-    create table posts (id int primary key, body_doc bigint not null references crdt.ydoc_docs (id));
-    insert into posts values (1, crdt.ydoc_create()), (2, crdt.ydoc_create());
+    -- internal id; new rows integrate after the restored ones), and the public
+    -- ids come back as they were (a client-chosen one and a generated one).
+    create table posts (id int primary key, body_doc text not null references crdt.ydoc_docs (uid));
+    insert into posts values (1, crdt.ydoc_create('post:1:body')), (2, crdt.ydoc_create());
+    select body_doc as uid2 from posts where id = 2 \gset
     select crdt.ydoc_set(body_doc, 'first post', 'a') from posts where id = 1 \g /dev/null
     select crdt.ydoc_set(body_doc, 'second', 'a') from posts where id = 2 \g /dev/null
     reset session authorization;
@@ -205,8 +207,18 @@ grant create on schema crdt to crdt_other;
     select string_agg(crdt.ydoc_value(body_doc), ' | ' order by id) as dump_value from posts \gset
     select crdt.ydoc_create() as nd \gset
     select crdt.ydoc_insert(body_doc, 0, '>', 'z') from posts where id = 1 \g /dev/null
-    select (:nd > (select max(body_doc) from posts)
+    select ((select d.id from crdt.ydoc_docs d where d.uid = :'nd') > (select max(d.id) from crdt.ydoc_docs d join posts p on p.body_doc = d.uid)
             and crdt.ydoc_ops_since((select body_doc from posts where id = 1)) -> 'i' -> -1 ->> 4 = '>')::text as dump_next \gset
+    select (string_agg(body_doc, ' | ' order by id) = 'post:1:body | ' || :'uid2')::text as dump_uid from posts \gset
+    do $$
+    begin
+        perform crdt.ydoc_create('post:1:body');
+        perform set_config('crdt_test.dump_dup', 'created', false);
+    exception when unique_violation then
+        perform set_config('crdt_test.dump_dup', 'unique_violation', false);
+    end;
+    $$;
+    select current_setting('crdt_test.dump_dup', true) as dump_dup \gset
     \connect pgcrdt_install_ctl
     set session authorization crdt_owner;
 
@@ -236,7 +248,7 @@ grant create on schema crdt to crdt_other;
 -- Back to the spec database as the superuser for the assertions.
 \connect :"orig_db"
 
-select tap.plan(20);
+select tap.plan(22);
 
 select tap.is(:'own_super'::text, 'off', 'the install session is not a superuser');
 select tap.is(:'schema_owner'::text, 'crdt_owner', 'schema crdt is owned by the installing non-superuser');
@@ -278,6 +290,8 @@ select tap.ok(:'guard_create_out'::text like '%another role has CREATE on schema
                   'crdt.ydoc_blocks,crdt.ydoc_deps,crdt.ydoc_docs,crdt.ydoc_docs_id_seq,crdt.ydoc_ins,crdt.ydoc_items,crdt.ydoc_pending,crdt.ydoc_pending_deletes,crdt.ydoc_pending_ops,crdt.ydoc_pending_ops_id_seq,crdt.ydoc_rejected,crdt.ydoc_rejected_id_seq,crdt.ydoc_replicas',
                   'the nine ydoc_ tables and four sequences are marked for pg_dump');
     select tap.is(:'dump_value'::text, 'first post | second', 'pg_dump and restore: the documents come back');
+    select tap.is(:'dump_uid'::text, 'true', 'pg_dump and restore: public document ids (client-chosen and generated) come back unchanged');
+    select tap.is(:'dump_dup'::text, 'unique_violation', 'after a restore, creating a restored id raises 23505 (the unique index on uid is back)');
     select tap.ok(:'dump_next'::text = 'true', 'after a restore, a new document gets a new id and a new insert integrates after the restored rows (sequences dumped)'
                   || case when :'dump_next'::text <> 'true' then ' -- restore output: ' || :'dump_out'::text else '' end);
     select tap.is(:'ctl_fk_restrict'::text, 'blocked', 'drop extension is blocked by an app table''s foreign key to crdt.ydoc_docs');
@@ -288,6 +302,8 @@ select tap.ok(:'guard_create_out'::text like '%another role has CREATE on schema
     select tap.pass('SKIP control file not installed: create extension pg_crdt');
     select tap.pass('SKIP control file not installed: tables and sequences marked for pg_dump');
     select tap.pass('SKIP control file not installed: pg_dump and restore of documents');
+    select tap.pass('SKIP control file not installed: document ids after a restore');
+    select tap.pass('SKIP control file not installed: unique ids after a restore');
     select tap.pass('SKIP control file not installed: sequences continue after a restore');
     select tap.pass('SKIP control file not installed: drop extension blocked by a foreign key');
     select tap.pass('SKIP control file not installed: drop extension cascade');

@@ -20,13 +20,13 @@ Status (before promotion): experiment, 2026-11-04. PL/pgSQL and SQL only; loads 
 
 | Function | Returns | Labels | Notes |
 | --- | --- | --- | --- |
-| `ydoc_create()` | `bigint` | volatile | A new empty document. |
+| `ydoc_create(id default gen_random_uuid()::text)` | `text` | volatile | A new empty document; the id is client-chosen text (non-empty, at most 256 bytes, no control characters: 22023). An id that exists raises 23505, never the existing document. Tables keep an internal bigint (`ydoc_docs.id`); the public id is `ydoc_docs.uid`. Every `doc` argument below is that text. |
 | `ydoc_value(doc)` | `text` | stable | Plain text; null for a missing document. `string_agg(content order by ord)`. |
 | `ydoc_length(doc)` | `integer` | stable | Visible code points (a column of `ydoc_docs`). |
 | `ydoc_insert(doc, pos, chars, replica)` | ops `jsonb` | volatile | Local edit. `replica` is an entry key (`id` or `id:device`). Every local edit returns `{"v", "i", "d"}`; `v` is the document's version vector before the edit, so the op passes `ydoc_apply` elsewhere. |
 | `ydoc_delete(doc, pos, len, replica)` | ops `jsonb` | volatile | Local edit. |
 | `ydoc_set(doc, new_text, replica, base default null)` | ops `jsonb` | volatile | Prefix/suffix diff, one delete and one insert. See "set and concurrent saves". |
-| `ydoc_base(doc)` | `jsonb` | stable | `{"g": gen, "v": vv}`: what an editor started from, for `ydoc_set`'s `base`. |
+| `ydoc_base(doc)` | `jsonb` | stable | `{"d": uid, "g": gen, "v": vv}`: what an editor started from, for `ydoc_set`'s `base`. |
 | `ydoc_apply(doc, ops, replica default crdt.current_replica_id())` | `text` | volatile | Untrusted path: inserts only with the caller's ids (owner rule of `pn_apply_delta`); the op must carry `v` and pass the causal rules V0-V7, as a whole. Returns `'accepted'` or `'pending'` (waits for ids named in `v`). See "Causal validation". |
 | `ydoc_merge(doc, ops)` | void | volatile | Trusted path: ops from any replica (another server's `ops_since`, a replay). Ignores `v`; not safe against a byzantine writer. |
 | `ydoc_ops_since(doc, vv default '{}')` | ops `jsonb` | stable | Inserts above `vv` in integration order (causal), joined into maximal runs; every delete. No `v`: catch-up ops are for `ydoc_merge` only. |
@@ -194,7 +194,7 @@ The tables belong to the extension and nobody but their owner has privileges on 
 The intended deployment (spec `31_wrapper`):
 
 1. The DBA grants `select, insert, update, delete` on the nine `crdt.ydoc_*` tables and `usage` on `crdt.ydoc_ins`, `crdt.ydoc_docs_id_seq` and `crdt.ydoc_replicas_id_seq` to the role that owns the app's functions (or to a trusted backend role).
-2. The app's table references the document: `posts.body_doc bigint references crdt.ydoc_docs (id)`.
+2. The app's table references the document: `posts.body_doc text references crdt.ydoc_docs (uid)`.
 3. Untrusted clients call the app's SECURITY DEFINER functions, which check the app's own rule ("may this user edit post X"), then call `crdt.ydoc_apply(doc, ops, <identity>)` with the identity the app trusts (`session_user`, a JWT claim, a users-table lookup). `ydoc_apply` enforces that inserts carry only that identity's ids.
 4. Reads go through an app function too. A view does not work: `crdt.ydoc_value` reads the tables with the caller's privileges, not the view owner's.
 

@@ -233,9 +233,9 @@ begin
 end;
 $$;
 
-create function bench.build_b(pid int) returns bigint language plpgsql as $$
+create function bench.build_b(pid int) returns text language plpgsql as $$
 declare
-    d bigint := crdt.ydoc_create();
+    d text := crdt.ydoc_create();
     r record;
     len int;
 begin
@@ -272,7 +272,7 @@ create table posts_plain (id int primary key, title text not null, body text not
 create table posts_plain_lz4 (id int primary key, title text not null, body text compression lz4 not null);
 create table posts_a (id int primary key, title text not null, body crdt.yseq compression lz4 not null);
 create table posts_a_pglz (id int primary key, title text not null, body crdt.yseq not null);
-create table posts_b (id int primary key, title text not null, body_doc bigint not null references crdt.ydoc_docs (id));
+create table posts_b (id int primary key, title text not null, body_doc text not null references crdt.ydoc_docs (uid));
 
 create table bench.meta (k text primary key, v numeric);
 select clock_timestamp() as t0 \gset
@@ -292,7 +292,7 @@ insert into posts_a_pglz select id, title, body::text::jsonb::crdt.yseq from pos
 -- With full-text search: A indexes the expression, B keeps a cached text column.
 create table posts_plain_fts (id int primary key, title text not null, body text not null);
 create table posts_a_fts (id int primary key, title text not null, body crdt.yseq compression lz4 not null);
-create table posts_b_fts (id int primary key, title text not null, body_doc bigint not null references crdt.ydoc_docs (id), body_text text not null);
+create table posts_b_fts (id int primary key, title text not null, body_doc text not null references crdt.ydoc_docs (uid), body_text text not null);
 create index on posts_plain_fts using gin (to_tsvector('english', body));
 create index on posts_a_fts using gin (to_tsvector('english', crdt.yseq_value(body)));
 create index on posts_b_fts using gin (to_tsvector('english', body_text));
@@ -384,8 +384,8 @@ for pid in 1 $BIG; do
         "$(q -c "select pg_column_size(body) from posts_a_pglz where id = $pid")" \
         "$(q -c "select pg_column_size(body) from posts_a where id = $pid")" \
         "$(q -c "select length(body::text) from posts_a where id = $pid")" \
-        "$(q -c "select count(*) from crdt.ydoc_items where doc = (select body_doc from posts_b where id = $pid)")" \
-        "$(q -c "select sum(pg_column_size(i)) from crdt.ydoc_items i where doc = (select body_doc from posts_b where id = $pid)")"
+        "$(q -c "select count(*) from crdt.ydoc_items where doc = (select d.id from crdt.ydoc_docs d join posts_b p on p.body_doc = d.uid where p.id = $pid)")" \
+        "$(q -c "select sum(pg_column_size(i)) from crdt.ydoc_items i where doc = (select d.id from crdt.ydoc_docs d join posts_b p on p.body_doc = d.uid where p.id = $pid)")"
 done
 echo
 
@@ -536,7 +536,7 @@ scratch() {
         b_fts)
             local d
             d=$(q -c "select bench.build_b($plan)")
-            q -c "insert into posts_b_fts values ($id, 'scratch', $d, crdt.ydoc_value($d))" ;;
+            q -c "insert into posts_b_fts values ($id, 'scratch', '$d', crdt.ydoc_value('$d'))" ;;
     esac
     echo "$id"
 }
@@ -739,8 +739,8 @@ trace_row() {  # label kind id
         stored=$(q -c "select pg_column_size(body) from posts_a where id = $id")
         echo "select crdt.yseq_value(body) from posts_a where id = $id;" > "$WORK/t.sql"
     else
-        rows=$(q -c "select count(*) from crdt.ydoc_items where doc = (select body_doc from posts_b where id = $id)")
-        stored=$(q -c "select round(sum(pg_column_size(i)) * pg_total_relation_size('crdt.ydoc_items')::numeric / pg_relation_size('crdt.ydoc_items')) from crdt.ydoc_items i where doc = (select body_doc from posts_b where id = $id)")
+        rows=$(q -c "select count(*) from crdt.ydoc_items where doc = (select d.id from crdt.ydoc_docs d join posts_b p on p.body_doc = d.uid where p.id = $id)")
+        stored=$(q -c "select round(sum(pg_column_size(i)) * pg_total_relation_size('crdt.ydoc_items')::numeric / pg_relation_size('crdt.ydoc_items')) from crdt.ydoc_items i where doc = (select d.id from crdt.ydoc_docs d join posts_b p on p.body_doc = d.uid where p.id = $id)")
         echo "select crdt.ydoc_value(body_doc) from posts_b where id = $id;" > "$WORK/t.sql"
     fi
     run "$WORK/t.sql" 1 $((K100 / 2))
@@ -870,7 +870,7 @@ echo "## y. Shape B after \`ydoc_compact\`"
 echo
 echo "\`ydoc_compact(doc)\` on the $NALL loaded documents (the tables also hold the scratch documents of the workloads, unchanged by it)."
 echo
-ROWS0=$(q -c "select count(*) from crdt.ydoc_items where doc in (select body_doc from posts_b where id <= $BIG)")
+ROWS0=$(q -c "select count(*) from crdt.ydoc_items where doc in (select d.id from crdt.ydoc_docs d join posts_b p on p.body_doc = d.uid where p.id <= $BIG)")
 size_tables
 B0=$(q -c "select bench.ydoc_bytes()")
 COMPACT_MS=$("${PSQL[@]}" -tA <<SQL
@@ -881,7 +881,7 @@ SQL
 )
 size_tables
 B1=$(q -c "select bench.ydoc_bytes()")
-ROWS1=$(q -c "select count(*) from crdt.ydoc_items where doc in (select body_doc from posts_b where id <= $BIG)")
+ROWS1=$(q -c "select count(*) from crdt.ydoc_items where doc in (select d.id from crdt.ydoc_docs d join posts_b p on p.body_doc = d.uid where p.id <= $BIG)")
 hdr "state" "item rows of the $NALL posts" "crdt.ydoc_* tables (MB)"
 row "as built" "$ROWS0" "$(awk -v x=$B0 'BEGIN { printf "%.2f", x / 1048576 }')"
 row "after ydoc_compact (took $COMPACT_MS ms)" "$ROWS1" "$(awk -v x=$B1 'BEGIN { printf "%.2f", x / 1048576 }')"

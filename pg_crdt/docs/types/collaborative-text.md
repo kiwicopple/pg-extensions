@@ -1,11 +1,11 @@
 # Collaborative text
 
-Collaborative text is a plain-text document that several writers edit at the same time, online or offline, and that converges to the same text wherever the edits are merged. Its functions have the prefix `ydoc_`. Unlike the [PN-Counter](pn-counter.md), it is not a column type: a document lives in tables of the extension, one row per run of characters, and your table holds its id.
+Collaborative text is a plain-text document that several writers edit at the same time, online or offline, and that converges to the same text wherever the edits are merged. Its functions have the prefix `ydoc_`. Unlike the [PN-Counter](pn-counter.md), it is not a column type: a document lives in tables of the extension, one row per run of characters, and your table holds its id, a text.
 
 ```sql
 create table posts (
   id bigint primary key,
-  body_doc bigint not null references crdt.ydoc_docs (id)
+  body_doc text not null references crdt.ydoc_docs (uid)
 );
 ```
 
@@ -13,7 +13,11 @@ The algorithm is a sequence CRDT with the YjsMod ordering rule, as in Yjs and in
 
 ## The document
 
-`crdt.ydoc_create()` returns the id of a new, empty document. Every other function takes that id.
+`crdt.ydoc_create()` creates a new, empty document and returns its id, a random UUID as text. Every other function takes that id. The id is `text`, like a [replica id](../guides/replicas-and-identity.md#replica-ids-and-entry-keys), so a client can also choose it: `crdt.ydoc_create('post:123')`. The extension accepts a UUID, a UUIDv7 or ULID, a Yjs room name or an application key. An id is non-empty, at most 256 bytes, with no control characters (`22023` otherwise), and ids are compared byte for byte: `Post` and `post` are two documents.
+
+Creating is not idempotent. An id that exists raises `23505` (`unique_violation`) and never returns the existing document, so nobody can take a document over by creating its predictable id first. If the client chose the id, your application has to check that the document is its own: see [Create a document with a client-chosen id](../guides/collaborative-text.md#create-a-document-with-a-client-chosen-id).
+
+An id names a document and grants nothing. Knowing it, or creating it, gives no right to read or edit the document, and that a document exists is never proof of who owns it. Access follows from the [privileges on the tables](#privileges-and-the-wrapper-pattern) and from your wrappers. When the client picks the id, it should be random (a UUID, UUIDv7 or ULID), so that nobody can guess it.
 
 Each character has an id, `[key, seq]`: the [entry key](../guides/replicas-and-identity.md#replica-ids-and-entry-keys) of the writer that typed it, and that key's sequence number, counted from 1. Each insert also records its *origins*: the ids of the characters to its left and right when it was typed. The order of the document follows from the origins and the ids alone, so every server that has the same characters puts them in the same order, whatever order they arrived in. Deleted characters stay as tombstones, because a later insert may name them as its origin.
 
@@ -45,22 +49,22 @@ Ids are never reused, so applying an op twice changes nothing. An op whose origi
 
 **Local edits** change a document by position, under an entry key that you supply: `ydoc_insert(doc, pos, chars, replica)`, `ydoc_delete(doc, pos, len, replica)`, and `ydoc_set(doc, new_text, replica)`, which replaces the whole text with one delete and one insert (the common prefix and suffix are kept).
 
-**Merging** brings in ops from another copy of the document. Here two documents stand for the copies on two servers. Each is edited, then each takes the ops it lacks from the other:
+**Merging** brings in ops from another copy of the document. Here two documents stand for the copies on two servers (on two real servers both copies would have the same id). Each is edited, then each takes the ops it lacks from the other:
 
 ```sql
-select crdt.ydoc_create();  -- 1, server A
-select crdt.ydoc_create();  -- 2, server B
+select crdt.ydoc_create('note-a');  -- server A's copy
+select crdt.ydoc_create('note-b');  -- server B's copy
 
-select crdt.ydoc_insert(1, 0, 'Hello world', replica => 'alice');
-select crdt.ydoc_merge(2, crdt.ydoc_ops_since(1));
+select crdt.ydoc_insert('note-a', 0, 'Hello world', replica => 'alice');
+select crdt.ydoc_merge('note-b', crdt.ydoc_ops_since('note-a'));
 
-select crdt.ydoc_insert(1, 5, ',', replica => 'alice');
-select crdt.ydoc_insert(2, 11, '!', replica => 'bob');
+select crdt.ydoc_insert('note-a', 5, ',', replica => 'alice');
+select crdt.ydoc_insert('note-b', 11, '!', replica => 'bob');
 
-select crdt.ydoc_merge(2, crdt.ydoc_ops_since(1, crdt.ydoc_version(2)));
-select crdt.ydoc_merge(1, crdt.ydoc_ops_since(2, crdt.ydoc_version(1)));
+select crdt.ydoc_merge('note-b', crdt.ydoc_ops_since('note-a', crdt.ydoc_version('note-b')));
+select crdt.ydoc_merge('note-a', crdt.ydoc_ops_since('note-b', crdt.ydoc_version('note-a')));
 
-select crdt.ydoc_value(1) as server_a, crdt.ydoc_value(2) as server_b;
+select crdt.ydoc_value('note-a') as server_a, crdt.ydoc_value('note-b') as server_b;
 --    server_a    |   server_b
 -- ---------------+---------------
 --  Hello, world! | Hello, world!
@@ -71,13 +75,13 @@ select crdt.ydoc_value(1) as server_a, crdt.ydoc_value(2) as server_b;
 **Concurrent inserts at one place do not interleave.** When two writers type at the same position at the same time, one run of text ends up before the other, the same on every copy. Characters are never mixed:
 
 ```sql
-select crdt.ydoc_insert(1, 0, 'abc ', replica => 'alice');
-select crdt.ydoc_insert(2, 0, 'xyz ', replica => 'bob');
+select crdt.ydoc_insert('note-a', 0, 'abc ', replica => 'alice');
+select crdt.ydoc_insert('note-b', 0, 'xyz ', replica => 'bob');
 
-select crdt.ydoc_merge(2, crdt.ydoc_ops_since(1, crdt.ydoc_version(2)));
-select crdt.ydoc_merge(1, crdt.ydoc_ops_since(2, crdt.ydoc_version(1)));
+select crdt.ydoc_merge('note-b', crdt.ydoc_ops_since('note-a', crdt.ydoc_version('note-b')));
+select crdt.ydoc_merge('note-a', crdt.ydoc_ops_since('note-b', crdt.ydoc_version('note-a')));
 
-select crdt.ydoc_value(1) as server_a, crdt.ydoc_value(2) as server_b;
+select crdt.ydoc_value('note-a') as server_a, crdt.ydoc_value('note-b') as server_b;
 --        server_a        |       server_b
 -- -----------------------+-----------------------
 --  abc xyz Hello, world! | abc xyz Hello, world!

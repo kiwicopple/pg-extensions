@@ -10,10 +10,11 @@ What `pg_crdt` 0.0.1 does not do, and the numbers that bound what it does. The m
 | The value, `sum(p) - sum(n)` | The `bigint` range | `pn_value` raises `22003`. |
 | An amount for `pn_increment` or `pn_decrement` | 0 to 9,223,372,036,854,775,807 | A negative amount raises `22023`. |
 | An entry key | A replica id, or `<replica id>:<device>`: non-empty, the replica id without `:` | `22023` from `pn_increment`, `pn_decrement` and `pn_apply_delta`. `pn_merge` accepts any key. |
+| A collaborative text document id | `text`, non-empty, at most 256 bytes, no control characters | `22023` from `ydoc_create`. An id that exists raises `23505`. |
 | Format version | `v = 1` | A state with another `v` fails the domain's check with `23514`. |
 | Postgres versions | 16, 17, 18 | Not tested on others. |
 
-Collaborative text has its own limits (key length, quotas of the untrusted path, row size): see [Collaborative text functions](ydoc.md#limits).
+Collaborative text has its own limits (document id and key length, quotas of the untrusted path, row size): see [Collaborative text functions](ydoc.md#limits).
 
 ## Behavior
 

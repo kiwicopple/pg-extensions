@@ -7,7 +7,7 @@
 Store collaboratively edited text (the canonical case: a blog post body edited by several people) in Postgres, PL/pgSQL and SQL only. Two storage shapes, the same algorithm, so the comparison measures storage and not semantics:
 
 - **Shape A: column.** A `jsonb` domain you put on your own table: `create table posts (id ..., body crdt.<x> default crdt.<x>_empty())`. Pure functions, like `pn_`. Easy to adopt. Every edit rewrites the whole value (TOAST), so cost grows with document size.
-- **Shape B: tables.** pg_crdt owns tables in the `crdt` schema (one row per run of characters). Your table holds a document id (`posts.body_doc bigint references crdt.<y>_docs`). Edits insert rows (WAL O(edit)). Reads render with `order by`.
+- **Shape B: tables.** pg_crdt owns tables in the `crdt` schema (one row per run of characters). Your table holds a document id (`posts.body_doc text references crdt.<y>_docs (uid)`). Edits insert rows (WAL O(edit)). Reads render with `order by`.
 
 Both must be server-readable: the plain text is available to SQL (full-text search, generated columns, `like`).
 
@@ -102,3 +102,5 @@ Two corrections to the brief:
 - Ops returned by `ops_since` carry no `v`, so they are for trusted catch-up only. **Equivocation** (two different ops with the same `(replica, seq)`) is not covered by the rules. A single Postgres server enforces one writer per id with the primary key, so the first arrival wins. Server-to-server merge stays a trusted path.
 
 Also: `set(doc, new_text)` diffing against the current text reverts concurrent edits when the save is stale. Both shapes add a three-way `set` with a base (shape B: a token from `ydoc_base`; shape A: the loaded state).
+
+Amendment 2 (2026-11-05): the public document id is client-choosable text (`ydoc_create(id)`, an existing id raises 23505), not a server-assigned bigint; the tables keep an internal bigint. See `research/journal.md`, session 6.

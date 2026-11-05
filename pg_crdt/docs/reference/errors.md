@@ -15,6 +15,8 @@ Every error that `pg_crdt` raises, with its SQLSTATE, and the errors from Postgr
 | `23514` | `check_violation` | The `crdt.pn` domain, so any function that takes or returns one | A value is not a `crdt.pn` envelope: not an object, other keys than `t`, `v`, `p`, `n`, `t` not `"pn"`, `v` not 1, or `p` or `n` not an object. |
 | `42501` | `insufficient_privilege` | `pn_apply_delta` | `replica` is null (no identity), or an entry of the delta belongs to another replica. |
 | `42501` | `insufficient_privilege` | The install script | The schema `crdt` is owned by another non-superuser role, or another role has `CREATE` on it. |
+| `22023` | `invalid_parameter_value` | `ydoc_create` | The id is null, empty, longer than 256 bytes or has a control character. |
+| `23505` | `unique_violation` | `ydoc_create` | A document with this id exists. Creating is not idempotent: the existing document is never returned, so that nobody can take over a document by creating its predictable id. Two sessions that create one id at once get one success and one `23505`. See [Create a document with a client-chosen id](../guides/collaborative-text.md#create-a-document-with-a-client-chosen-id). |
 | `22004` | `null_value_not_allowed` | `ydoc_insert`, `ydoc_delete`, `ydoc_set` | `replica`, a position, a length or the text is null. |
 | `22023` | `invalid_parameter_value` | `ydoc_insert`, `ydoc_delete`, `ydoc_set` | A position or range outside the text; `replica` is not an entry key or is longer than 256 bytes; a `base` that is not a version of the document, or is older than its last compaction. |
 | `22023` | `invalid_parameter_value` | `ydoc_apply`, `ydoc_merge` | A malformed op; for `ydoc_apply`, an op without `v`, or one that breaks a causal rule (the message names it, `V0` to `V6`); the same ids sent again with other text or origins. `ydoc_apply` also: `replica` is not a replica id. |
@@ -45,19 +47,21 @@ Text that is written by the extension, as Postgres reports it:
 | `42501` | `schema crdt is owned by role other, not by the installing role app_owner` |
 | `42501` | `another role has CREATE on schema crdt` |
 | `23514` | `value for domain crdt.pn violates check constraint "pn_check"` (Postgres) |
+| `22023` | `crdt.ydoc_create: '' is not a document id` |
+| `23505` | `crdt.ydoc_create: document 'welcome' already exists` |
 | `22023` | `crdt.ydoc_insert: position 99 is outside the document (length 11)` |
-| `22023` | `crdt.ydoc_set: base is not a version of document 1` |
-| `22023` | `crdt.ydoc_set: base 3 of document 1 is older than its last compaction` |
+| `22023` | `crdt.ydoc_set: base is not a version of document 'welcome'` |
+| `22023` | `crdt.ydoc_set: base 3 of document 'welcome' is older than its last compaction` |
 | `22023` | `crdt.ydoc_apply: V0: ops carry no version vector "v"` |
 | `22023` | `crdt.ydoc_apply: V2: insert bob:3 does not follow "v" (expected seq 1)` |
 | `22023` | `crdt.ydoc: insert bob:1 reuses ids with other content or origins` |
 | `42501` | `crdt.ydoc_apply: the writer has no replica id` |
 | `42501` | `crdt.ydoc_apply: replica 'dave' cannot insert characters of replica 'erin'` |
 | `42501` | `permission denied for table ydoc_docs` (Postgres) |
-| `54000` | `crdt.ydoc_apply: replica 'bob' has too many ops waiting in document 1` |
-| `P0002` | `crdt.ydoc_insert: document 99 does not exist` |
+| `54000` | `crdt.ydoc_apply: replica 'bob' has too many ops waiting in document 'welcome'` |
+| `P0002` | `crdt.ydoc_insert: document 'nope' does not exist` |
 
-`pn_decrement` raises the same messages with its own name. The messages that name an entry show the map (`p` or `n`) and the key. The `ydoc_` messages name the function, and an id as `key:seq`.
+`pn_decrement` raises the same messages with its own name. The messages that name an entry show the map (`p` or `n`) and the key. The `ydoc_` messages name the function, a document by its id in quotes, and a character as `key:seq`.
 
 ## Errors from Postgres
 
@@ -80,4 +84,5 @@ Text that is written by the extension, as Postgres reports it:
 - **`42501` from a `ydoc_` function** is either the identity check of `ydoc_apply` (a forged insert, or no identity: reject the request) or Postgres refusing a role without table privileges (call through your wrapper).
 - **`22023` from `ydoc_apply`** means the op is malformed or breaks a causal rule. An honest client running the same algorithm does not cause it; a client with a bug does. Resync it with `ydoc_ops_since`.
 - **`22023` from `ydoc_set` with `base ... is older than its last compaction`** means the form is older than the compaction horizon. Reopen the document and apply the change again.
+- **`23505` from `ydoc_create`** means the id is taken. If your client chose it, your wrapper decides what that means: the owner's retry gets the same document, anyone else is refused. Never answer it by handing out the existing document.
 - **`54000` from `ydoc_apply`** is a quota. A writer with too many waiting ops is sending ops whose dependencies never arrive: send the missing ops first.

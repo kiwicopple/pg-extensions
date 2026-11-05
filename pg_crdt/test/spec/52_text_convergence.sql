@@ -6,13 +6,13 @@
 -- typed at one place do not interleave.
 \i :ext_dir/test/lib/text-helpers.sql
 
-create temp table trial (n int, x bigint, y bigint, z bigint, ok_xy boolean, ok_z boolean);
+create temp table trial (n int, x text, y text, z text, ok_xy boolean, ok_z boolean);
 
 select setseed(0.42);
 do $$
 declare
-    x bigint; y bigint; z bigint;
-    d bigint; rep text; len int; pos int; k int;
+    x text; y text; z text;
+    d text; rep text; len int; pos int; k int;
     opsx jsonb; opsy jsonb; o jsonb;
     allops jsonb;
     op jsonb;
@@ -74,10 +74,10 @@ $$;
 
 -- Non-interleaving: three replicas type a word each at the same place,
 -- char by char, on three servers, then merge all ways.
-create temp table ni (doc bigint, who text);
+create temp table ni (doc text, who text);
 do $$
 declare
-    docs bigint[] := array[crdt.ydoc_create(), crdt.ydoc_create(), crdt.ydoc_create()];
+    docs text[] := array[crdt.ydoc_create(), crdt.ydoc_create(), crdt.ydoc_create()];
     who text[] := array['bob', 'alice', 'carol'];
     w text[] := array['BBBB', 'aaaa', 'cccc'];
     op jsonb;
