@@ -38,7 +38,7 @@ Reopening with the same key after the previous client has gone is safe: the new 
 | Method | Called with | Returns | On failure |
 | --- | --- | --- | --- |
 | `apply(doc, op)` | The document id, and one op `{v, i, d}` | The result of `ydoc_apply`: `'accepted'` or `'pending'` | Reject with an error whose `code` is the SQLSTATE when the server refused the op |
-| `opsSince(doc, vv)` | The document id, and the client's version vector | The result of `ydoc_ops_since`: an op `{i, d}`, as an object or as JSON text | Reject with any error |
+| `opsSince(doc, vv)` | The document id, and the client's version vector | The result of `ydoc_ops_since`: an op `{i, d}`, as an object or as JSON text | Reject with an error whose `code` is the SQLSTATE when the server refused (the document is gone, access was revoked); any other error is transient |
 | `create(doc)` (optional) | The document id | Anything | Reject with any error |
 
 The client uses the `code` to decide what a failure means: see [Refused ops](#refused-ops). node-postgres and postgres.js errors already carry the SQLSTATE in `code`.
@@ -119,11 +119,13 @@ The edit is applied to the local replica at once, and its op is queued for the n
 - the index is outside the text, or falls between the two halves of a surrogate pair (inside an emoji): `RangeError`;
 - the text has a lone surrogate or U+0000, which Postgres cannot store: `TypeError`.
 
-Inserting `''` or deleting 0 units does nothing.
+Inserting `''` or deleting 0 units changes nothing and queues nothing, but the index is still checked: it throws `RangeError` when it is outside the text or inside a surrogate pair.
 
 ## Show remote changes
 
 `on('change', listener)` calls the listener after every change of the text, with `{changes, local}`. `local` is true for the client's own `insert` and `delete`. Each change is `{from, to, insert}`: replace `from` to `to` of the text *before* the event with `insert`, in UTF-16 units. The changes of one event are sorted, do not overlap, and all refer to the text before the event, as CodeMirror's `changes` do. To patch a plain string, apply them from last to first. `on` returns a function that removes the listener.
+
+A listener that throws cannot break the client: every listener is called, `insert`, `delete` and `sync()` behave as if it had not thrown, and the error is rethrown on a timer, where nothing in the client can catch it (an uncaught exception in Node, `window.onerror` in a browser). Catch errors inside your listener if you want to handle them. This holds for `rejected` listeners too.
 
 This is a fragment for CodeMirror 6: `view` is an `EditorView`, and edits that came from the server are marked so that they are not sent back.
 
@@ -161,7 +163,7 @@ const sendEdits = EditorView.updateListener.of((update) => {
 
 - **One sync at a time.** A call made while a sync runs waits for it and then runs once more; calls made in the meantime share that run. You can call `sync()` whenever you like.
 - **Safe to retry.** On any failure the queue is kept, and the next `sync()` sends the same ops again. An op that the server already applied (the response was lost) is sent unchanged, and `ydoc_apply` accepts an identical re-send without changing anything.
-- **Batched.** Edits made between two syncs travel as one op, and typing in one place joins into one run. A batch is closed by a sync and by a change that arrives from the server, and stays under the server's limit of 256 runs per op.
+- **Batched.** Edits made between two syncs travel as one op, and typing in one place joins into one run. A batch is closed by a sync and when a pull integrates characters that the replica did not have (a pull that only brings deletes or nothing new does not close it), and stays under the server's limit of 256 runs per op.
 - **In memory.** The queue lives as long as the client. `pending` is the number of batches the server has not acknowledged; warn the user before they close a page while it is not 0.
 
 When to call it is your application's choice. This fragment syncs shortly after the user stops typing, every few seconds to receive other editors' changes, and when the browser comes back online. Call it also when your application learns that the post changed, for example from a `notify` that your wrappers send.
@@ -179,18 +181,20 @@ window.addEventListener('online', () => post.sync().catch(console.warn))
 
 ## Refused ops
 
-A failure of `transport.apply` whose `code` is a SQLSTATE of one of these classes means that the server refused the op for good:
+A failure of `transport.apply` or `transport.opsSince` during `sync()` whose `code` is a SQLSTATE of one of these classes means that the server refused the op for good:
 
 | Class | Examples | Meaning |
 | --- | --- | --- |
 | `22` | `22023` | The op breaks a rule: malformed, one of the causal rules V0 to V6, or ids reused with other content (two clients on one key) |
 | `42` | `42501` | Your wrapper refused the writer, or an insert carries another writer's key |
 | `54` | `54000` | A quota: too many device keys, too many waiting ops |
-| `P0` | `P0002` | The document does not exist |
+| `P0` | `P0002` | The document does not exist (for example, dropped while the client was open) |
 
 The local replica then holds characters that the server will never have, and every later op of the key depends on them. So the client stops: it calls the `rejected` listeners once with `{error, op}`, sets `error`, and every `sync()` from then on rejects with that `YdocRejectedError`, without calling the transport. Local edits still work, so the editor does not break, but they are not sent. To recover, keep what the user typed (`value()`) if you want to offer it, and open the document again.
 
-Any other failure (no `code`, a connection error, `40001`, `57014`) is transient: `sync()` rejects with the transport's error and keeps the queue.
+When the refusal answers `opsSince` (the document was dropped, or the writer's access was revoked), no op was refused: the ops sent earlier in that sync were acknowledged, and `op` is `null` in the event and on the error. The client stops in the same way.
+
+Any other failure (no `code`, a connection error, `40001`, `57014`) is transient, from either call: `sync()` rejects with the transport's error and keeps the queue. `openYdoc` has no client to stop yet, so when its first `opsSince` fails it rejects with the transport's error as it is, whatever the code.
 
 ```js
 post.on('rejected', ({ error }) => {
@@ -207,7 +211,7 @@ Import from `client/src/index.js` (the package's main entry, `pg-crdt-client`).
 
 | Name | Signature | Description |
 | --- | --- | --- |
-| `openYdoc` | `openYdoc({transport, doc, replica, create = false}): Promise<YdocClient>` | Load a document and return its client. `TypeError` for an invalid `transport`, `doc` or key. |
+| `openYdoc` | `openYdoc({transport, doc, replica, create = false}): Promise<YdocClient>` | Load a document and return its client. `TypeError` for an invalid `transport`, `doc` or key (including a key with U+0000 or a lone surrogate, which Postgres cannot store); nothing is created or loaded then. |
 | `value` | `client.value(): string` | The local text. |
 | `insert` | `client.insert(index: number, text: string): void` | Insert `text` before UTF-16 index `index`. |
 | `delete` | `client.delete(index: number, length: number): void` | Delete `length` UTF-16 units from `index`. |
@@ -217,7 +221,7 @@ Import from `client/src/index.js` (the package's main entry, `pg-crdt-client`).
 | `pending` | `client.pending: number` | Batches the server has not acknowledged. |
 | `error` | `client.error: YdocRejectedError \| null` | The refusal that stopped the client. |
 | `id`, `replica` | `client.id: string`, `client.replica: string` | The document id and the entry key. |
-| `YdocRejectedError` | `class extends Error { code, op, cause }` | `code` is the SQLSTATE, `op` the refused op, `cause` the transport's error. |
+| `YdocRejectedError` | `class extends Error { code, op, cause }` | `code` is the SQLSTATE, `op` the refused op (`null` when `opsSince` was refused), `cause` the transport's error. |
 | `isRejection` | `isRejection(err): boolean` | True for a SQLSTATE of class 22, 42, 54 or P0. |
 | `codePointIndex` | `codePointIndex(text: string, index: number): number` | The code point position of a UTF-16 index, for calling `ydoc_insert` or `ydoc_delete` from JavaScript yourself. `RangeError` inside a surrogate pair. |
 | `utf16Index` | `utf16Index(text: string, cp: number): number` | The inverse. |

@@ -327,3 +327,155 @@ test('the mirror helper agrees with value() through local and remote edits', asy
   assert.equal(b.value(), '> The grey cat');
   assert.equal(codePointIndex(b.value(), b.value().length), Array.from(b.value()).length);
 });
+
+// Run fn, then collect the errors that the client rethrew on timers (a throwing
+// listener's errors surface as uncaught exceptions). node:test's own handler is
+// parked meanwhile, so the errors do not fail the test.
+async function uncaught(fn) {
+  const saved = process.listeners('uncaughtException');
+  process.removeAllListeners('uncaughtException');
+  const errors = [];
+  const onError = (e) => errors.push(e);
+  process.on('uncaughtException', onError);
+  try {
+    await fn();
+    await new Promise((r) => setTimeout(r, 20));
+  } finally {
+    process.off('uncaughtException', onError);
+    for (const l of saved) process.on('uncaughtException', l);
+  }
+  return errors;
+}
+
+test('a throwing change listener does not break edits or later listeners', async () => {
+  const { clients: [a] } = await setup('alice:a');
+  const seen = [];
+  a.on('change', () => { throw new Error('boom 1'); });
+  a.on('change', (e) => seen.push(e));
+  const errors = await uncaught(() => {
+    a.insert(0, 'abc');      // does not throw
+    a.delete(0, 1);
+  });
+  assert.equal(a.value(), 'bc');
+  assert.equal(a.pending, 1);
+  assert.equal(seen.length, 2, 'the second listener still ran');
+  assert.deepEqual(errors.map((e) => e.message), ['boom 1', 'boom 1'], 'errors are rethrown asynchronously');
+  await a.sync();
+  assert.equal(a.pending, 0);
+});
+
+test('a throwing change listener does not abort a sync that brings remote changes', async () => {
+  const { server, clients: [a, b] } = await setup('alice:a', 'bob:b');
+  a.insert(0, 'hello');
+  await a.sync();
+  await b.sync();
+  b.on('change', () => { throw new Error('boom'); });
+  const seen = [];
+  b.on('change', (e) => seen.push(e));
+  b.insert(0, '>');   // a local change: its listener error is isolated too
+  a.insert(5, '!');
+  await a.sync();
+  const errors = await uncaught(async () => {
+    await b.sync();   // resolves although the listener throws on the remote change
+  });
+  assert.equal(b.value(), '>hello!');
+  assert.equal(b.pending, 0);
+  assert.equal(server.text('d'), '>hello!');
+  assert.equal(seen.length, 2);
+  assert.equal(seen[1].local, false);
+  assert.equal(errors.length, 2);
+});
+
+test('a throwing rejected listener does not mask the YdocRejectedError', async () => {
+  const server = memoryServer();
+  server.create('d');
+  const t = spy(server.transport('bob'));
+  const c = await openYdoc({ transport: t, doc: 'd', replica: 'alice:x' });
+  const seen = [];
+  c.on('rejected', () => { throw new Error('boom'); });
+  c.on('rejected', (e) => seen.push(e));
+  c.insert(0, 'forged');
+  let err;
+  const errors = await uncaught(async () => { err = await c.sync().catch((e) => e); });
+  assert.ok(err instanceof YdocRejectedError);
+  assert.equal(err.code, '42501');
+  assert.equal(c.error, err);
+  assert.equal(seen.length, 1);
+  assert.deepEqual(errors.map((e) => e.message), ['boom']);
+});
+
+test('open refuses replica keys that Postgres cannot store, and opens nothing', async () => {
+  const server = memoryServer();
+  const transport = server.transport('alice');
+  for (const replica of ['a\u0000:1', 'a:1\u0000', '\u0000', 'a\uD800:1', 'a:\uDC00', 'a\uD83D']) {
+    await assert.rejects(openYdoc({ transport, doc: 'new', replica, create: true }), TypeError, JSON.stringify(replica));
+  }
+  assert.equal(server.docs.has('new'), false, 'create was not called');
+  const c = await openYdoc({ transport, doc: 'new', replica: '\u{1F600}:\u{1F4F1}', create: true });
+  assert.equal(c.replica, '\u{1F600}:\u{1F4F1}');
+});
+
+// A transport whose opsSince fails with `code` once `armed` is set.
+function pullFails(code) {
+  const server = memoryServer();
+  server.create('d');
+  const inner = server.transport('alice');
+  const state = { armed: false, calls: 0 };
+  const transport = {
+    ...inner,
+    async opsSince(d, vv) {
+      state.calls++;
+      if (state.armed) throw Object.assign(new Error('refused'), { code });
+      return inner.opsSince(d, vv);
+    },
+  };
+  return { server, transport, state };
+}
+
+test('a permanent opsSince failure stops the client like a refused op, with op null', async () => {
+  for (const code of ['P0002', '42501', '22023', '54000']) {
+    const { server, transport, state } = pullFails(code);
+    const c = await openYdoc({ transport, doc: 'd', replica: 'alice:a' });
+    const seen = [];
+    c.on('rejected', (e) => seen.push(e));
+    c.insert(0, 'x');
+    state.armed = true;
+    const err = await c.sync().catch((e) => e);
+    assert.ok(err instanceof YdocRejectedError, code);
+    assert.equal(err.code, code);
+    assert.equal(err.op, null);
+    assert.equal(err.cause.code, code);
+    assert.equal(c.error, err);
+    assert.equal(c.pending, 0, 'the push before the pull was acknowledged');
+    assert.equal(server.text('d'), 'x');
+    assert.equal(seen.length, 1);
+    assert.deepEqual(seen[0], { error: err, op: null });
+    const calls = state.calls;
+    await assert.rejects(c.sync(), (e) => e === err);
+    assert.equal(state.calls, calls, 'no further transport calls');
+    assert.equal(seen.length, 1);
+  }
+});
+
+test('a transient opsSince failure keeps the client running', async () => {
+  const server = memoryServer();
+  server.create('d');
+  const inner = server.transport('alice');
+  let fail = false;
+  const transport = { ...inner, async opsSince(d, vv) { if (fail) throw new TransientError('offline'); return inner.opsSince(d, vv); } };
+  fail = false;
+  const c = await openYdoc({ transport, doc: 'd', replica: 'alice:a' });
+  fail = true;
+  await assert.rejects(c.sync(), TransientError);
+  assert.equal(c.error, null);
+  fail = false;
+  c.insert(0, 'ok');
+  await c.sync();
+  assert.equal(server.text('d'), 'ok');
+});
+
+test('open: a permanent opsSince failure is the transport error itself (no client yet)', async () => {
+  const { transport, state } = pullFails('P0002');
+  state.armed = true;
+  await assert.rejects(openYdoc({ transport, doc: 'd', replica: 'alice:a' }), (e) => e.code === 'P0002' && !(e instanceof YdocRejectedError));
+});

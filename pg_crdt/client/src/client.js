@@ -17,7 +17,10 @@
 // - A refusal (an error whose code is a SQLSTATE of class 22, 42, 54 or P0) is
 //   permanent: the local replica now holds characters the server does not, so
 //   the client stops syncing and reports it. Any other error is transient: the
-//   queue is kept and the next sync() retries.
+//   queue is kept and the next sync() retries. The same split applies to a
+//   failed transport.opsSince during sync(), except that no op was refused.
+// - A listener that throws never breaks the client: every listener is called,
+//   and each error is rethrown asynchronously (see reportError).
 
 import { Doc, mergeOps, isReplicaKey } from './doc.js';
 import { codePointIndex, checkStorable } from './utf16.js';
@@ -70,21 +73,25 @@ const MAX_RUNS = 128;
 /**
  * @typedef {object} RejectedEvent
  * @property {YdocRejectedError} error
- * @property {Op} op The op the server refused.
+ * @property {Op | null} op The op the server refused, or null when the refusal
+ *   answered a pull (`transport.opsSince`) and no op was refused.
  */
 
-/** The server refused an op. The client stops syncing; open the document again. */
+/**
+ * The server refused an op, or refused to send changes (`op` is null). The
+ * client stops syncing; open the document again.
+ */
 export class YdocRejectedError extends Error {
   /**
    * @param {any} cause The transport's error.
-   * @param {Op} op
+   * @param {Op | null} op The refused op, or null for a failed pull.
    */
   constructor(cause, op) {
-    super(`the server refused an op (${cause?.code}): ${cause?.message ?? cause}`, { cause });
+    super(`the server refused ${op ? 'an op' : 'to send changes'} (${cause?.code}): ${cause?.message ?? cause}`, { cause });
     this.name = 'YdocRejectedError';
     /** @type {string} The SQLSTATE. */
     this.code = cause?.code;
-    /** @type {Op} */
+    /** @type {Op | null} */
     this.op = op;
   }
 }
@@ -132,6 +139,7 @@ export class YdocClient {
     if (!isReplicaKey(replica)) {
       throw new TypeError(`replica must be an entry key (an id, or <id>:<device>), got ${JSON.stringify(replica)}`);
     }
+    checkStorable(replica); // Postgres cannot store U+0000 or a lone surrogate in a key
     this._transport = transport;
     this._id = doc;
     this._replica = replica;
@@ -200,7 +208,10 @@ export class YdocClient {
   /**
    * Listen to `'change'` (a ChangeEvent, after every local or remote change of
    * the text) or `'rejected'` (a RejectedEvent, once, when the server refuses
-   * an op). Returns a function that removes the listener.
+   * an op or refuses to send changes). Returns a function that removes the
+   * listener. A listener that throws does not affect the client or the other
+   * listeners: its error is rethrown asynchronously (an uncaught exception in
+   * Node, `window.onerror` in a browser).
    *
    * @overload
    * @param {'change'} type
@@ -256,16 +267,27 @@ export class YdocClient {
       try {
         await this._transport.apply(this._id, op);
       } catch (err) {
-        if (isRejection(err)) {
-          this._error = new YdocRejectedError(err, op);
-          this._emit('rejected', { error: this._error, op });
-          throw this._error;
-        }
+        if (isRejection(err)) this._reject(err, op);
         throw err;
       }
       this._outbox.shift();
     }
-    await this._pull();
+    let ops;
+    try {
+      ops = await this._transport.opsSince(this._id, this._doc.versionVector());
+    } catch (err) {
+      if (isRejection(err)) this._reject(err, null);
+      throw err;
+    }
+    this._applyRemote(ops);
+  }
+
+  // Stop the client: record the refusal, tell the listeners, throw it.
+  // `op` is null when the refusal answered a pull.
+  _reject(cause, op) {
+    this._error = new YdocRejectedError(cause, op);
+    this._emit('rejected', { error: this._error, op });
+    throw this._error;
   }
 
   async _pull() {
@@ -325,9 +347,24 @@ export class YdocClient {
     this._emit('change', { changes, local: false });
   }
 
+  // Call every listener; one that throws neither stops the others nor breaks
+  // the caller (an edit, a sync, a refusal).
   _emit(type, event) {
-    for (const fn of [...this._listeners[type]]) fn(event);
+    for (const fn of [...this._listeners[type]]) {
+      try {
+        fn(event);
+      } catch (err) {
+        reportError(err);
+      }
+    }
   }
+}
+
+// Rethrow a listener's error where nothing in the client can catch it: on a
+// timer, so it surfaces as an uncaught exception (Node) or `window.onerror`
+// (browsers), as an error in a DOM event listener does.
+function reportError(err) {
+  setTimeout(() => { throw err; }, 0);
 }
 
 /**
