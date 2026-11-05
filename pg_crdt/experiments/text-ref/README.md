@@ -53,7 +53,7 @@ node gen-fixtures.mjs && node fixtures-to-sql.mjs     # deterministic; same byte
 An op is accepted or rejected as a unit (atomically). Let `v` be the claimed vector, and `vadv` be `v` advanced run by run: before the first run `vadv = v`; after run `[r, s, ol, or, text]`, `vadv[r] = s + len(text) - 1`.
 
 Static rules: they depend on the op alone, and fire on arrival, before any waiting.
-- **V0 (shape).** `v` is present, replica ids are valid (non-empty, no `:`), every `v[r] >= 1`. The usual shape rules for `i` and `d`.
+- **V0 (shape).** `v` is present, replica keys are valid (an id without `:`, or `<id>:<device>` with a non-empty device, at most 256 bytes: the rule of `ydoc_`; `../../test/fixtures/replica-keys.json` is run by this reference and by the SQL spec `64_text_keys`), every `v[r] >= 1`. The usual shape rules for `i` and `d`.
 - **V1 (origins covered).** For every run, both origins `(q, t)` satisfy `t <= vadv[q]` (using `vadv` before that run).
 - **V2 (own seq).** For every run, `vadv[r] == s - 1` (using `vadv` before that run). This pins the first char of a replica's run to the claimed history, and lets a later run of the same op chain after an earlier one.
 - **V6 (deletes covered).** Every delete `[r, s, len]` has `s + len - 1 <= vadv_final[r]`, where `vadv_final` is `vadv` after the last run. An untrusted writer cannot delete ids it does not claim to have seen, so pre-deleting someone's future text is impossible. Honest ops therefore never need held deletes.

@@ -121,10 +121,11 @@ select tap.throws_ok(format('select crdt.ydoc_set(%L, %L, %L, %L)', 'post', 'x',
 select tap.is(pg_temp.why($$select crdt.ydoc_insert('nope', 0, 'x', 'alice')$$) || ' ' || pg_temp.why($$select crdt.ydoc_delete('nope', 0, 0, 'alice')$$)
               || ' ' || pg_temp.why($$select crdt.ydoc_set('nope', 'x', 'alice')$$) || ' ' || pg_temp.why($$select crdt.ydoc_apply('nope', '{"v": {}, "i": [["alice", 1, null, null, "x"]]}', 'alice')$$)
               || ' ' || pg_temp.why($$select crdt.ydoc_merge('nope', '{}')$$) || ' ' || pg_temp.why($$select crdt.ydoc_compact('nope')$$)
-              || ' ' || pg_temp.why($$select crdt.ydoc_drop('nope')$$) || ' ' || pg_temp.why($$select crdt.ydoc_ops_since('nope')$$),
-              'P0002 P0002 P0002 P0002 P0002 P0002 P0002 P0002', 'an unknown document: every write and ops_since raise P0002');
-select tap.is(crdt.ydoc_value('nope') is null and crdt.ydoc_length('nope') is null and crdt.ydoc_base('nope') is null
-              and crdt.ydoc_version('nope') = '{}'::jsonb, true, 'an unknown document: value, length and base are null, version is empty');
+              || ' ' || pg_temp.why($$select crdt.ydoc_drop('nope')$$) || ' ' || pg_temp.why($$select crdt.ydoc_ops_since('nope')$$)
+              || ' ' || pg_temp.why($$select crdt.ydoc_version('nope')$$),
+              'P0002 P0002 P0002 P0002 P0002 P0002 P0002 P0002 P0002', 'an unknown document: every write, ops_since and version raise P0002');
+select tap.is(crdt.ydoc_value('nope') is null and crdt.ydoc_length('nope') is null and crdt.ydoc_base('nope') is null, true,
+              'an unknown document: value, length and base are null');
 
 -- concurrent creates of one id
 

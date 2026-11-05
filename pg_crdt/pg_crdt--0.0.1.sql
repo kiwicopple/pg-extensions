@@ -2012,11 +2012,25 @@ begin
 end;
 $$;
 
--- The version vector of a document; '{}' for one that does not exist.
+-- The version vector of a document ('{}' for an empty one). P0002 for a
+-- document that does not exist, like the writers: '{}' would say "nothing
+-- yet", and a peer would then ask for the whole history of a typo.
 create function crdt.ydoc_version(doc text)
 returns jsonb
-language sql stable parallel safe
-return coalesce((select crdt._ydoc_version(d.id) from crdt.ydoc_docs d where d.uid = ydoc_version.doc), '{}'::jsonb);
+language plpgsql stable parallel safe
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+    v_doc bigint;
+begin
+    select d.id into v_doc from crdt.ydoc_docs d where d.uid = ydoc_version.doc;
+    if not found then
+        raise exception 'crdt.ydoc_version: document % does not exist', pg_catalog.quote_literal(pg_catalog.left(ydoc_version.doc, 256))
+            using errcode = 'P0002', hint = 'Create documents with crdt.ydoc_create().';
+    end if;
+    return crdt._ydoc_version(v_doc);
+end;
+$$;
 
 -- The version an editor starts from, for ydoc_set's base argument: the
 -- document, the write counter and the version vector. Read it in the same statement as the text:
@@ -2531,6 +2545,35 @@ begin
                                          order by x.lo desc limit 1) bl
               group by bl.lo) c
         where k.doc = v_doc and k.lo = c.lo
+        returning 1
+    )
+    select count(*) into removed from dl;
+    return removed;
+end;
+$$;
+
+-- Deletes the rows of the rejection log (ydoc_rejected) of a document, for one
+-- writer or, with a null writer, for all; returns the number of rows deleted.
+-- The log keeps the last _ydoc_rejected_max() per writer and document by
+-- itself; this is for apps that read it and want to empty it. Takes the
+-- document's lock, like a write, so it does not run alongside the call that
+-- decides a waiting op. Nothing else of the document changes.
+create function crdt.ydoc_rejected_purge(doc text, writer text default null)
+returns integer
+language plpgsql volatile
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+    v_doc bigint;
+    removed integer;
+begin
+    if doc is null then
+        raise exception 'crdt.ydoc_rejected_purge: doc must not be null' using errcode = '22004';
+    end if;
+    v_doc := (crdt._ydoc_lock(ydoc_rejected_purge.doc, 'ydoc_rejected_purge')).id;
+    with dl as (
+        delete from crdt.ydoc_rejected r
+        where r.doc = v_doc and (ydoc_rejected_purge.writer is null or r.writer = ydoc_rejected_purge.writer)
         returning 1
     )
     select count(*) into removed from dl;

@@ -17,7 +17,7 @@ Every error that `pg_crdt` raises, with its SQLSTATE, and the errors from Postgr
 | `42501` | `insufficient_privilege` | The install script | The schema `crdt` is owned by another non-superuser role, or another role has `CREATE` on it. |
 | `22023` | `invalid_parameter_value` | `ydoc_create` | The id is null, empty, longer than 256 bytes or has a control character. |
 | `23505` | `unique_violation` | `ydoc_create` | A document with this id exists. Creating is not idempotent: the existing document is never returned, so that nobody can take over a document by creating its predictable id. Two sessions that create one id at once get one success and one `23505`. See [Create a document with a client-chosen id](../guides/collaborative-text.md#create-a-document-with-a-client-chosen-id). |
-| `22004` | `null_value_not_allowed` | `ydoc_insert`, `ydoc_delete`, `ydoc_set` | `replica`, a position, a length or the text is null. |
+| `22004` | `null_value_not_allowed` | `ydoc_insert`, `ydoc_delete`, `ydoc_set`, `ydoc_rejected_purge` | `replica`, a position, a length or the text is null; for `ydoc_rejected_purge`, `doc` is null. |
 | `22023` | `invalid_parameter_value` | `ydoc_insert`, `ydoc_delete`, `ydoc_set` | A position or range outside the text; `replica` is not an entry key or is longer than 256 bytes; a `base` that is not a version of the document, or is older than its last compaction. |
 | `22023` | `invalid_parameter_value` | `ydoc_apply`, `ydoc_merge` | A malformed op; for `ydoc_apply`, an op without `v`, or one that breaks a causal rule (the message names it, `V0` to `V6`); the same ids sent again with other text or origins. `ydoc_apply` also: `replica` is not a replica id. |
 | `22023` | `invalid_parameter_value` | `ydoc_ops_since`, `ydoc_compact` | `vv` is not an object of whole numbers from 0; `horizon` outside 0 to the document's write counter. |
@@ -25,7 +25,7 @@ Every error that `pg_crdt` raises, with its SQLSTATE, and the errors from Postgr
 | `42501` | `insufficient_privilege` | Any `ydoc_` function (Postgres) | The caller has no privileges on the `crdt.ydoc_*` tables (`permission denied for table ydoc_docs`). This is the intended result for a client role: see [Collaborative text for a blog post](../guides/collaborative-text.md#set-up-the-roles-and-grants). |
 | `54000` | `program_limit_exceeded` | `ydoc_apply` | A quota of the untrusted path: more than 256 runs in one op, more than 16 device keys per owner and document, origins too far apart to check (250,000 rows), or too many waiting ops for the writer (100 ops or 256 kB). |
 | `54000` | `program_limit_exceeded` | Any `ydoc_` write | The order labels of a document ran out (`document ... has too many rows`). Not reachable at realistic sizes. |
-| `P0002` | `no_data_found` | Every `ydoc_` function that writes, and `ydoc_ops_since` | The document does not exist. The readers `ydoc_value`, `ydoc_length` and `ydoc_base` return null instead, and `ydoc_version` returns `{}`. |
+| `P0002` | `no_data_found` | Every `ydoc_` function that writes, `ydoc_ops_since` and `ydoc_version` | The document does not exist. The readers `ydoc_value`, `ydoc_length` and `ydoc_base` return null instead. |
 | `XX000` | `internal_error` | `ydoc_` internals | An invariant of a document's rows is broken (`no row labelled ...`, `... is not inside the run`). It means a bug, or a direct write to the tables: report it. |
 
 Several rows share a SQLSTATE for different reasons. Tell them apart with the message.

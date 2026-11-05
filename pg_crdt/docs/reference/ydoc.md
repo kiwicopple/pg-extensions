@@ -7,7 +7,7 @@ Unless an entry says otherwise, a function:
 - is `VOLATILE`, not `STRICT`, and not `security definer`;
 - pins `search_path` to `pg_catalog, pg_temp`;
 - has `EXECUTE` granted to `public`, and runs with the caller's privileges on the [tables](#tables), which nobody but their owner has at install. Without them, a call fails with `42501` (`permission denied for table ydoc_docs`);
-- raises `P0002` for a document that does not exist (the read-only [`ydoc_value`](#ydoc_value), [`ydoc_length`](#ydoc_length), [`ydoc_version`](#ydoc_version) and [`ydoc_base`](#ydoc_base) return null or `{}` instead);
+- raises `P0002` for a document that does not exist (the readers [`ydoc_value`](#ydoc_value), [`ydoc_length`](#ydoc_length) and [`ydoc_base`](#ydoc_base) return null instead);
 - looks the document up by its id and locks its row in one step when it writes, so writes to one document run one at a time (see [Concurrency](../types/collaborative-text.md#concurrency)).
 
 Positions and lengths count Unicode code points. A `replica` argument of a local edit is an [entry key](shared.md#replica-ids-and-entry-keys) of at most 256 bytes, which trusted code supplies.
@@ -26,6 +26,7 @@ Positions and lengths count Unicode code points. A `replica` argument of a local
 | [`ydoc_merge(doc, ops)`](#ydoc_merge) | `void` | Apply ops from a peer you trust. |
 | [`ydoc_ops_since(doc, vv)`](#ydoc_ops_since) | `jsonb` | The ops a copy at version `vv` lacks. |
 | [`ydoc_compact(doc, horizon)`](#ydoc_compact) | `integer` | Maintenance: merge rows that continue one run. |
+| [`ydoc_rejected_purge(doc, writer)`](#ydoc_rejected_purge) | `integer` | Maintenance: delete the rejection log of a document. |
 | [`ydoc_drop(doc)`](#ydoc_drop) | `void` | Delete a document and its rows. |
 
 Functions whose names start with `_ydoc_` are internal. They are granted to `public` because the functions above call them with the caller's privileges. Do not call them.
@@ -43,7 +44,7 @@ The extension creates these tables in `crdt`. They are its members: `drop extens
 | `ydoc_pending`, `ydoc_pending_deletes` | Inserts and deletes whose dependencies have not arrived (the trusted path). |
 | `ydoc_deps` | Per writer, the characters its inserts depend on (the untrusted path). |
 | `ydoc_pending_ops` | Untrusted ops that wait for characters named in their `v`. |
-| `ydoc_rejected` | Waiting ops that were refused when they were decided, by a later call: `writer`, `op`, `reason`, `at`. The last 100 per writer and document are kept. You may read and delete its rows. |
+| `ydoc_rejected` | Waiting ops that were refused when they were decided, by a later call: `writer`, `op`, `reason`, `at`. The last 100 per writer and document are kept. You may read its rows; [`ydoc_rejected_purge`](#ydoc_rejected_purge) deletes them. |
 
 Sequences: `ydoc_ins` (integration order) and the identity sequences of `ydoc_docs`, `ydoc_pending_ops` and `ydoc_rejected`.
 
@@ -133,9 +134,9 @@ The length of the text in code points, from a counter on the document's row (it 
 crdt.ydoc_version(doc text) returns jsonb
 ```
 
-The version vector `{key: highest seq}` of the characters the document has integrated, one index probe per entry key. `{}` for an empty document, and for a document that does not exist. Pass it to another copy's [`ydoc_ops_since`](#ydoc_ops_since) to get what this copy lacks.
+The version vector `{key: highest seq}` of the characters the document has integrated, one index probe per entry key. `{}` for an empty document. Pass it to another copy's [`ydoc_ops_since`](#ydoc_ops_since) to get what this copy lacks.
 
-**Labels.** `STABLE PARALLEL SAFE`. **Privileges.** `select` on the [tables](#tables). **Errors.** None of its own.
+**Labels.** `STABLE PARALLEL SAFE`. **Privileges.** `select` on the [tables](#tables). **Errors.** `P0002`: the document does not exist. (A missing document is an error, not `{}`: a peer that takes `{}` for "nothing yet" would ask for the whole history of a mistyped id.)
 
 ### `ydoc_base`
 
@@ -377,6 +378,30 @@ The horizon is stored on the document, and [`ydoc_set`](#ydoc_set) refuses a bas
 ```sql
 select crdt.ydoc_compact('welcome');
 -- 0
+```
+
+### `ydoc_rejected_purge`
+
+```text
+crdt.ydoc_rejected_purge(doc text, writer text default null) returns integer
+```
+
+Maintenance. Deletes the rows of the document in [`ydoc_rejected`](#tables), the log of waiting ops that were refused when they were decided. With `writer`, only that writer's rows; with the default null, every writer's. Returns the number of rows deleted. The log already keeps only the last 100 per writer and document, so you need this only to empty it after you have read it, for example from the job that tells writers their ops were refused. Other documents, the waiting ops and the text are not touched. It takes the document's lock, like a write.
+
+**Privileges.** `EXECUTE` to `public`, and the [table grants](#tables).
+
+**Errors**
+
+| SQLSTATE | When |
+| --- | --- |
+| `22004` | `doc` is null. |
+| `P0002` | The document does not exist. |
+
+```sql
+select crdt.ydoc_rejected_purge('welcome', 'mallory');
+-- 3
+select crdt.ydoc_rejected_purge('welcome');
+-- 1
 ```
 
 ### `ydoc_drop`

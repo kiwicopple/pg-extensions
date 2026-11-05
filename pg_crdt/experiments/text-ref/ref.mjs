@@ -25,9 +25,16 @@ export class OpRejected extends Error {
   }
 }
 
+// A replica key, as in the SQL extension (crdt._ydoc_is_key): an id without
+// ':', or <id>:<device> with a non-empty device (which may contain ':'), at
+// most 256 bytes. One writer identity can own several keys (a phone and a
+// laptop). Ownership ("this writer may use this key") is not decided here; the
+// reference has no writers. test/fixtures/replica-keys.json is run by both.
+const MAX_KEY_BYTES = 256;
+const REPLICA_KEY = /^[^:]+(?::[\s\S]+)?$/;
 function checkReplica(r) {
-  if (typeof r !== 'string' || r === '' || r.includes(':')) {
-    throw new TypeError(`invalid replica id: ${JSON.stringify(r)}`);
+  if (typeof r !== 'string' || !REPLICA_KEY.test(r) || Buffer.byteLength(r, 'utf8') > MAX_KEY_BYTES) {
+    throw new TypeError(`invalid replica key: ${JSON.stringify(r)}`);
   }
 }
 function checkSeq(s) {

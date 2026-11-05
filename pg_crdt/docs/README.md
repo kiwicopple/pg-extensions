@@ -26,7 +26,7 @@ New to the project? Read the [overview](overview.md), [install the extension](in
 | --- | --- |
 | [Shared](reference/shared.md) | Schema and naming, privileges, replica ids, `current_replica_id`, the settings, the state envelope and versioning |
 | [PN-Counter functions](reference/pn.md) | `pn_empty`, `pn_increment`, `pn_decrement`, `pn_value`, `pn_merge`, `pn_merge_agg`, `pn_is_valid`, `pn_apply_delta` |
-| [Collaborative text functions](reference/ydoc.md) | `ydoc_create`, `ydoc_value`, `ydoc_length`, `ydoc_version`, `ydoc_base`, `ydoc_insert`, `ydoc_delete`, `ydoc_set`, `ydoc_apply`, `ydoc_merge`, `ydoc_ops_since`, `ydoc_compact`, `ydoc_drop`; the tables and their grants; limits |
+| [Collaborative text functions](reference/ydoc.md) | `ydoc_create`, `ydoc_value`, `ydoc_length`, `ydoc_version`, `ydoc_base`, `ydoc_insert`, `ydoc_delete`, `ydoc_set`, `ydoc_apply`, `ydoc_merge`, `ydoc_ops_since`, `ydoc_compact`, `ydoc_rejected_purge`, `ydoc_drop`; the tables and their grants; limits |
 | [Errors](reference/errors.md) | Every SQLSTATE the extension raises, and the Postgres errors you can meet |
 | [Limits](reference/limits.md) | Numeric limits, growth, and what is not built |
 

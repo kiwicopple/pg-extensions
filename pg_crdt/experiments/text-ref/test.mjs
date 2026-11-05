@@ -1,5 +1,6 @@
 // Self-tests for ref.mjs. `node test.mjs` exits 0 on success, 1 on failure.
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { Doc, OpRejected, mergeOps } from './ref.mjs';
 import { mulberry32, ri, pick, shuffle, simulate, randLocalOp } from './sim.mjs';
 import { byzSim, tryApply } from './byz.mjs';
@@ -109,7 +110,7 @@ t('missing origins are buffered', () => {
 
 t('malformed ops rejected, state untouched', () => {
   const d = new Doc();
-  for (const bad of [{ i: [['a:b', 1, null, null, 'x']] }, { i: [['', 1, null, null, 'x']] },
+  for (const bad of [{ i: [['a:', 1, null, null, 'x']] }, { i: [['', 1, null, null, 'x']] },
     { i: [['a', 0, null, null, 'x']] }, { i: [['a', 1, null, null, '']] }, { i: [['a', 1, null]] },
     { d: [['a', 1, 0]] }, { d: [['a', 1]] }, { i: 'x' }, null]) {
     assert.throws(() => d.apply(bad), TypeError);
@@ -223,7 +224,7 @@ t('validated path: each rule rejects its violation', () => {
   d.apply(new Doc().localInsert('alice', 0, 'abc'), V); // a1 a2 a3
   d.apply({ v: { alice: 3 }, i: [['bob', 1, ['alice', 3], null, 'Z']], d: [] }, V); // fine
   rejects(d, { i: [], d: [] }, /malformed/);                                              // no v
-  rejects(d, { v: { 'a:b': 1 }, i: [], d: [] }, /malformed/);                              // bad id in v
+  rejects(d, { v: { 'a:': 1 }, i: [], d: [] }, /malformed/);                              // bad id in v
   rejects(d, { v: { alice: 0 }, i: [], d: [] }, /malformed/);                              // zero in v
   rejects(d, { v: { alice: 3 }, i: [['m1', 1, ['alice', 3], ['carol', 1], 'x']], d: [] }, /V1/); // or not covered
   rejects(d, { v: { alice: 3 }, i: [['m2', 2, null, null, 'x']], d: [] }, /V2/);          // seq forged
@@ -321,6 +322,31 @@ t('KNOWN HOLE (not covered by V1-V6): equivocation, two ops with the same id and
   const A = new Doc(), B = new Doc();
   tryApply(A, o1); tryApply(A, o2); tryApply(B, o2); tryApply(B, o1);
   assert.notEqual(A.text(), B.text()); // first arrival wins; needs an ownership/sequencing argument outside the CRDT
+});
+
+t('replica keys: the shared fixture (test/fixtures/replica-keys.json, also run by the SQL spec 64_text_keys)', () => {
+  const { cases } = JSON.parse(readFileSync(new URL('../../test/fixtures/replica-keys.json', import.meta.url), 'utf8'));
+  assert.ok(cases.length >= 20);
+  for (const c of cases) {
+    const key = typeof c.key === 'string' ? c.key : c.key.prefix + c.key.repeat.repeat(c.key.times);
+    const label = `${JSON.stringify(key.length > 40 ? key.slice(0, 20) + '...' : key)} (${c.why})`;
+    // local edits
+    const d = new Doc();
+    // trusted merge of an op that names the key
+    const e = new Doc();
+    const op = { i: [[key, 1, null, null, 'x']], d: [] };
+    if (c.ok) {
+      assert.doesNotThrow(() => d.localInsert(key, 0, 'x'), `localInsert accepts ${label}`);
+      assert.equal(d.text(), 'x');
+      assert.deepEqual(d.versionVector(), { [key]: 1 });
+      assert.doesNotThrow(() => e.apply(op), `apply accepts ${label}`);
+      assert.equal(e.text(), 'x');
+    } else {
+      assert.throws(() => d.localInsert(key, 0, 'x'), TypeError, `localInsert rejects ${label}`);
+      assert.throws(() => e.apply(op), TypeError, `apply rejects ${label}`);
+      assert.equal(e.text(), '');
+    }
+  }
 });
 
 console.log(`${passed} tests passed` + (process.exitCode ? ' (with failures)' : ''));

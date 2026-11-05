@@ -32,6 +32,7 @@ insert into client_api values
     ('crdt.ydoc_merge(text, jsonb)'),
     ('crdt.ydoc_ops_since(text, jsonb)'),
     ('crdt.ydoc_compact(text, bigint)'),
+    ('crdt.ydoc_rejected_purge(text, text)'),
     ('crdt.ydoc_drop(text)');
 
 create temp table ydoc_tables (rel regclass);
@@ -140,7 +141,8 @@ select tap.is(
      where oid in ('crdt.ydoc_create(text)'::regprocedure, 'crdt.ydoc_insert(text, integer, text, text)'::regprocedure,
                    'crdt.ydoc_delete(text, integer, integer, text)'::regprocedure, 'crdt.ydoc_set(text, text, text, jsonb)'::regprocedure,
                    'crdt.ydoc_apply(text, jsonb, text)'::regprocedure, 'crdt.ydoc_merge(text, jsonb)'::regprocedure,
-                   'crdt.ydoc_compact(text, bigint)'::regprocedure, 'crdt.ydoc_drop(text)'::regprocedure)
+                   'crdt.ydoc_compact(text, bigint)'::regprocedure, 'crdt.ydoc_rejected_purge(text, text)'::regprocedure,
+                   'crdt.ydoc_drop(text)'::regprocedure)
        and provolatile <> 'v'), null,
     'ydoc_ writers are VOLATILE');
 select tap.is(
