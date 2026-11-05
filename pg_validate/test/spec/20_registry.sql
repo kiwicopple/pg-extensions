@@ -44,7 +44,7 @@ select tap.is(
     'list_formats() shows the custom entry, its function, description and owner');
 select tap.is(
     (select count(*)::int from validate.list_formats() l where l.builtin),
-    42, 'list_formats() also lists the 42 built-in formats (37 validators, 5 JSON Schema aliases)');
+    54, 'list_formats() also lists the 54 built-in formats (44 validators, 10 JSON Schema aliases)');
 
 -- built-ins dispatch through the same path
 select tap.is(validate.format(name => 'email', value => 'joe@example.com'), true, 'format(email) calls validate.email');
@@ -53,7 +53,7 @@ select tap.is(validate.format(name => 'uuid', value => 'not a uuid'), false, 'fo
 select tap.is(
     (select count(*)::int from validate.list_formats() l
      where l.builtin and validate.format(l.name, '') is not null),
-    42, 'every built-in format dispatches');
+    54, 'every built-in format dispatches');
 
 -- duplicates and built-ins
 select tap.throws_ok($$ select validate.register_format(name => 'even-digits', validator => 'app.even_digits(text)') $$,

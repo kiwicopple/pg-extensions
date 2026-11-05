@@ -4,7 +4,7 @@ The registry maps a format name to a validator function. Every built-in validato
 
 Use the registry when the format is chosen at run time: a form builder that stores a format name per field, a JSON Schema's `format` keyword ([`json_schema`](json-schema.md)), or an import job configured with column formats. When the format is fixed, call the validator function directly.
 
-This page describes how to register a format, who may do it, and what runs with whose privileges. The [registry reference](reference/registry.md) lists the functions, their arguments and errors.
+This page describes how to register a format, who may do it, and what runs with whose privileges. The same model covers [named JSON schemas](#named-json-schemas). The [registry reference](reference/registry.md) lists the functions, their arguments and errors.
 
 ## Write a validator
 
@@ -67,7 +67,7 @@ The registry stores the function's schema and name, not its OID. Renaming or dro
 
 ## Built-in formats are fixed
 
-The 42 built-in formats are inserted by the extension and marked `builtin`: one per validator, plus the JSON Schema names `date-time`, `date`, `time`, `uri-reference` and `json-pointer`, which point at `rfc3339`, `rfc3339_date`, `rfc3339_time`, `uri_reference` and `json_pointer`. Nobody can replace or remove them, the extension owner and superusers included:
+The 54 built-in formats are inserted by the extension and marked `builtin`: one per validator, plus the JSON Schema names `date-time`, `date`, `time`, `uri-reference`, `json-pointer`, `relative-json-pointer`, `uri-template`, `iri-reference`, `idn-hostname` and `idn-email`, which point at `rfc3339`, `rfc3339_date`, `rfc3339_time`, `uri_reference`, `json_pointer`, `relative_json_pointer`, `uri_template`, `iri_reference`, `idn_hostname` and `idn_email`. Nobody can replace or remove them, the extension owner and superusers included:
 
 - `register_format` with a built-in name raises `42710`.
 - `unregister_format` of a built-in name raises `42501`.
@@ -129,10 +129,36 @@ Postgres checks a constraint only when a row is inserted or updated. If someone 
 
 For these reasons, call the validator function directly in constraints: `check (public.order_number(ref))` or `check (validate.email(email))`. Postgres then records a dependency on the function, so it cannot be dropped while the constraint exists. Use `validate.format` where the name really is data.
 
+If a constraint must use a custom format by name, through `validate.format` or a `format` keyword in a JSON Schema, add it `NOT VALID`. `pg_dump` restores the rows of your tables before the rows of `validate.formats`, so a constraint that is part of the table rejects every restored row whose check reaches the custom format. A `NOT VALID` constraint is dumped after the data and still checks every new and updated row; do not validate it afterwards. [Named JSON schemas](guides/named-schemas.md#use-the-schema-in-a-constraint) shows the pattern.
+
+## Named JSON schemas
+
+`validate.register_schema(name, schema)` stores a JSON Schema in the table `validate.schemas` for [`validate.json_schema_named`](json-schema.md#json_schema_named-and-json_schema_named_errors). [Named JSON schemas](guides/named-schemas.md) shows how to use them. The schema registry follows the model above:
+
+- **Reading is public.** Every role can call `json_schema_named`, `json_schema_named_errors` and `list_schemas`, and read `validate.schemas`. The schemas are not secret.
+- **Registering is not.** `register_schema` and `unregister_schema` are revoked from `PUBLIC`, and the caller needs `INSERT` or `DELETE` on `validate.schemas`; changing a schema in place needs `UPDATE`.
+- **Each entry has an owner,** enforced by the same trigger as the format registry, for the API and for direct writes. There are no built-in schemas.
+- **Formats run as the caller.** A schema's `format` keywords call validators with the privileges of whoever calls `json_schema_named`.
+
+The trigger also checks every schema that is inserted or updated, and stores its evaluation context in the `compiled` column, so a schema in the table is never out of step with its context.
+
+As the extension owner, let a role register schemas:
+
+```sql
+grant execute on function
+  validate.register_schema(text, jsonb, text),
+  validate.unregister_schema(text)
+to app_admin;
+
+grant insert, update, delete
+on validate.schemas
+to app_admin;
+```
+
 ## Backups and upgrades
 
-When the extension is installed with `create extension`, the registry table is an extension configuration table (`pg_extension_config_dump` with the filter `where not builtin`). `pg_dump` keeps the formats you registered, with their owners, and leaves out the built-in rows, which `create extension` recreates on restore. Restore the functions your formats use before the data, which `pg_dump` does by default.
+When the extension is installed with `create extension`, the registry tables are extension configuration tables (`pg_extension_config_dump`): `validate.formats` with the filter `where not builtin`, and `validate.schemas` with all its rows. `pg_dump` keeps the formats and schemas you registered, with their owners, and leaves out the built-in formats, which `create extension` recreates on restore. Restore the functions your formats use before the data, which `pg_dump` does by default. Constraints that use a custom format or a named schema need to be `NOT VALID` to restore; see [Formats in CHECK constraints](#formats-in-check-constraints).
 
 The registry stores schema and function names, not `regprocedure` values, so `pg_upgrade` works: it refuses tables with `reg*` columns other than `regclass`, `regrole` and `regtype`.
 
-After a plain `psql -f` install there is no extension object, and `pg_dump` dumps the whole table, built-in rows included, as ordinary data.
+After a plain `psql -f` install there is no extension object, and `pg_dump` dumps the whole tables, built-in rows included, as ordinary data.

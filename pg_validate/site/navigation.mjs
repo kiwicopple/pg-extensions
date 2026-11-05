@@ -8,6 +8,7 @@ export const pages = [
   { src: 'docs/guides/constraints.md', route: 'guides/constraints', label: 'Use validators in constraints' },
   { src: 'docs/guides/normalization.md', route: 'guides/normalization', label: 'Canonical forms and normalizing input' },
   { src: 'docs/registry.md', route: 'guides/custom-formats', label: 'Custom formats' },
+  { src: 'docs/guides/named-schemas.md', route: 'guides/named-schemas', label: 'Named JSON schemas' },
   { src: 'docs/reference/identifiers.md', route: 'reference/identifiers', label: 'Identifiers' },
   { src: 'docs/reference/internet.md', route: 'reference/internet', label: 'Internet' },
   { src: 'docs/reference/dates.md', route: 'reference/dates', label: 'Dates and times' },
@@ -31,7 +32,12 @@ export const sidebar = [
   },
   {
     label: 'Guides',
-    items: [item('guides/constraints'), item('guides/normalization'), item('guides/custom-formats')],
+    items: [
+      item('guides/constraints'),
+      item('guides/normalization'),
+      item('guides/custom-formats'),
+      item('guides/named-schemas'),
+    ],
   },
   {
     label: 'Reference',

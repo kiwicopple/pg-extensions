@@ -20,13 +20,13 @@ The extension is pure SQL and PL/pgSQL. It needs no other extension, no C code a
 
 ## Features
 
-- 37 validators, each following a cited specification: RFC 5321/5322 email syntax, RFC 3986 URIs, RFC 3339 and ISO 8601 dates with real calendar checks, RFC 9562 UUIDs, SemVer 2.0.0, ISO 3166, 4217 and 639-1 codes, IBAN MOD 97, ISBN and Luhn check digits, and more.
+- 44 validators, each following a cited specification: RFC 5321/5322 email syntax, RFC 3986 URIs and RFC 3987 IRIs, IDNA2008 host names, RFC 3339 and ISO 8601 dates with real calendar checks, RFC 9562 UUIDs, SemVer 2.0.0, ISO 3166, 4217 and 639-1 codes, IBAN MOD 97, ISBN and Luhn check digits, ECMA-262 regular expression syntax, and more.
 - Honest volatility: every built-in validator is `IMMUTABLE STRICT PARALLEL SAFE` because it reads no catalog or setting. Results do not change with `TimeZone`, `DateStyle` or collation.
 - Documented boundaries: every validator states what it guarantees and what it does not. Validators check structure, never existence: a valid email address may be undeliverable.
 - A format registry with ownership and a clear security model: registration is not granted to `PUBLIC`, built-in formats cannot be replaced, and custom validators run with the caller's privileges.
-- `pg_dump` keeps registered formats (an extension configuration table).
-- JSON Schema Draft 2020-12 in PL/pgSQL: every core, applicator, unevaluated and validation keyword, local `$ref`, `$anchor` and `$dynamicRef`, and format assertion through the registry, with an error report that gives instance and keyword locations. It passes the official JSON Schema Test Suite apart from documented exceptions (remote references, `\p{...}` in patterns, formats without a validator).
-- A test suite of over 3,200 assertions, including published test vectors and the official JSON Schema Test Suite, run on Postgres 16, 17 and 18 in Docker, including pg_tle and `create extension` installs.
+- `pg_dump` keeps registered formats and named schemas (extension configuration tables).
+- JSON Schema Draft 2020-12 in PL/pgSQL: every core, applicator, unevaluated and validation keyword, local `$ref`, `$anchor` and `$dynamicRef`, and format assertion through the registry, with a validator for every Draft 2020-12 format and an error report that gives instance and keyword locations. Schemas can be registered by name, checked once and stored with their index. It passes the official JSON Schema Test Suite apart from documented exceptions (remote references, `\p{...}` in patterns).
+- A test suite of over 3,600 assertions, including published test vectors and the official JSON Schema Test Suite, run on Postgres 16, 17 and 18 in Docker, including pg_tle and `create extension` installs.
 
 ## Quick start
 
@@ -95,4 +95,4 @@ Create the Vercel project with the Root Directory `pg_validate`. The install com
 
 ## Contributing
 
-To run the tests, see [`test/README.md`](test/README.md). To run Postgres 16, 17 and 18 with pg_tle, see [`docker/README.md`](docker/README.md). Write documentation as described in [`STYLE.md`](STYLE.md). The documentation site (Astro + Starlight) is in [`site/`](site/README.md). The sources of the embedded code lists (ISO 3166-1, ISO 4217, ISO 639-1 and the IBAN registry), and the script that compares them with the extension, are in [`data/`](data/README.md).
+To run the tests, see [`test/README.md`](test/README.md). To run Postgres 16, 17 and 18 with pg_tle, see [`docker/README.md`](docker/README.md). Write documentation as described in [`STYLE.md`](STYLE.md). The documentation site (Astro + Starlight) is in [`site/`](site/README.md). The sources of the embedded code lists (ISO 3166-1, ISO 4217, ISO 639-1 and the IBAN registry) and IDNA tables, and the scripts that compare them with the extension, are in [`data/`](data/README.md). The JSON Schema benchmark is in [`bench/`](bench/run.sh).

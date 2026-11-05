@@ -104,7 +104,7 @@ select validate.email(value => 'ada@example.com');
 select count(*)
 from validate.list_formats()
 where builtin;
--- 42: 37 validators and 5 JSON Schema names
+-- 54: 44 validators and 10 JSON Schema names
 ```
 
 If the first query fails with `schema "validate" does not exist`, the install did not run in this database.

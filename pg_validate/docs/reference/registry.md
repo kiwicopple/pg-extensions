@@ -1,6 +1,6 @@
 # Registry functions
 
-Functions and the table of the format registry. [Custom formats](../registry.md) explains how to use them and the security model.
+Functions and tables of the format registry and the schema registry. [Custom formats](../registry.md) explains how to use them and the security model; [Named JSON schemas](../guides/named-schemas.md) shows the schema registry in use. [`json_schema_named`](../json-schema.md#json_schema_named-and-json_schema_named_errors) is on the JSON Schema page.
 
 | Function | Volatility | Who can call it |
 | --- | --- | --- |
@@ -8,6 +8,9 @@ Functions and the table of the format registry. [Custom formats](../registry.md)
 | [`list_formats`](#list_formats) | `STABLE` | Everyone |
 | [`register_format`](#register_format) | `VOLATILE`, `SECURITY INVOKER` | The extension owner and roles it grants |
 | [`unregister_format`](#unregister_format) | `VOLATILE`, `SECURITY INVOKER` | The extension owner and roles it grants |
+| [`list_schemas`](#list_schemas) | `STABLE` | Everyone |
+| [`register_schema`](#register_schema) | `VOLATILE`, `SECURITY INVOKER` | The extension owner and roles it grants |
+| [`unregister_schema`](#unregister_schema) | `VOLATILE`, `SECURITY INVOKER` | The extension owner and roles it grants |
 
 ### `format`
 
@@ -127,3 +130,82 @@ select validate.unregister_format(name => 'order-number');
 | `created_at` | `timestamptz` | Time of registration. |
 
 `PUBLIC` has `SELECT`. Write it through `register_format` and `unregister_format`; direct writes go through the same ownership and built-in checks (a trigger), and need `INSERT` or `DELETE`, which nobody but the owner has by default. `UPDATE` and `TRUNCATE` are never needed.
+
+### `list_schemas`
+
+```text
+validate.list_schemas() returns table (
+  name text,
+  schema jsonb,
+  description text,
+  owner name
+)
+```
+
+Returns every named JSON schema, by name. `owner` is the role that registered it.
+
+Errors: none.
+
+### `register_schema`
+
+```text
+validate.register_schema(
+  name text,
+  schema jsonb,
+  description text default null
+) returns void
+```
+
+Checks `schema` and stores it under `name`, owned by the current role, with its evaluation context. The checks are listed in [Named JSON schemas](../guides/named-schemas.md#register-a-schema); every error message names the location in the schema. The caller needs `EXECUTE` on `register_schema` and `INSERT` on `validate.schemas`.
+
+Errors:
+
+| SQLSTATE | When |
+| --- | --- |
+| `22004` | `name` or `schema` is null. |
+| `22023` | `name` does not match `^[A-Za-z][A-Za-z0-9_.-]{0,62}$`; a subschema is not an object or a boolean; or a `$ref` or `$dynamicRef` target is not in the schema. |
+| `0A000` | A remote `$ref` or `$dynamicRef`, or `\p{...}` in a pattern. |
+| `2201B` | A pattern Postgres cannot compile. |
+| `42501` | The caller cannot execute `register_schema` or insert into `validate.schemas`. |
+| `42704` | A `format` that is not registered. |
+| `42710` | `name` is already registered. |
+
+```sql
+select validate.register_schema(
+  name => 'address',
+  schema => '{"type": "object", "required": ["city"]}',
+  description => 'A postal address'
+);
+```
+
+### `unregister_schema`
+
+```text
+validate.unregister_schema(name text) returns void
+```
+
+Removes a named schema. The caller needs `EXECUTE` on `unregister_schema` and `DELETE` on `validate.schemas`, and must be the entry's owner, have the owner's privileges, or have the extension owner's privileges. Constraints that use the name fail with `42704` afterwards.
+
+Errors:
+
+| SQLSTATE | When |
+| --- | --- |
+| `42704` | No schema has this name. |
+| `42501` | The caller is not allowed to remove this entry or lacks a privilege above. |
+
+```sql
+select validate.unregister_schema(name => 'address');
+```
+
+## The `validate.schemas` table
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `name` | `text` | Primary key. |
+| `schema` | `jsonb` | The schema as registered. |
+| `compiled` | `jsonb` | The evaluation context `json_schema_named` reads. Set by a trigger from `schema` on every insert and update; whatever you write is replaced. |
+| `description` | `text` | Free text. |
+| `owner` | `name` | Role that registered the entry. |
+| `created_at` | `timestamptz` | Time of registration. |
+
+`PUBLIC` has `SELECT`. Writes, through the functions or directly, go through the ownership check and the schema check of a trigger. `UPDATE ... set schema = ...` changes a schema in place and needs `UPDATE`; `TRUNCATE` raises `42501`.
