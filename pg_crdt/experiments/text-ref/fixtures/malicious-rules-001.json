@@ -1,0 +1,39 @@
+{
+"ops": [
+  {"v":{"alice":3},"i":[["m07",1,["alice",2],["alice",2],"x"]],"d":[]},
+  {"v":{"alice":3},"i":[["m07",1,["alice",2],["alice",2],"x"]],"d":[]},
+  {"v":{"alice":2,"bob":1},"i":[["m05",1,null,null,"x"]],"d":[]},
+  {"v":{"alice":3},"i":[["bob",1,["alice",3],null,"Z"]],"d":[]},
+  {"v":{"alice":3,"m04":1},"i":[["m04",1,null,null,"x"]],"d":[]},
+  {"v":{"alice":3,"bob":1},"i":[["m09",1,["bob",1],null,"ok"],["m09",3,["alice",1],["alice",3],"bad"]],"d":[]},
+  {"v":{"alice":3},"i":[],"d":[["alice",3,2]]},
+  {"v":{},"i":[["alice",1,null,null,"abc"]],"d":[]},
+  {"v":{"alice":3},"i":[["m06",1,["alice",3],["alice",1],"x"]],"d":[]},
+  {"v":{"alice":3},"i":[],"d":[["ghost",1,1]]},
+  {"v":{"alice":3},"i":[["m08",1,["alice",1],["alice",3],"x"]],"d":[]},
+  {"v":{"alice":3},"i":[["m02",1,["alice",3],["carol",1],"x"]],"d":[]},
+  {"v":{"alice":2,"bob":1},"i":[["m05",1,null,null,"x"]],"d":[]},
+  {"v":{"alice":2},"i":[["m11",1,["alice",1],["alice",2],"+"]],"d":[]},
+  {"v":{"alice":3},"i":[["m03",2,null,null,"x"]],"d":[]},
+  {"v":{"alice":3},"i":[["m10",1,["alice",1],["alice",2],"-"]],"d":[]}
+],
+"ops_causal": [
+  {"v":{},"i":[["alice",1,null,null,"abc"]],"d":[]},
+  {"v":{"alice":3},"i":[["m10",1,["alice",1],["alice",2],"-"]],"d":[]},
+  {"v":{"alice":3},"i":[["m06",1,["alice",3],["alice",1],"x"]],"d":[]},
+  {"v":{"alice":3},"i":[["m07",1,["alice",2],["alice",2],"x"]],"d":[]},
+  {"v":{"alice":3},"i":[["m02",1,["alice",3],["carol",1],"x"]],"d":[]},
+  {"v":{"alice":3},"i":[],"d":[["ghost",1,1]]},
+  {"v":{"alice":3},"i":[],"d":[["alice",3,2]]},
+  {"v":{"alice":3},"i":[["m08",1,["alice",1],["alice",3],"x"]],"d":[]},
+  {"v":{"alice":3},"i":[["bob",1,["alice",3],null,"Z"]],"d":[]},
+  {"v":{"alice":3,"m04":1},"i":[["m04",1,null,null,"x"]],"d":[]},
+  {"v":{"alice":2,"bob":1},"i":[["m05",1,null,null,"x"]],"d":[]},
+  {"v":{"alice":3},"i":[["m03",2,null,null,"x"]],"d":[]},
+  {"v":{"alice":3,"bob":1},"i":[["m09",1,["bob",1],null,"ok"],["m09",3,["alice",1],["alice",3],"bad"]],"d":[]},
+  {"v":{"alice":2},"i":[["m11",1,["alice",1],["alice",2],"+"]],"d":[]}
+],
+"rejected": [0,1,2,4,5,6,8,9,10,11,12,14],
+"rejected_causal": [2,3,4,5,6,7,9,10,11,12],
+"expected": "a-+bcZ"
+}

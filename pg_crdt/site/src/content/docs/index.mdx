@@ -1,0 +1,40 @@
+---
+title: pg_crdt
+description: CRDTs (conflict-free replicated data types) for Postgres, in SQL and PL/pgSQL. A PN-Counter and collaborative text that several writers change independently and merge later.
+template: splash
+hero:
+  tagline: Counters and text that several writers change independently and merge later, in plain Postgres, on any client.
+  actions:
+    - text: Count your first row
+      link: ./get-started/quickstart/
+      icon: right-arrow
+    - text: Install
+      link: ./install/
+      variant: minimal
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+`pg_crdt` is a SQL and PL/pgSQL extension for Postgres 16, 17 and 18. A CRDT is a value that several writers can change independently and merge later, in any order and any number of times, and still agree on the result. Version 0.0.1 has two types: the PN-Counter, a counter that goes up and down, where every writer keeps its own running totals, and collaborative text, a plain-text document that several people edit at once.
+
+It works with any client, driver or API layer, needs no superuser and no C, and assumes no identity provider. Read the [overview](./overview/) for what a CRDT gives you, and when a plain column is the better choice.
+
+## Find your way
+
+<CardGrid>
+  <LinkCard title="Quickstart" description="A counter column, two writers and a merge, in a few minutes" href="./get-started/quickstart/" />
+  <LinkCard title="Update safely" description="Merge in the same statement that writes, and why" href="./guides/safe-updates/" />
+  <LinkCard title="Untrusted clients" description="Wrapper functions around pn_apply_delta, with any identity source" href="./guides/security/" />
+  <LinkCard title="Storage and performance" description="State column or insert-only deltas, indexes and benchmark numbers" href="./guides/storage-and-performance/" />
+  <LinkCard title="PN-Counter" description="The state, how merge works and the crdt.pn domain" href="./types/pn-counter/" />
+  <LinkCard title="Collaborative text" description="A blog post that several people edit: form saves, live ops, search" href="./guides/collaborative-text/" />
+  <LinkCard title="Reference" description="Every function, setting, error and limit" href="./reference/pn/" />
+</CardGrid>
+
+## One rule
+
+Merge in the statement that writes: `update posts set likes = crdt.pn_merge(likes, $1) where id = $2`. Never read the state, merge it in your application and write the result back. See [Update safely](./guides/safe-updates/).
+
+Text documents are written through the `ydoc_` functions, which lock the document. Sets, registers and maps are planned: see the [overview](./overview/#the-types).
+
+For agents and other tools, the [Markdown index](./llms.txt) links to plain-text versions of every page.

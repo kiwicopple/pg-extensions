@@ -1,0 +1,119 @@
+{
+  "description": "Page inventory and sidebar for the pg_crdt section of the research docs site (research-site/ at the repo root). src is relative to this directory; route and slug are relative to /pg_crdt/ (an empty route is the index). userSite is the placeholder URL of the user documentation (DEFAULT_SITE in ../site/astro.config.mjs): change both together.",
+  "title": "pg_crdt",
+  "userSite": "https://pg-crdt.vercel.app",
+  "pages": [
+    {
+      "src": "README.md",
+      "route": "",
+      "label": "Overview"
+    },
+    {
+      "src": "prompt.md",
+      "route": "prompt",
+      "label": "Research prompt"
+    },
+    {
+      "src": "architecture.md",
+      "route": "architecture",
+      "label": "Architecture"
+    },
+    {
+      "src": "text.md",
+      "route": "text",
+      "label": "Text CRDT design"
+    },
+    {
+      "src": "runtimes.md",
+      "route": "runtimes",
+      "label": "Runtimes: pg_tle and PL/pgSQL"
+    },
+    {
+      "src": "prior-art.md",
+      "route": "prior-art",
+      "label": "Prior art"
+    },
+    {
+      "src": "sql-integration.md",
+      "route": "sql-integration",
+      "label": "SQL integration"
+    },
+    {
+      "src": "orioledb.md",
+      "route": "orioledb",
+      "label": "OrioleDB"
+    },
+    {
+      "src": "benchmarks/pn-counter.md",
+      "route": "benchmarks/pn-counter",
+      "label": "PN-Counter benchmarks"
+    },
+    {
+      "src": "benchmarks/text.md",
+      "route": "benchmarks/text",
+      "label": "Text CRDT benchmarks"
+    },
+    {
+      "src": "journal.md",
+      "route": "journal",
+      "label": "Build journal"
+    }
+  ],
+  "sidebar": [
+    {
+      "label": "Overview",
+      "slug": ""
+    },
+    {
+      "label": "Research prompt",
+      "slug": "prompt"
+    },
+    {
+      "label": "Architecture",
+      "slug": "architecture"
+    },
+    {
+      "label": "Text CRDT design",
+      "slug": "text"
+    },
+    {
+      "label": "Background",
+      "collapsed": true,
+      "items": [
+        {
+          "label": "Runtimes: pg_tle and PL/pgSQL",
+          "slug": "runtimes"
+        },
+        {
+          "label": "Prior art",
+          "slug": "prior-art"
+        },
+        {
+          "label": "SQL integration",
+          "slug": "sql-integration"
+        },
+        {
+          "label": "OrioleDB",
+          "slug": "orioledb"
+        }
+      ]
+    },
+    {
+      "label": "Benchmarks",
+      "items": [
+        {
+          "label": "PN-Counter benchmarks",
+          "slug": "benchmarks/pn-counter"
+        },
+        {
+          "label": "Text CRDT benchmarks",
+          "slug": "benchmarks/text"
+        }
+      ]
+    },
+    {
+      "label": "Build journal",
+      "slug": "journal"
+    }
+  ]
+}

@@ -9,10 +9,11 @@ on:
       - '*/research/**'
       - 'research-site/**'
       - '.github/workflows/research-docs.yml'
-      # inputs of the pg_permissions chart pages and user-site links
+      # inputs of the pg_permissions chart pages and user-site links (pg_crdt: user-site links only)
       - 'pg_permissions/bench/baselines/data/**'
       - 'pg_permissions/bench/**/workloads/**'
       - 'pg_permissions/site/navigation.mjs'
+      - 'pg_crdt/site/navigation.mjs'
   workflow_dispatch:
 
 permissions:

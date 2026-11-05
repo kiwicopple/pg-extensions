@@ -1,0 +1,15 @@
+{
+"ops": [
+  {"v":{},"i":[["alice",1,null,null,"abc"]],"d":[]},
+  {"v":{},"i":[["bob",1,null,null,"Y"]],"d":[]},
+  {"v":{"alice":3},"i":[["mal",1,null,["alice",2],"X"]],"d":[]}
+],
+"ops_causal": [
+  {"v":{},"i":[["alice",1,null,null,"abc"]],"d":[]},
+  {"v":{},"i":[["bob",1,null,null,"Y"]],"d":[]},
+  {"v":{"alice":3},"i":[["mal",1,null,["alice",2],"X"]],"d":[]}
+],
+"rejected": [2],
+"rejected_causal": [2],
+"expected": "abcY"
+}
