@@ -46,13 +46,13 @@ Each [reference page](README.md#reference) has a **Guarantees** and a **Does not
 | Group | Validators |
 | --- | --- |
 | [Identifiers](reference/identifiers.md) | `uuid`, `ulid`, `nanoid`, `slug`, `semver`, `git_sha` |
-| [Internet](reference/internet.md) | `email`, `url`, `uri`, `uri_reference`, `domain`, `hostname`, `ipv4`, `ipv6`, `mac`, `port` |
+| [Internet](reference/internet.md) | `email`, `idn_email`, `url`, `uri`, `uri_reference`, `iri`, `iri_reference`, `domain`, `hostname`, `idn_hostname`, `ipv4`, `ipv6`, `mac`, `port` |
 | [Dates and times](reference/dates.md) | `iso8601`, `rfc3339`, `rfc3339_date`, `rfc3339_time`, `duration` |
 | [International](reference/international.md) | `e164`, `country_code`, `country_code_alpha3`, `currency_code`, `language_code` |
-| [Developer formats](reference/developer.md) | `base64`, `base64url`, `hex`, `json_pointer`, `cron` |
+| [Developer formats](reference/developer.md) | `base64`, `base64url`, `hex`, `json_pointer`, `relative_json_pointer`, `uri_template`, `regex`, `cron` |
 | [Financial](reference/financial.md) | `iban`, `isbn`, `isbn10`, `isbn13`, `card_number`, `luhn` |
 
-[Custom formats](registry.md) covers the registry. [JSON Schema](json-schema.md) covers `validate.json_schema(doc, schema)`, which validates `jsonb` documents against Draft 2020-12 schemas and checks `format` through the registry. The [roadmap](roadmap.md) lists the formats under consideration.
+[Custom formats](registry.md) covers the registry. [JSON Schema](json-schema.md) covers `validate.json_schema(doc, schema)`, which validates `jsonb` documents against Draft 2020-12 schemas and checks `format` through the registry, and [Named JSON schemas](guides/named-schemas.md) covers registering a schema by name. The [roadmap](roadmap.md) lists the formats under consideration.
 
 ## Goals that shape the extension
 

@@ -1,6 +1,6 @@
 # pg_validate test suite
 
-The tests are the specification of the extension. Each file in `spec/` is one goal, stated in its first comment line. The harness is the one `pg_permissions` uses, without designs or benchmarks.
+The tests are the specification of the extension. Each file in `spec/` is one goal, stated in its first comment line. The harness is the one `pg_permissions` uses, without designs. The JSON Schema benchmark is separate: `bench/run.sh`, see `docs/json-schema.md#performance`.
 
 The tests need only the Postgres binaries: `initdb`, `pg_ctl`, `psql`, and `pg_dump` for one spec. The runner finds Postgres.app by itself; otherwise, set `PGBIN`. With Docker, nothing needs to be installed locally.
 
@@ -41,10 +41,10 @@ test/
 | --- | --- |
 | `0x_` | Install, privileges, pg_tle, `create extension` and `pg_dump` |
 | `1x_` | Validators, one file per reference page, with published test vectors |
-| `2x_` | Registry: API, permissions and ownership, volatility markings |
+| `2x_` | Registry: API, permissions and ownership, volatility markings, named JSON schemas (`23`) |
 | `3x_` | `CHECK` constraints and domains |
 | `4x_` | JSON Schema: `40`-`42` are generated from the official JSON Schema Test Suite, `43` is hand-written |
-| `9x_` | The documentation's examples, as written (`90` quickstart, `91` custom formats and constraints guide, `92` JSON Schema, `93` canonical forms and normalization) |
+| `9x_` | The documentation's examples, as written (`90` quickstart, `91` custom formats and constraints guide, `92` JSON Schema, `93` canonical forms and normalization, `94` named JSON schemas) |
 
 ## The JSON Schema Test Suite
 

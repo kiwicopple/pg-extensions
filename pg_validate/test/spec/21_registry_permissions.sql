@@ -53,7 +53,7 @@ select tap.throws_ok($$ insert into validate.formats (name, validator_schema, va
 select tap.throws_ok($$ select validate.unregister_format(name => 'secret-member') $$,
                      '42501', 'an unprivileged role cannot unregister');
 select tap.is(validate.format(name => 'email', value => 'a@example.com'), true, 'an unprivileged role can call format()');
-select tap.is((select count(*)::int from validate.list_formats()), 43, 'an unprivileged role can list formats');
+select tap.is((select count(*)::int from validate.list_formats()), 55, 'an unprivileged role can list formats');
 reset role;
 
 -- a granted role registers and owns its entry
