@@ -54,6 +54,11 @@
       "label": "Text CRDT benchmarks"
     },
     {
+      "src": "benchmarks/vacuum-wal.md",
+      "route": "benchmarks/vacuum-wal",
+      "label": "Vacuum, bloat and WAL"
+    },
+    {
       "src": "journal.md",
       "route": "journal",
       "label": "Build journal"
@@ -108,6 +113,10 @@
         {
           "label": "Text CRDT benchmarks",
           "slug": "benchmarks/text"
+        },
+        {
+          "label": "Vacuum, bloat and WAL",
+          "slug": "benchmarks/vacuum-wal"
         }
       ]
     },
