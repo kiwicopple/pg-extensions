@@ -97,6 +97,67 @@ These are measured in the [text benchmarks](../../research/benchmarks/text.md) a
 
 Every function and its errors: [Collaborative text column functions](../reference/yseq.md).
 
+### Benchmarks of `yseq_`
+
+Edits to a `yseq_` column are cheap while the document is small or saved at save rate, and they get expensive as the document grows or is edited per keystroke. Every edit rewrites the whole value, so WAL per keystroke grew with the document in the benchmarks, from 3,376 bytes at 1 kB of text to 78,733 bytes at 100 kB, and every old value stays as dead TOAST until `VACUUM` reclaims it. Under default autovacuum, a table of documents edited per keystroke settled at about 100 times its live data (103 to 109 times at 5 and 20 kB), and at 100 kB documents and 200 keystrokes a second autovacuum did not keep up: 2,016 MB after 3 minutes, for about 7 MB of live data. At save rate, one save of a 5 kB post took 0.45 to 3.15 ms and about 13 to 14 kB of WAL; bloat at save rate was not measured, and the formula in the vacuum benchmarks predicts proportionally less.
+
+Size on disk, 1,001 posts of about 5 kB after `vacuum full` ([text benchmarks](../../research/benchmarks/text.md), storage):
+
+| Column | kB per post | Total against plain text (pglz) |
+| --- | ---: | ---: |
+| plain `text`, pglz (default) | 4.2 | 1.00 |
+| plain `text`, `compression lz4` | 5.6 | 1.32 |
+| `yseq_`, pglz | 5.7 | 1.34 |
+| `yseq_`, `compression lz4` | 6.3 | 1.48 |
+
+With a GIN index on `to_tsvector('english', crdt.yseq_value(body))`, a `yseq_` post took 9.7 kB, against 7.6 kB for plain text with the same index (1.27 times).
+
+Latency of one keystroke: a one-character insert at a random position in the first half, one per transaction, 1,000 transactions, mean in ms with the client round trip included (text benchmarks, size sweep). The GIN column recomputes `to_tsvector` for the whole text on every update.
+
+| Text size | plain `text` (lz4) | `yseq_` | `yseq_` with GIN |
+| ---: | ---: | ---: | ---: |
+| 1 kB | 0.03 | 0.21 | 0.35 |
+| 5 kB | 0.06 | 0.29 | 0.78 |
+| 20 kB | 0.15 | 0.39 | 2.34 |
+| 50 kB | 0.33 | 0.53 | 5.35 |
+| 100 kB | 0.62 | 0.89 | 10.3 |
+
+WAL per keystroke in bytes for the same kind of edit, on 100 documents per size with a 40-edit history ([vacuum benchmarks](../../research/benchmarks/vacuum-wal.md)). 'Cold' starts right after a checkpoint and 'warm' does not. The last row comes from the text benchmarks, an earlier run on an older version of the code and different documents. It measured more WAL for the same edit, and both runs show the WAL growing with the document.
+
+| WAL bytes per keystroke | 1 kB | 5 kB | 20 kB | 100 kB |
+| --- | ---: | ---: | ---: | ---: |
+| plain `text` (lz4), cold | 541 | 5,292 | 16,504 | 76,648 |
+| `yseq_` (lz4), cold | 3,376 | 7,118 | 18,459 | 78,733 |
+| `yseq_` (lz4), warm | 3,706 | 7,449 | 18,419 | 75,978 |
+| `yseq_` in the text benchmarks | 11,123 | 19,168 | 36,664 | 122,390 |
+
+From 5 kB up, 96 to 100% of the `yseq_` WAL is the new TOAST chunks, that is, the whole compressed value, and 0 to 4% is full-page images. From 5 kB up, `yseq_` was within 1.1 to 1.6 times a plain `text` column with the same edits in bloat and WAL (2.2 times in one autovacuum run), because this is how Postgres treats any large value that is rewritten often. The difference is at the bottom of the range: the `yseq_` state is already a 2.4 kB TOASTed value at 1 kB of text, where plain text stays inline and HOT pruning cleans up (95 MB against 2.29 MB after 20,000 keystrokes on 100 documents).
+
+Bloat of 100 documents in MB, with the number of times the live data in parentheses. 'Autovacuum off' is after 20,000 keystrokes and before `VACUUM`. 'Default autovacuum' is the size at the end of 3 minutes at 200 keystrokes a second, spread over the 100 documents. After `VACUUM`, 97 to 98% of the TOAST file was reusable and none of it was returned; only `VACUUM FULL` returns it.
+
+| Text size | `yseq_`, autovacuum off | plain `text`, autovacuum off | `yseq_`, default autovacuum | plain `text`, default autovacuum |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 kB | 95.5 (158x) | 2.29 (17x) | 88 (107x) | 1.25 (8x) |
+| 5 kB | 168 (163x) | 106 (238x) | 140 (103x) | 65 (140x) |
+| 20 kB | 372 (182x) | 312 (222x) | 267 (109x) | 192 (130x) |
+| 100 kB | 1,420 (198x) | 1,344 (207x) | 2,016 (264x) | 1,784 (272x) |
+
+Under random-position keystrokes the `yseq_` table did not settle, because each edit splits a run and the value keeps growing: 100 documents of 5 kB went from 0.7 MB to 140 MB at 3 minutes and 336 MB at 10 minutes, against 65 to 80 MB for plain text. Typing at the end of the document fragments less, and the same 5 kB run settled at 95 to 122 MB. At 100 kB and 200 keystrokes a second, plain text reached 3,885 MB (574 times live) in 10 minutes and was still rising, so a table like that needs its autovacuum tuned.
+
+Form saves and concurrent writers, by document size (text benchmarks). WAL is per save. '8 sessions' means 8 clients, each inserting one character per transaction, either into one post or each into its own post; tps is as `pgbench` reports it. No edit was lost, and no transaction failed under `read committed`.
+
+| Case | 5 kB post | 100 kB post |
+| --- | ---: | ---: |
+| three-way save (`yseq_set` with a base) | 3.15 ms, 13,975 B | 11.8 ms, 118,152 B |
+| two-way save (no base) | 0.45 ms, 13,363 B | 1.60 ms, 112,896 B |
+| plain `text` (lz4) save | 0.13 ms, 6,455 B | 0.25 ms, 75,119 B |
+| 8 sessions, one post | 2,035 tps, mean 3.88 ms | 951 tps, mean 8.35 ms |
+| 8 sessions, own posts | 10,871 tps, mean 0.72 ms | 3,127 tps, mean 2.50 ms |
+
+On the automerge-paper trace through `yseq_apply`, a call with 100 patches took 6.16 ms and 126,486 bytes of WAL, and a call with one op (the document growing from 0 to about 2.5 kB) took 0.73 ms and 4,500 bytes. A one-character insert into a heavily edited 100 kB post (12,397 runs, a 219,749-byte value) took 2.23 ms and 280,347 bytes of WAL. Rendering a post with `yseq_value` took 0.06 ms at 5 kB and 0.27 ms at 100 kB. In the experiment notes ([`experiments/text-column/NOTES.md`](../../experiments/text-column/NOTES.md)), `yseq_merge` of two 100 kB states took 53 ms with 100 edits on each side and 97 ms with 1,000.
+
+Setup and caveats: Postgres 16.4 (Postgres.app) on an Apple M4 laptop, with `shared_buffers=512MB`, `full_page_writes=on` and `wal_compression=off`. The latency, WAL and bloat runs used `fsync=off`; the autovacuum runs used `fsync=on` and default autovacuum settings. Every figure is a single run. Noise is about 5%, so treat ratios of 1.3 or less as ties, and read autovacuum sizes to about 20%. The generated text is pseudo-words that compress poorly (lz4 stores 5 kB of it in 4.2 kB), so real prose would reach TOAST at a somewhat larger size. Not measured: Postgres 17 and 18, tuned autovacuum, `fillfactor`, long-running transactions that hold back `VACUUM`, replicas and logical decoding, bloat at save rate, and the effect of bloat on read latency. Full results: [text benchmarks](../../research/benchmarks/text.md) and [vacuum, bloat and WAL benchmarks](../../research/benchmarks/vacuum-wal.md).
+
 ## The table-backed documents: `ydoc_`
 
 A `ydoc_` document lives in tables of the extension, one row per run of characters, and your table holds its id, a text.
@@ -160,6 +221,48 @@ In the benchmarks, a 5 kB blog post took about 24 kB across the tables, and the 
 - **Survive `drop extension`.** The tables belong to the extension: dropping it drops every document. See [Uninstall](../install.md#uninstall).
 
 Every function, its errors and its limits: [Collaborative text functions](../reference/ydoc.md).
+
+### Benchmarks of `ydoc_`
+
+The cost of a `ydoc_` edit does not grow with the document, and it leaves no TOAST bloat. In the benchmarks an edit took 0.30 to 0.37 ms from 1 kB to 100 kB of text, and under default autovacuum the tables settled at 1.9 to 2.6 times their live data. The prices are disk space and checkpoints. A 5 kB post took 23.9 kB across the tables (5.64 times a plain `text` column, 3.8 times `yseq_`). The WAL records are a flat 0.8 to 1.3 kB per keystroke, but right after a checkpoint 40 to 84% of the WAL is full-page images, and checkpoints every 30 seconds instead of every 5 minutes nearly doubled it.
+
+Size on disk, 1,001 posts of about 5 kB after `vacuum full`, with the nine `crdt.ydoc_*` tables ([text benchmarks](../../research/benchmarks/text.md), storage): 23.38 MB in total, 23.9 kB per post, which is 5.64 times plain `text` with pglz (4.15 MB) and about 230 bytes per run including indexes and side tables. A 5 kB post has 100 item rows (13,567 bytes of heap) and a 100 kB post 1,983 rows (272,153 bytes). `ydoc_compact` on all 1,001 documents took 0.5 s and removed 17% of the rows and about 6% of the bytes, because random-position edits leave runs that cannot merge. A heavily edited 100 kB post (the automerge-paper trace as replayed, 13,822 item rows) took about 1.92 MB (an estimate that includes free space of other documents), against 219,749 bytes for a `yseq_` value; how many rows a document has depends on how its edits arrived, and replaying one patch per call left 83,253 rows.
+
+Growth under keystrokes, 100 documents, 20,000 keystrokes (80% inserts, 20% deletes, random position), all `crdt.ydoc_*` tables, in MB ([vacuum benchmarks](../../research/benchmarks/vacuum-wal.md)). 'Default autovacuum' is the size at the end of 3 minutes at 200 keystrokes a second. Most of the growth is live data (about 2 new item rows per keystroke, 0.3 to 0.5 kB with indexes), not dead rows, and 100% of the updates on the internal tables were HOT.
+
+| Text size | Loaded | After 20,000 keystrokes, autovacuum off | Live | After / live | Reusable after `VACUUM` | Default autovacuum, 3 min |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 kB | 4.27 | 10.1 | 3.54 | 2.9 | 2.24 | 13.1 |
+| 5 kB | 5.27 | 12.3 | 4.42 | 2.8 | 3.02 | 16.6 |
+| 20 kB | 8.41 | 16.2 | 6.37 | 2.5 | 4.39 | 20.5 |
+| 100 kB | 23.5 | 33.3 | 16.4 | 2.0 | 8.09 | 36.5 |
+
+Keystroke latency and WAL, one-character insert at a random position, 1,000 transactions per size. Latency is the mean in ms with the client round trip included, and the WAL in the second column comes from the text benchmarks. The last two columns come from the vacuum benchmarks, on documents with a 40-edit history, and show the full-page images in parentheses as a share of the WAL ('cold' starts right after a checkpoint, 'warm' does not). The two runs differ because they used different code versions and documents, and each cold run touches different pages.
+
+| Text size | Latency, ms | WAL bytes, text benchmarks | WAL bytes, cold (FPI share) | WAL bytes, warm (FPI share) |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 kB | 0.30 | 861 | 1,952 (40%) | 993 (1%) |
+| 5 kB | 0.32 | 1,084 | 2,390 (47%) | 1,117 (2%) |
+| 20 kB | 0.34 | 1,287 | 3,461 (63%) | 1,412 (12%) |
+| 100 kB | 0.37 | 1,712 | 8,341 (84%) | 2,656 (49%) |
+
+At a steady 100 keystrokes a second over 100 documents for 90 seconds, `ydoc_` wrote 2,427 bytes per keystroke at 5 kB with checkpoints every 30 s (54% full-page images) and 1,382 with no checkpoint in the run (19%), and 5,945 (79%) and 3,154 (59%) at 100 kB. `wal_compression` cut its total WAL by 26 to 33% in the runs after `VACUUM`, where the same pages were compared; the cold runs ranged from 24% more to 58% less. For comparison, `yseq_` wrote 0.76 MB/s at 5 kB and 7.4 to 7.6 MB/s at 100 kB in the same run, and `ydoc_` 0.13 to 0.23 MB/s and 0.30 to 0.57 MB/s.
+
+Form saves and concurrent writers, by document size (text benchmarks). WAL is per save. '8 sessions' means 8 clients, each inserting one character per transaction, either into one post or each into its own post; tps is as `pgbench` reports it. No edit was lost, and no transaction failed under `read committed`.
+
+| Case | 5 kB post | 100 kB post |
+| --- | ---: | ---: |
+| three-way save (`ydoc_set` with `ydoc_base`) | 1.16 ms, 4,626 B | 3.35 ms, 7,547 B |
+| two-way save (no base) | 0.83 ms, 4,627 B | 2.31 ms, 9,296 B |
+| plain `text` (lz4) save | 0.13 ms, 6,455 B | 0.25 ms, 75,119 B |
+| 8 sessions, one post | 2,395 tps, mean 2.91 ms | 2,056 tps, mean 3.24 ms |
+| 8 sessions, own posts | 10,995 tps, mean 0.71 ms | 7,928 tps, mean 0.98 ms |
+
+Writers to one post queue on its row in `crdt.ydoc_docs`, so same-post throughput was flat from 4 to 8 sessions; at 5 kB it was the same as `yseq_` within noise, and its p95 under contention was 1.6 to 2 times higher (9.71 against 5.96 ms at 8 sessions). Under `repeatable read` (5 kB, 8 sessions on one post), both shapes failed about 85% of the transactions with serialization failures (2,090 of 2,400 for `ydoc_`), and the application has to retry. On the automerge-paper trace through `ydoc_apply`, a call with 100 patches took 0.75 ms and 3,797 bytes of WAL, and a call with one op took 0.38 ms and 614 bytes. A one-character insert into the heavily edited 100 kB post took 0.40 ms and 4,541 bytes of WAL, and 0.40 ms and 4,521 bytes after `ydoc_compact`.
+
+Reads: `ydoc_value` took 0.09 ms at 5 kB and 0.43 ms at 100 kB (plain `text`: 0.03 and 0.26 ms), and listing 50 posts with `left(crdt.ydoc_value(body_doc), 200)` took 1.04 ms (plain: 0.17 ms). Search needs a text column that you refresh yourself. Refreshing it on every keystroke took 1.17 ms and 26,390 bytes of WAL at 5 kB and 11.6 ms and 216,216 bytes at 100 kB, against 0.32 and 0.36 ms for the edit alone, so refresh it on save, and accept that it lags the document.
+
+Setup and caveats: Postgres 16.4 (Postgres.app) on an Apple M4 laptop, with `shared_buffers=512MB`, `full_page_writes=on` and `wal_compression=off` unless a row says otherwise. The latency, WAL and bloat runs used `fsync=off`; the autovacuum runs used `fsync=on` and default autovacuum settings. Every figure is a single run. Noise is about 5%, so treat ratios of 1.3 or less as ties. The generated text is pseudo-words. Not measured: Postgres 17 and 18 (Postgres 18 turns on data checksums, which adds full-page images), tuned autovacuum, `fillfactor` on the documents table, long-running transactions that hold back `VACUUM`, replicas and logical decoding, `ydoc_compact` under sustained edits, and the effect of bloat on read latency. Full results: [text benchmarks](../../research/benchmarks/text.md) and [vacuum, bloat and WAL benchmarks](../../research/benchmarks/vacuum-wal.md).
 
 ## How text merges
 
