@@ -1,6 +1,8 @@
 -- Shared setup for the vacuum and WAL benchmarks (research/benchmarks/vacuum).
--- Loaded into the template database after pg_crdt--0.0.1.sql (ydoc_, pn_) and
--- experiments/text-column/impl.sql (yseq_), as bench/text-compare.sh does.
+-- Loaded into the template database after pg_crdt--0.0.1.sql (yseq_, ydoc_,
+-- pn_), as bench/text-compare.sh does. (The measurements in results/ were
+-- taken when yseq_ was still experiments/text-column/impl.sql, loaded after
+-- the extension file; the code was unchanged by the move.)
 --
 -- The text generator and the edit plans follow bench/text-compare.sh (the same
 -- 4,000-word pseudo-vocabulary with Zipf-like frequencies, sentences of 8 to 17

@@ -1,17 +1,18 @@
 # pg_crdt: pick up here
 
-> Handoff written 2026-11-05 after sessions 5 and 6 (collaborative text); updated after session 7 (queued fixes, user decisions). Branch `worktree-crdts`, worktree `.claude/worktrees/crdts`. Nothing is pushed. The latest commit at handoff is the one that adds this file.
+> Handoff written 2026-11-05 after sessions 5 and 6 (collaborative text); updated after session 7 (queued fixes, user decisions) and session 10 (`yseq_` promoted, experimental). Session 10 ran on branch `claude/pg-crdt-worktree-setup-521670`. Nothing is pushed.
 
 ## State
 
 - **In the extension** (`pg_crdt--0.0.1.sql`):
   - `pn_` (PN-Counter).
-  - `ydoc_`: collaborative text, table-backed. YjsMod order, causal validation V0–V7 for untrusted writers, three-way form saves (`ydoc_base` + `ydoc_set`), `ydoc_compact`, interned replica ids. Document ids are client-chosen text, and `ydoc_create` raises 23505 on an existing id.
+  - `yseq_`: collaborative text in a `crdt.yseq` jsonb column, **experimental** (session 10). The primary text type in the docs, with its limits stated: whole value rewritten per edit (WAL and TOAST churn grow with the document), no tombstone GC, no equivocation detection, merge/apply/ops_since O(document), three-way base is the whole state, edits return state (op = `yseq_diff`), UTF8 databases only. Docs: `docs/reference/yseq.md`, `docs/types/collaborative-text.md`, guide Part 1.
+  - `ydoc_`: collaborative text, table-backed, the alternative for large, heavily edited or untrusted-writer documents. YjsMod order, causal validation V0–V7 for untrusted writers, three-way form saves (`ydoc_base` + `ydoc_set`), `ydoc_compact`, interned replica ids. Document ids are client-chosen text, and `ydoc_create` raises 23505 on an existing id.
 - **Client:** `client/` (session 8): `pg-crdt-client`, the JS client for `ydoc_`. Its engine `client/src/doc.js` is the reference; `experiments/text-ref/ref.mjs` re-exports it. Tests: `npm test --prefix client` (25 tests, incl. a 1,000-seed convergence fuzz) and `client/test/pg.sh` (4 tests on Postgres).
 - **Experiments:**
-  - `experiments/text-column`: `yseq_`, the jsonb column alternative. Tested (221 assertions), not promoted.
+  - `experiments/text-column`: research notes (`NOTES.md`), benches and the old integration engine. The code and tests moved into the extension (session 10).
   - `experiments/text-ref`: JS reference, fixtures, trace converter. `experiments/text-table`: notes, bench and the bytea-key variant (the code moved into the extension).
-- **Tests:** `./test/run.sh` gives 26/26 files and 471/471 assertions (session 7). `./test/docker.sh` passes the same on PG16/17/18 with pg_tle and the control file. The trace spec SKIPs unless `experiments/text-ref/regen-traces.sh` has been run.
+- **Tests:** `./test/run.sh` gives 38/38 files and 701/701 assertions (session 10: 471 + 221 moved yseq_ + 9 new in `02_security` and `03_install`). `./test/docker.sh` passes the same on PG16/17/18 with pg_tle and the control file. The trace spec SKIPs unless `experiments/text-ref/regen-traces.sh` has been run.
 - **Read first:**
   - `research/journal.md` (sessions 5–7)
   - `research/text.md` (brief plus amendments)
@@ -22,9 +23,9 @@
 ## Decisions (answered by the user, session 7, 2026-11-05)
 
 1. **Names:** `ydoc_` (tables) and `yseq_` (column) are kept.
-2. **`yseq_` stays experimental.** Not promoted into the extension.
+2. **`yseq_` is in the extension, labelled experimental** (decision of session 10, superseding session 7's "not promoted"). Keep the extension simple: the column is the primary text type, its limits documented plainly (large documents are a known limitation); `ydoc_` stays unchanged as the table-backed alternative.
 3. **`drop extension` deletes every document.** Kept, and documented (install.md). No guard.
-4. **Public EXECUTE on `_ydoc_*` internals:** accepted. The tables, which have no grants, are the gate.
+4. **Public EXECUTE on `_ydoc_*` and `_yseq_*` internals:** accepted. The tables, which have no grants, are the gate.
 5. **Pinned `search_path`** on every PL/pgSQL function: kept (about 18% on `ydoc_apply`).
 6. **pg_dump config:** confirmed. `pg_extension_config_dump` stays on the 9 ydoc tables and 4 sequences.
 7. **Production docs URL:** the placeholder `https://pg-crdt.vercel.app` stays; no Vercel project yet.
@@ -39,7 +40,10 @@
 
 ## Not built (follow-ups, roughly in priority order)
 
-1. ~~A client library~~ **Done (session 8):** `client/` (`pg-crdt-client`), docs `docs/reference/client.md`. Open points: persistence of the queue across reloads, a way for a client to learn that a waiting op it sent was refused later, and engine performance for large documents (one object per char, O(n) integration).
+- **Next task (planned):** a benchmark section on every type page (`docs/types/*`), linking the benchmark reports. Session 10 deliberately wrote none.
+- `yseq_` in a non-UTF8 database: `yseq_ops_since`/`yseq_diff`/`yseq_merge` raise 54000 on states with deletes (`chr(65533)`). Documented as "UTF8 only"; a one-line fix (send `?` when the encoding is not UTF8) is possible if wanted.
+
+1. ~~A client library~~ **Done (session 8):** `client/` (`pg-crdt-client`), docs `docs/reference/client.md`. It targets `ydoc_` only; a transport for `yseq_` columns (apply = `update ... set body = crdt.yseq_apply(...)`, opsSince = `yseq_ops_since`) is not built. Open points: persistence of the queue across reloads, a way for a client to learn that a waiting op it sent was refused later, and engine performance for large documents (one object per char, O(n) integration).
 2. Tombstone GC beyond `ydoc_compact`. Documents built from random-position inserts stay at about 45× the text size.
 3. Full-text search: a cached text column refreshed on save is the documented recipe. An automatic one may be worth adding.
 4. Rich text and marks, cursors and presence, undo.

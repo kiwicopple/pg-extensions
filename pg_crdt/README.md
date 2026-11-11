@@ -5,7 +5,7 @@ CRDTs (conflict-free replicated data types) for Postgres, written in SQL and PL/
 Version 0.0.1 has two types:
 
 - the **PN-Counter**: a counter that can go up and down, where every writer (replica) keeps its own running totals. Use it for likes, votes, stock levels or quotas that are updated from several devices, regions or offline clients;
-- **collaborative text** (`ydoc_`): a plain-text document that several people edit at once, from forms or live editors, stored in the extension's tables and referenced from yours by a text id that your clients may choose. See [Collaborative text for a blog post](docs/guides/collaborative-text.md).
+- **collaborative text**: a plain-text document that several people edit at once, from forms or live editors. It comes as a column type, `crdt.yseq` (`yseq_`, **experimental**: every edit rewrites the whole value, so large documents are a known limitation), and as documents stored in the extension's tables and referenced from yours by a text id (`ydoc_`), whose cost per edit does not grow with the document. See [Collaborative text for a blog post](docs/guides/collaborative-text.md).
 
 pg_crdt is plain Postgres. It works with any client, driver or API layer, needs no superuser and no C, and assumes no identity provider or platform roles. It runs on Postgres 16, 17 and 18.
 
@@ -51,7 +51,7 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
 
 [Install](docs/install.md) also covers pg_tle (RDS, Aurora, Supabase), the extension directory with `create extension`, and the schema guard.
 
-> **Warning: dropping the extension drops your data.** `crdt.pn` is a type that belongs to the extension. `drop extension pg_crdt cascade` **drops every column that uses it**, with its data. The text documents are in the extension's tables: `drop extension pg_crdt` **drops every document**. Read [Uninstall](docs/install.md#uninstall) first.
+> **Warning: dropping the extension drops your data.** `crdt.pn` and `crdt.yseq` are types that belong to the extension. `drop extension pg_crdt cascade` **drops every column that uses them**, with its data. The text documents are in the extension's tables: `drop extension pg_crdt` **drops every document**. Read [Uninstall](docs/install.md#uninstall) first.
 
 ## Documentation
 
@@ -66,12 +66,12 @@ Start with the [documentation map](docs/README.md), or the [quickstart](docs/get
 | Accept deltas from untrusted clients | [Security](docs/guides/security.md) |
 | Index the value, keep counters as deltas, WAL and merge benchmarks | [Storage and performance](docs/guides/storage-and-performance.md) |
 | The state, merge and the `crdt.pn` domain | [PN-Counter](docs/types/pn-counter.md) |
-| Edit a blog post with several people: form saves, live ops, search, compaction | [Collaborative text for a blog post](docs/guides/collaborative-text.md) |
-| How text documents merge, and what they cannot do | [Collaborative text](docs/types/collaborative-text.md) |
+| Edit a blog post with several people, in a column or in tables: form saves, live ops, search, compaction | [Collaborative text for a blog post](docs/guides/collaborative-text.md) |
+| Choose a text shape; how text merges, and what it cannot do | [Collaborative text](docs/types/collaborative-text.md) |
 | Connect a live editor from JavaScript (`client/`) | [JavaScript client](docs/reference/client.md) |
-| Look up a function, an error or a limit | [Shared](docs/reference/shared.md), [PN-Counter functions](docs/reference/pn.md), [Collaborative text functions](docs/reference/ydoc.md), [Errors](docs/reference/errors.md), [Limits](docs/reference/limits.md) |
+| Look up a function, an error or a limit | [Shared](docs/reference/shared.md), [PN-Counter functions](docs/reference/pn.md), [Collaborative text column functions](docs/reference/yseq.md), [Collaborative text functions](docs/reference/ydoc.md), [Errors](docs/reference/errors.md), [Limits](docs/reference/limits.md) |
 
-The design and the decisions behind it are in [`research/architecture.md`](research/architecture.md) and, for text, [`research/text.md`](research/text.md). Benchmarks: [`research/benchmarks/pn-counter.md`](research/benchmarks/pn-counter.md), [`research/benchmarks/text.md`](research/benchmarks/text.md). What changed: the [changelog](CHANGELOG.md).
+The design and the decisions behind it are in [`research/architecture.md`](research/architecture.md) and, for text, [`research/text.md`](research/text.md). Benchmarks: [`research/benchmarks/pn-counter.md`](research/benchmarks/pn-counter.md), [`research/benchmarks/text.md`](research/benchmarks/text.md), [`research/benchmarks/vacuum-wal.md`](research/benchmarks/vacuum-wal.md). What changed: the [changelog](CHANGELOG.md).
 
 ## Tests
 

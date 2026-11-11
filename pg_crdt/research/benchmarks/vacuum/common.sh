@@ -3,15 +3,14 @@
 # Each script starts its own throwaway cluster through test/lib/cluster.sh
 # (Unix socket only, deleted on exit), with the settings of
 # research/benchmarks/text.md plus whatever the script adds in PG_EXTRA_OPTS,
-# and builds a template database with the extension, the yseq_ experiment,
+# and builds a template database with the extension (yseq_, ydoc_, pn_),
 # pgstattuple, pg_freespacemap and setup.sql. Every measured run uses a fresh
 # database cloned from that template, so the crdt.ydoc_* tables hold only the
 # run's documents.
 
 VAC_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 EXT_DIR=$(cd "$VAC_DIR/../../.." && pwd)
-IMPL_A="$EXT_DIR/experiments/text-column/impl.sql"
-IMPL_B="$EXT_DIR/pg_crdt--0.0.1.sql"
+IMPL="$EXT_DIR/pg_crdt--0.0.1.sql"
 RESULTS="$VAC_DIR/results"
 mkdir -p "$RESULTS"
 . "$EXT_DIR/test/lib/cluster.sh"
@@ -66,7 +65,7 @@ make_template() {
     local sizes=${1-$SIZES} arr
     arr=$(echo "$sizes" | tr ' ' ',')
     psql_admin -c "drop database if exists vac_tmpl" -c "create database vac_tmpl encoding 'UTF8' template template0"
-    "$PGBIN/psql" -X -q -v ON_ERROR_STOP=1 -d vac_tmpl -f "$IMPL_B" -f "$IMPL_A" -f "$VAC_DIR/setup.sql" >/dev/null
+    "$PGBIN/psql" -X -q -v ON_ERROR_STOP=1 -d vac_tmpl -f "$IMPL" -f "$VAC_DIR/setup.sql" >/dev/null
     if [ -n "$arr" ]; then
         progress "generating edit plans: $NDOCS documents of each size ($sizes)"
         qd vac_tmpl -c "select bench.make_plans(array[$arr], $NDOCS, $PLAN_EDITS)" >/dev/null

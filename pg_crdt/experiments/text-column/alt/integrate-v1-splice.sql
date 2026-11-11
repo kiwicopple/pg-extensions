@@ -1,6 +1,6 @@
 -- Variant 1 of crdt._yseq_integrate (superseded): one flat run array, spliced
 -- with slices on every split and insert (O(document) per integrated run).
--- Kept for the measurements in NOTES.md. Load after impl.sql to compare.
+-- Kept for the measurements in NOTES.md. Load after pg_crdt--0.0.1.sql to compare.
 -- create or replace replaces the current engine in that database.
 -- Integrate remote insert runs and deletes (wire format, already checked)
 -- into a state, with the state's pending runs and deletes. The trusted core

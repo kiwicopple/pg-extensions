@@ -17,7 +17,7 @@ start_cluster
 DB=yseq_chunks
 psql_admin -c "drop database if exists $DB" -c "create database $DB encoding 'UTF8' template template0"
 PSQL=("$PGBIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$DB")
-"${PSQL[@]}" -f "$EXT_DIR/pg_crdt--0.0.1.sql" -f "$HERE/impl.sql"
+"${PSQL[@]}" -f "$EXT_DIR/pg_crdt--0.0.1.sql"
 
 echo "Postgres: $("${PSQL[@]}" -tA -c 'show server_version'), $(sysctl -n machdep.cpu.brand_string 2>/dev/null || uname -m)"
 echo

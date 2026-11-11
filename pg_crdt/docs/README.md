@@ -1,6 +1,6 @@
 # pg_crdt documentation
 
-`pg_crdt` adds conflict-free replicated data types (CRDTs) to Postgres, for values that several writers change independently and merge later. The extension is SQL and PL/pgSQL, runs on Postgres 16, 17 and 18, and works with any client, driver or API layer. Version 0.0.1 has two types: the PN-Counter, a counter that goes up and down, and collaborative text, a plain-text document that several people edit at once.
+`pg_crdt` adds conflict-free replicated data types (CRDTs) to Postgres, for values that several writers change independently and merge later. The extension is SQL and PL/pgSQL, runs on Postgres 16, 17 and 18, and works with any client, driver or API layer. Version 0.0.1 has two types: the PN-Counter, a counter that goes up and down, and collaborative text, a plain-text document that several people edit at once, in a column of your table (`yseq_`, experimental) or in the extension's tables (`ydoc_`).
 
 New to the project? Read the [overview](overview.md), [install the extension](install.md) and follow the [quickstart](get-started/quickstart.md). The quickstart adds a counter column to a table, counts as two writers and merges a count that arrives from another place.
 
@@ -17,7 +17,7 @@ New to the project? Read the [overview](overview.md), [install the extension](in
 | Index the value, keep counters as deltas, read the benchmarks | [Storage and performance](guides/storage-and-performance.md) |
 | Understand the state and its merge | [PN-Counter](types/pn-counter.md) |
 | Let several people edit a text, from forms or live editors | [Collaborative text for a blog post](guides/collaborative-text.md) |
-| Understand how text documents merge, and what they cannot do | [Collaborative text](types/collaborative-text.md) |
+| Choose between a text column and table-backed documents; how text merges, and what it cannot do | [Collaborative text](types/collaborative-text.md) |
 | Connect a live editor in JavaScript | [JavaScript client](reference/client.md) |
 | Understand an error or a limit | [Errors](reference/errors.md), [Limits](reference/limits.md) |
 
@@ -27,8 +27,9 @@ New to the project? Read the [overview](overview.md), [install the extension](in
 | --- | --- |
 | [Shared](reference/shared.md) | Schema and naming, privileges, replica ids, `current_replica_id`, the settings, the state envelope and versioning |
 | [PN-Counter functions](reference/pn.md) | `pn_empty`, `pn_increment`, `pn_decrement`, `pn_value`, `pn_merge`, `pn_merge_agg`, `pn_is_valid`, `pn_apply_delta` |
+| [Collaborative text column functions](reference/yseq.md) | The `crdt.yseq` domain (experimental) and `yseq_empty`, `yseq_new`, `yseq_value`, `yseq_length`, `yseq_version`, `yseq_insert`, `yseq_delete`, `yseq_set`, `yseq_diff`, `yseq_ops_since`, `yseq_merge`, `yseq_merge_agg`, `yseq_apply`, `yseq_is_valid`; limits |
 | [Collaborative text functions](reference/ydoc.md) | `ydoc_create`, `ydoc_value`, `ydoc_length`, `ydoc_version`, `ydoc_base`, `ydoc_insert`, `ydoc_delete`, `ydoc_set`, `ydoc_apply`, `ydoc_merge`, `ydoc_ops_since`, `ydoc_compact`, `ydoc_rejected_purge`, `ydoc_drop`; the tables and their grants; limits |
-| [JavaScript client](reference/client.md) | `pg-crdt-client` for collaborative text: `openYdoc`, edits at UTF-16 positions, change events, `sync`, transports, refused ops |
+| [JavaScript client](reference/client.md) | `pg-crdt-client` for `ydoc_` collaborative text: `openYdoc`, edits at UTF-16 positions, change events, `sync`, transports, refused ops |
 | [Errors](reference/errors.md) | Every SQLSTATE the extension raises, and the Postgres errors you can meet |
 | [Limits](reference/limits.md) | Numeric limits, growth, and what is not built |
 

@@ -6,7 +6,7 @@
 #
 #   experiments/text-column/bench.sh                # throwaway cluster (test/lib/cluster.sh)
 #   experiments/text-column/bench.sh --quick        # skip the 1M document and the long replays
-#   experiments/text-column/bench.sh --impl x.sql   # another build of impl.sql
+#   experiments/text-column/bench.sh --impl x.sql   # load x.sql after the extension (create or replace a variant)
 #   experiments/text-column/bench.sh --full-trace   # only: the whole trace, one UPDATE per patch (lz4 column)
 #
 # Needs the trace files from experiments/text-ref (regen-traces.sh).
@@ -21,7 +21,7 @@ TRACES="$EXT_DIR/experiments/text-ref/traces"
 
 QUICK=0
 FULL_TRACE=0
-IMPL="$HERE/impl.sql"
+IMPL=
 while [ $# -gt 0 ]; do
     case "$1" in
         --quick) QUICK=1; shift ;;
@@ -41,7 +41,8 @@ start_cluster
 DB=yseq_bench
 psql_admin -c "drop database if exists $DB" -c "create database $DB encoding 'UTF8' template template0"
 PSQL=("$PGBIN/psql" -X -q -v ON_ERROR_STOP=1 -d "$DB")
-"${PSQL[@]}" -f "$EXT_DIR/pg_crdt--0.0.1.sql" -f "$IMPL"
+"${PSQL[@]}" -f "$EXT_DIR/pg_crdt--0.0.1.sql"
+[ -n "$IMPL" ] && "${PSQL[@]}" -f "$IMPL"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/yseq-bench.XXXXXX")
 trap 'rm -rf "$WORK"; stop_cluster' EXIT
 
@@ -52,7 +53,7 @@ else
     echo "Machine:  $(uname -m), $(nproc) CPU"
 fi
 echo "Date:     $(date '+%Y-%m-%d %H:%M %Z')"
-echo "Impl:     ${IMPL#$EXT_DIR/}, chunk size $("${PSQL[@]}" -tA -c 'select crdt._yseq_cmax()') runs"
+echo "Impl:     pg_crdt--0.0.1.sql${IMPL:+ + ${IMPL#$EXT_DIR/}}, chunk size $("${PSQL[@]}" -tA -c 'select crdt._yseq_cmax()') runs"
 echo
 
 "${PSQL[@]}" <<SQL

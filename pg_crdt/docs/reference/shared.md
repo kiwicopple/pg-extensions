@@ -1,19 +1,19 @@
 # Shared
 
-What every type in `pg_crdt` has in common: the schema and naming, replica ids, the function that finds the caller's identity, and the state envelope with its versioning. Functions of the PN-Counter are in [PN-Counter functions](pn.md), those of collaborative text in [Collaborative text functions](ydoc.md).
+What every type in `pg_crdt` has in common: the schema and naming, replica ids, the function that finds the caller's identity, and the state envelope with its versioning. Functions of the PN-Counter are in [PN-Counter functions](pn.md), those of collaborative text in [Collaborative text column functions](yseq.md) (`yseq_`) and [Collaborative text functions](ydoc.md) (`ydoc_`).
 
 ## Schema and naming
 
 - Everything is in the schema `crdt`. Call functions with the schema (`crdt.pn_merge(...)`), and do not add `crdt` to `search_path`.
-- Each type has a name prefix: `pn_` for the PN-Counter, `ydoc_` for collaborative text. The prefix names the algorithm, not the family, because a later set or register type has a different merge. The same verbs apply where they fit: `<prefix>_empty`, `<prefix>_value`, `<prefix>_merge`, `<prefix>_merge_agg`, plus the verbs of the type, such as `pn_increment` or `ydoc_insert`. A text document is not a value, so `ydoc_` has `ydoc_create` instead of `_empty`, and no aggregate.
-- Names that start with `_` are internal (`_ydoc_*`). Do not call them.
+- Each type has a name prefix: `pn_` for the PN-Counter, `yseq_` for collaborative text in a column and `ydoc_` for collaborative text in tables. The prefix names the algorithm, not the family, because a later set or register type has a different merge. The same verbs apply where they fit: `<prefix>_empty`, `<prefix>_value`, `<prefix>_merge`, `<prefix>_merge_agg`, plus the verbs of the type, such as `pn_increment` or `ydoc_insert`. A text document is not a value, so `ydoc_` has `ydoc_create` instead of `_empty`, and no aggregate.
+- Names that start with `_` are internal (`_yseq_*`, `_ydoc_*`). Do not call them.
 - There is no generic `crdt.merge(a, b)`. Each type has its own merge, so a wrong type is a function-resolution error, not a run-time one, and no call pays for a dispatch.
-- Pure functions are `IMMUTABLE PARALLEL SAFE`. A function that decides on the caller's identity pins `search_path` to `pg_catalog, pg_temp`, and so does every `ydoc_` function written in PL/pgSQL. Where a function differs, its entry says so.
+- Pure functions are `IMMUTABLE PARALLEL SAFE`. A function that decides on the caller's identity pins `search_path` to `pg_catalog, pg_temp`, and so does every `yseq_` and `ydoc_` function written in PL/pgSQL. Where a function differs, its entry says so.
 - None of the functions is `security definer`.
 
 ### Privileges
 
-At install, every privilege on the functions, tables and sequences in `crdt` is revoked from every role but the owner. Then `EXECUTE` is granted to `public` for the whole API (and for the `_ydoc_` internals, which the `ydoc_` functions call with the caller's privileges), and `USAGE` on the schema is granted to `public`. The PN-Counter functions are pure or read only the caller's own settings, so none needs privileges of its own. Decide who may write which rows with your own privileges, row-level security, or [wrapper functions](../guides/security.md).
+At install, every privilege on the functions, tables and sequences in `crdt` is revoked from every role but the owner. Then `EXECUTE` is granted to `public` for the whole API (and for the `_yseq_` and `_ydoc_` internals, which the `yseq_` and `ydoc_` functions call with the caller's privileges), and `USAGE` on the schema is granted to `public`. The PN-Counter functions are pure or read only the caller's own settings, so none needs privileges of its own. Decide who may write which rows with your own privileges, row-level security, or [wrapper functions](../guides/security.md).
 
 The collaborative text tables (`crdt.ydoc_*`) and their sequences keep no grants. The `ydoc_` functions read and write them with the caller's privileges, so you grant them to the role that owns your wrapper functions. See [Collaborative text functions](ydoc.md#tables).
 
@@ -84,15 +84,15 @@ Set a setting for one transaction with `set local name = 'value'`, or with `sele
 
 ## The state envelope
 
-Every type that is a value stores its state as `jsonb` with a versioned envelope, inside a domain named after the type (collaborative text is stored in tables instead):
+Every type that is a value stores its state as `jsonb` with a versioned envelope, inside a domain named after the type (`ydoc_` text is stored in tables instead):
 
 | Key | Meaning |
 | --- | --- |
-| `t` | The type: `"pn"` for the PN-Counter. Every function checks it. |
-| `v` | The format version of that type's state. `1` for `pn`. |
-| Other keys | Defined by the type. For `pn`: `p` and `n`. |
+| `t` | The type: `"pn"` for the PN-Counter, `"yseq"` for collaborative text in a column. Every function checks it. |
+| `v` | The format version of that type's state. `1` for `pn` and `yseq`. |
+| Other keys | Defined by the type. For `pn`: `p` and `n`. For `yseq`: internal, see [The domain](yseq.md#the-domain). |
 
-The envelope is closed: a state has exactly the keys of its type. For the PN-Counter, the domain `crdt.pn` rejects anything else with SQLSTATE `23514`. See [PN-Counter](../types/pn-counter.md#the-crdtpn-domain).
+The envelope is closed: a state has exactly the keys of its type. The domains `crdt.pn` and `crdt.yseq` reject anything else with SQLSTATE `23514`. See [PN-Counter](../types/pn-counter.md#the-crdtpn-domain).
 
 ### Versioning
 

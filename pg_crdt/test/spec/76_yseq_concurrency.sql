@@ -1,5 +1,5 @@
 -- Goal: concurrent writers on one row lose nothing under READ COMMITTED
--- (mirrors test/spec/20_concurrency.sql for pn_). Two dblink sessions:
+-- (mirrors 20_concurrency for pn_). Two dblink sessions:
 --   1. Two editors load the same post, change different paragraphs, and
 --      save with yseq_set(body, text, replica, base => loaded). A holds the
 --      row lock; B's save waits, then applies to A's committed version:

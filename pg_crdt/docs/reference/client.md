@@ -8,6 +8,8 @@ It does not talk to Postgres by itself. You give it a *transport*, two functions
 
 This page continues [Collaborative text for a blog post](../guides/collaborative-text.md), whose wrappers `edit_post` and `sync_post` are what a browser's transport calls in the end.
 
+> **`ydoc_` only, for now.** The client and its transports target the table-backed `ydoc_` documents. It has no transport for a [`crdt.yseq` column](yseq.md). The ops are the same format, so for a column your application applies a client's ops with [`yseq_apply`](yseq.md#yseq_apply) in an `update` of its row (it returns the new state, not `'accepted'`) and answers pulls with [`yseq_ops_since`](yseq.md#yseq_ops_since), as the guide's [`edit_article` and `sync_article`](../guides/collaborative-text.md#write-the-article-wrappers) do. `yseq_ops_since` sends deleted characters as U+FFFD, hidden by the deletes it sends with them. The `yseq_` edit functions return the new state, not an op: for the op of a server-side edit, take `yseq_diff(old, new)`.
+
 ## Open a document
 
 `openYdoc` loads the document with `opsSince(doc, {})` and returns a client that writes under the [entry key](shared.md#replica-ids-and-entry-keys) `replica`. This is a fragment: `transport` is one of the transports in the next section.

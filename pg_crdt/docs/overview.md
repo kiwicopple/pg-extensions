@@ -2,7 +2,7 @@
 
 `pg_crdt` adds conflict-free replicated data types (CRDTs) to Postgres. A CRDT is a value that several writers can change independently and merge later, in any order and any number of times, and still agree on the result. The extension is SQL and PL/pgSQL only: it needs no C, no other extension and no superuser, and it works with any client, driver or API layer. It assumes no identity provider and no platform roles.
 
-Version 0.0.1 has two types: the [PN-Counter](types/pn-counter.md), a counter that can go up and down, where every writer keeps its own running totals, and [collaborative text](types/collaborative-text.md), a plain-text document that several people edit at once. The other types in [the roadmap](#the-types) are planned, not built.
+Version 0.0.1 has two types: the [PN-Counter](types/pn-counter.md), a counter that can go up and down, where every writer keeps its own running totals, and [collaborative text](types/collaborative-text.md), a plain-text document that several people edit at once, kept either in a column of your table (`yseq_`, experimental) or in the extension's tables (`ydoc_`). The other types in [the roadmap](#the-types) are planned, not built.
 
 ## What a CRDT gives you
 
@@ -36,16 +36,17 @@ Start with the [quickstart](get-started/quickstart.md).
 - **A value with a rule that must always hold.** A merge always succeeds and never refuses a change, so it cannot keep a counter at or above zero while writers are disconnected. You can add a `check` on the value, but then a merge that breaks it is rejected, not reconciled. Inventory that must never go negative needs coordination, which a CRDT exists to avoid.
 - **One writer at a time anyway.** If a single service updates a row under a lock, an ordinary `bigint` column is simpler and cheaper.
 - **A very large number of distinct writers.** The state keeps an entry for every writer that ever counted, and entries are never removed. Counters with thousands of writers are better kept as inserted deltas. See [Limits](reference/limits.md).
-- **Rich text, or a document you want in one row.** Collaborative text is plain text in the extension's tables, referenced by id. See [What it cannot do](types/collaborative-text.md#what-it-cannot-do).
+- **Rich text.** Collaborative text is plain text. See [What it cannot do](types/collaborative-text.md#what-it-cannot-do).
+- **Large, heavily edited documents in a column.** The `yseq_` column rewrites the whole value on every edit, so its WAL and TOAST churn grow with the document. Use the table-backed `ydoc_` for those. See [Choose a shape](types/collaborative-text.md#choose-a-shape).
 - **Anything that is not a counter or text, yet.** Sets, registers and maps are planned.
 
 ## How it fits in Postgres
 
 - A counter is a `jsonb` value with a versioned envelope, wrapped in the domain `crdt.pn`. It reads and writes as JSON in psql, drivers and REST APIs, and works with ordinary columns, indexes and generated columns.
-- A text document lives in tables of the extension, one row per run of characters, so an edit writes a few rows instead of rewriting the document. Your table holds its id.
-- All functions are in one schema, `crdt`, with a name prefix for each type (`pn_`, `ydoc_`). The verbs are shared where they fit: `pn_value` and `ydoc_value`, `pn_merge` and `ydoc_merge`, `pn_apply_delta` and `ydoc_apply` for writers you do not trust.
+- A text document is either a `jsonb` value in your table, wrapped in the domain `crdt.yseq` (experimental: every edit rewrites it), or it lives in tables of the extension, one row per run of characters, so an edit writes a few rows instead of rewriting the document, and your table holds its id.
+- All functions are in one schema, `crdt`, with a name prefix for each type (`pn_`, `yseq_`, `ydoc_`). The verbs are shared where they fit: `pn_value`, `yseq_value` and `ydoc_value`; `pn_merge`, `yseq_merge` and `ydoc_merge`; `pn_apply_delta`, `yseq_apply` and `ydoc_apply` for writers you do not trust.
 - You write a merge as one SQL statement, `update ... set s = crdt.pn_merge(s, $1)`. The row lock then makes it safe. See [Update safely](guides/safe-updates.md).
-- Row-level security cannot see inside a CRDT value, so clients you do not trust get a wrapper function around `pn_apply_delta` (or `ydoc_apply`) instead of direct `UPDATE`. See [Accept writes from untrusted clients](guides/security.md).
+- Row-level security cannot see inside a CRDT value, so clients you do not trust get a wrapper function around `pn_apply_delta` (or `yseq_apply`, `ydoc_apply`) instead of direct `UPDATE`. See [Accept writes from untrusted clients](guides/security.md).
 
 ## The types
 
@@ -55,9 +56,10 @@ Start with the [quickstart](get-started/quickstart.md).
 | `awset_` | Add-wins set: add and remove elements; a concurrent add beats a remove. | Planned. |
 | `lww_` | Last-writer-wins register: one value, the latest write wins. | Planned. |
 | `lwwmap_` | Map of keys to last-writer-wins values. | Planned. |
-| `ydoc_` | Collaborative text: a plain-text document in the extension's tables (YjsMod order). | **Built** (0.0.1). |
+| `yseq_` | Collaborative text in a column: a plain-text document (YjsMod order) as one `jsonb` value, the domain `crdt.yseq`. | **Built, experimental** (0.0.1). |
+| `ydoc_` | Collaborative text in tables: the same algorithm, in the extension's tables. | **Built** (0.0.1). |
 
-The PN-Counter and collaborative text exist today, and no date is set for the others. Every value type will follow the same conventions as `pn_`: a domain over `jsonb`, an IMMUTABLE `_value`, a `_merge`, and a `_merge_agg` aggregate where it applies. The reasoning, and the alternatives that were considered, are in the [architecture record](../research/architecture.md) and, for text, the [text design](../research/text.md) and [benchmarks](../research/benchmarks/text.md). A jsonb-column form of the same text algorithm (`yseq_`) exists as an experiment only.
+The PN-Counter and collaborative text exist today, and no date is set for the others. Every value type will follow the same conventions as `pn_`: a domain over `jsonb`, an IMMUTABLE `_value`, a `_merge`, and a `_merge_agg` aggregate where it applies. The reasoning, and the alternatives that were considered, are in the [architecture record](../research/architecture.md) and, for text, the [text design](../research/text.md) and [benchmarks](../research/benchmarks/text.md). The column form of text, `yseq_`, follows the value-type conventions; it is marked experimental because its cost grows with the document.
 
 ## Where to go next
 

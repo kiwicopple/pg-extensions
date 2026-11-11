@@ -15,6 +15,17 @@ Every error that `pg_crdt` raises, with its SQLSTATE, and the errors from Postgr
 | `23514` | `check_violation` | The `crdt.pn` domain, so any function that takes or returns one | A value is not a `crdt.pn` envelope: not an object, other keys than `t`, `v`, `p`, `n`, `t` not `"pn"`, `v` not 1, or `p` or `n` not an object. |
 | `42501` | `insufficient_privilege` | `pn_apply_delta` | `replica` is null (no identity), or an entry of the delta belongs to another replica. |
 | `42501` | `insufficient_privilege` | The install script | The schema `crdt` is owned by another non-superuser role, or another role has `CREATE` on it. |
+| `22004` | `null_value_not_allowed` | `yseq_insert`, `yseq_delete`, `yseq_set` | `replica`, a position, a length or the text is null. |
+| `22023` | `invalid_parameter_value` | `yseq_insert`, `yseq_delete`, `yseq_set` | A position or range outside the text, or a negative length; `replica` is not an entry key or is longer than 256 bytes; for `yseq_set`, a `base` with another document id, or with characters the state lacks. |
+| `22023` | `invalid_parameter_value` | `yseq_apply` | `replica` is not a replica id; `ops` is not an op or an array of ops; a malformed op, insert run or delete; an op that breaks a causal rule or a limit (the message names it, `V0` to `V6`: no `v`, more than 128 runs, a key over 256 bytes). |
+| `22023` | `invalid_parameter_value` | `yseq_merge` | An argument is not a well-formed state beyond the envelope, or the two states have different document ids. |
+| `22023` | `invalid_parameter_value` | `yseq_ops_since` | `vv` is not an object of whole numbers from 0. |
+| `22003` | `numeric_value_out_of_range` | `yseq_insert`, `yseq_set` | The entry key has used up its sequence numbers (2,147,483,647 characters). |
+| `23514` | `check_violation` | The `crdt.yseq` domain, so any function that takes or returns one | A value is not a `crdt.yseq` envelope (wrong keys, `t` not `"yseq"`, `v` not 1, arrays of different lengths). |
+| `42501` | `insufficient_privilege` | `yseq_apply` | `replica` is null (no identity), or an insert carries another writer's key. |
+| `54000` | `program_limit_exceeded` | `yseq_apply` | The writer would have more than 32 entry keys in the state, or more waiting than its quota (256 runs plus deletes, or 64 kB). |
+| `54000` | `program_limit_exceeded` | `yseq_ops_since`, `yseq_diff`, `yseq_merge` (Postgres) | `requested character too large for encoding`: the database is not UTF8 and the state has deleted characters. `yseq_` needs a UTF8 database. |
+| `XX000` | `internal_error` | `yseq_ops_since`, `yseq_diff`, `yseq_merge` | A state has runs whose origins are missing. It means a bug, or a hand-made state: report it. |
 | `22023` | `invalid_parameter_value` | `ydoc_create` | The id is null, empty, longer than 256 bytes or has a control character. |
 | `23505` | `unique_violation` | `ydoc_create` | A document with this id exists. Creating is not idempotent: the existing document is never returned, so that nobody can take over a document by creating its predictable id. Two sessions that create one id at once get one success and one `23505`. See [Create a document with a client-chosen id](../guides/collaborative-text.md#create-a-document-with-a-client-chosen-id). |
 | `22004` | `null_value_not_allowed` | `ydoc_insert`, `ydoc_delete`, `ydoc_set`, `ydoc_rejected_purge` | `replica`, a position, a length or the text is null; for `ydoc_rejected_purge`, `doc` is null. |
@@ -47,6 +58,19 @@ Text that is written by the extension, as Postgres reports it:
 | `42501` | `schema crdt is owned by role other, not by the installing role app_owner` |
 | `42501` | `another role has CREATE on schema crdt` |
 | `23514` | `value for domain crdt.pn violates check constraint "pn_check"` (Postgres) |
+| `22004` | `crdt.yseq_insert: replica must not be null` |
+| `22023` | `crdt.yseq: range at position 20 of length 0 is outside the text (length 11)` |
+| `22023` | `crdt.yseq_insert: 'a:' is not a replica key` |
+| `22023` | `crdt.yseq_set: the base belongs to another document (id ... against ...)` |
+| `22023` | `crdt.yseq_set: the base has characters the state lacks, so it is not a version of this document` |
+| `22023` | `crdt.yseq_merge: the states belong to different documents (ids ... and ...)` |
+| `22023` | `crdt.yseq_merge: argument a: not a well-formed crdt.yseq state` |
+| `22023` | `crdt.yseq_apply: op rejected (V2: a run does not start at v[replica] + 1)` |
+| `22023` | `crdt.yseq_apply: malformed insert run ["bob", 1, null, null, ""]` |
+| `42501` | `crdt.yseq_apply: the writer has no replica id` |
+| `42501` | `crdt.yseq_apply: replica 'frank' cannot insert characters of replica 'gina'` |
+| `54000` | `crdt.yseq_apply: writer 'bob' has too much waiting (... runs and deletes, ... bytes)` |
+| `23514` | `value for domain crdt.yseq violates check constraint "yseq_check"` (Postgres) |
 | `22023` | `crdt.ydoc_create: '' is not a document id` |
 | `23505` | `crdt.ydoc_create: document 'welcome' already exists` |
 | `22023` | `crdt.ydoc_insert: position 99 is outside the document (length 11)` |
@@ -61,7 +85,7 @@ Text that is written by the extension, as Postgres reports it:
 | `54000` | `crdt.ydoc_apply: replica 'bob' has too many ops waiting in document 'welcome'` |
 | `P0002` | `crdt.ydoc_insert: document 'nope' does not exist` |
 
-`pn_decrement` raises the same messages with its own name. The messages that name an entry show the map (`p` or `n`) and the key. The `ydoc_` messages name the function, a document by its id in quotes, and a character as `key:seq`.
+`pn_decrement` raises the same messages with its own name, and `yseq_delete` and `yseq_set` the `yseq_insert` ones. Position errors of the `yseq_` edits name `crdt.yseq`. The messages that name an entry show the map (`p` or `n`) and the key. The `ydoc_` messages name the function, a document by its id in quotes, and a character as `key:seq`.
 
 ## Errors from Postgres
 
@@ -69,8 +93,9 @@ Text that is written by the extension, as Postgres reports it:
 | --- | --- | --- |
 | `40001` | A merge under REPEATABLE READ or SERIALIZABLE, when the row changed and committed after your snapshot (`could not serialize access due to concurrent update`). | Run the whole transaction again. See [Update safely](../guides/safe-updates.md#isolation-levels-and-retries). |
 | `22P02` | `crdt.current_replica_id()`, when `request.jwt.claims` is set to text that is not valid JSON. | Fix whatever sets the setting. |
-| `2BP01` | `drop extension pg_crdt`, while a column, default or index uses the type, or a foreign key references `crdt.ydoc_docs`. | Copy your data out first. See [Uninstall](../install.md#uninstall). |
+| `2BP01` | `drop extension pg_crdt`, while a column, default or index uses `crdt.pn` or `crdt.yseq`, or a foreign key references `crdt.ydoc_docs`. | Copy your data out first. See [Uninstall](../install.md#uninstall). |
 | `23503` | `crdt.ydoc_drop`, while a row of your table references the document. | Delete your row first, in the same transaction. |
+| `40001` | A `yseq_` column update under REPEATABLE READ or SERIALIZABLE, when the row changed after your snapshot, as for any update. | Run the whole transaction again. |
 | `40001` | A `ydoc_` write under REPEATABLE READ or SERIALIZABLE that waited for another write to the same document. | Run the whole transaction again. |
 | `42501` | An `update` of a column the role has no privilege on. | This is the intended result for a writer without access. See [Accept writes from untrusted clients](../guides/security.md). |
 
@@ -85,4 +110,7 @@ Text that is written by the extension, as Postgres reports it:
 - **`22023` from `ydoc_apply`** means the op is malformed or breaks a causal rule. An honest client running the same algorithm does not cause it; a client with a bug does. Resync it with `ydoc_ops_since`.
 - **`22023` from `ydoc_set` with `base ... is older than its last compaction`** means the form is older than the compaction horizon. Reopen the document and apply the change again.
 - **`23505` from `ydoc_create`** means the id is taken. If your client chose it, your wrapper decides what that means: the owner's retry gets the same document, anyone else is refused. Never answer it by handing out the existing document.
+- **`42501` from `yseq_apply`** is its identity check: a forged insert, or no identity. Reject the request.
+- **`22023` from `yseq_apply`** means the op is malformed or breaks a causal rule. Resync the client with `yseq_ops_since`.
+- **`22023` from `yseq_merge` or `yseq_set` about another document** means a state or base from another row: check which row the value came from.
 - **`54000` from `ydoc_apply`** is a quota. A writer with too many waiting ops is sending ops whose dependencies never arrive: send the missing ops first.

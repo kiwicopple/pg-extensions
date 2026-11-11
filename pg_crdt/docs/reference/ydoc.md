@@ -1,6 +1,6 @@
 # Collaborative text functions
 
-Every function of collaborative text, in schema `crdt`. A document lives in the extension's tables and is named by a `text` id, which the client may choose: see [Collaborative text](../types/collaborative-text.md) for the model, the op format and what it cannot do, [Shared](shared.md) for naming and replica ids, and [Errors](errors.md) for every SQLSTATE. To build an application with them, follow [Collaborative text for a blog post](../guides/collaborative-text.md).
+Every function of table-backed collaborative text (`ydoc_`), in schema `crdt`. For the column type `crdt.yseq`, see [Collaborative text column functions](yseq.md). A document lives in the extension's tables and is named by a `text` id, which the client may choose: see [Collaborative text](../types/collaborative-text.md) for the model, the op format and what it cannot do, [Shared](shared.md) for naming and replica ids, and [Errors](errors.md) for every SQLSTATE. To build an application with them, follow [Collaborative text for a blog post](../guides/collaborative-text.md).
 
 Unless an entry says otherwise, a function:
 
