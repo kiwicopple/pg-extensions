@@ -1,14 +1,16 @@
 # yseq_: collaborative text in a jsonb column (shape A)
 
-Status: experiment, 2026-11-04. Contract: [`research/text.md`](../../research/text.md). Files in this directory:
+Status: research notes. Written for the experiment of 2026-11-04; on 2026-11-10 the code moved into the extension as an experimental type. Contract: [`research/text.md`](../../research/text.md).
+
+**The code and the tests are no longer in this directory.** The `crdt.yseq` domain and the `yseq_` functions are the `yseq_` section of [`pg_crdt--0.0.1.sql`](../../pg_crdt--0.0.1.sql), unchanged apart from comments and one fix (a `U&'\FFFD'` literal that stopped the file from installing in a database that is not UTF8 is now `chr(65533)`). The test files are `test/spec/70_yseq_*` to `81_yseq_*` of the extension's suite (`./test/run.sh yseq`). User documentation: [`docs/reference/yseq.md`](../../docs/reference/yseq.md). The file names below (`impl.sql`, `01_basics`, ...) are the ones the experiment had; the table under "Tests" maps them to the new names.
+
+Files still in this directory:
 
 | File | What |
 | --- | --- |
-| `impl.sql` | The `crdt.yseq` domain and the `yseq_` functions. Loads after `pg_crdt--0.0.1.sql` into the `crdt` schema. PL/pgSQL and SQL only. |
-| `test/run.sh`, `test/spec/*.sql` | The test suite (same harness as `test/run.sh`: a throwaway cluster on a Unix socket, `lib/tap.sql`). |
 | `bench.sh` | Latency, storage, WAL, merge, and the automerge-paper trace. `--quick` skips the 1M document; `--full-trace` replays the whole trace as one UPDATE per patch. Needs the trace files from `experiments/text-ref/regen-traces.sh`. |
 | `bench-chunks.sh` | The chunk size sweep (including one chunk, the flat representation). |
-| `alt/integrate-v1-splice.sql` | The first integration engine (one flat array, spliced), kept for the comparison below. |
+| `alt/integrate-v1-splice.sql` | The first integration engine (one flat array, spliced), kept for the comparison below. Loads after the extension file. |
 
 ## What it does
 
@@ -27,7 +29,7 @@ create index on posts using gin (to_tsvector('english', crdt.yseq_value(body)));
 | --- | --- |
 | `yseq_empty()` | The empty document. |
 | `yseq_new()` | An empty document with a random document id (`"o"`), for a column default. VOLATILE. `yseq_merge` refuses states of different ids and `yseq_set` a base of another id (22023). |
-| `yseq_value(s) -> text` | The text. IMMUTABLE: usable in stored generated columns, expression indexes and full-text indexes (`test/spec/31_generated.sql`). |
+| `yseq_value(s) -> text` | The text. IMMUTABLE: usable in stored generated columns, expression indexes and full-text indexes (`test/spec/78_yseq_generated.sql`). |
 | `yseq_length(s) -> int` | Length in code points. |
 | `yseq_version(s) -> jsonb` | Version vector `{"replica": count}` (characters integrated per replica key; pending runs not counted). |
 | `yseq_insert(s, pos, content, replica)` | Insert before position `pos` (0-based, code points). |
@@ -288,22 +290,22 @@ The trace's ops all come from one up-to-date writer, so V3 never scans and V4/V5
 
 ## Tests
 
-`experiments/text-column/test/run.sh`: 12 files, 221 assertions, all passing on Postgres 16.4. The suite also passes with chunks of 4 runs and the bulk-delete path forced (`--impl` with an edited copy), which exercises chunk splits on almost every edit.
+The experiment's runner, `experiments/text-column/test/run.sh` (removed; the files now run in `test/run.sh`): 12 files, 221 assertions, all passing on Postgres 16.4. The suite also passes with chunks of 4 runs and the bulk-delete path forced (`--impl` with an edited copy), which exercises chunk splits on almost every edit.
 
-| File | Goal |
+| File (now) | Goal |
 | --- | --- |
-| `01_basics` | empty, value, length, version, insert, delete, set (minimal diff), set with base, null handling, errors (22004, 22023), the domain envelope |
-| `02_model` | 40 random sessions of 150 edits from 3 replicas against a plain text model; every 10th state passes `yseq_is_valid`; `yseq_diff` of every checked edit reproduces it; 3,000 editor keystrokes ending in many chunks |
-| `03_unicode` | code point positions, non-BMP, combining marks, ZWJ sequences; set() across shared UTF-8 lead and trail bytes; unicode replica ids; U+FFFD for deleted text in ops |
-| `10_merge_laws` | 300 random triples with shared history: commutative, associative, idempotent, empty and null identities, valid results, `yseq_merge_agg` = fold, version = per-replica max |
-| `11_convergence` | 40 trials of 2 to 5 replicas editing and syncing (merge and partial apply); the whole log shuffled with duplicates one op per call, all in one call, and every replica after the log, all equal; nothing pending; valid |
-| `12_sync` | non-interleaving of concurrent typing at one spot (both merge orders, C collation), ops_since with version vectors, delete set, yseq_diff, causal order of ops_since, three-way set |
-| `20_concurrency` | two dblink sessions: three-way set with a lock wait, stale set without base (pinned), 600 concurrent `yseq_insert`, `yseq_set` and `yseq_merge` transactions each lose nothing, negative control |
-| `30_apply` | owner rule (id, device key, exact match), null and malformed caller ids, deletes of others, arrays of ops, idempotence; each causal rule V0 to V7 (the reviewer's repro, a two-run op rejected whole, a waiting op dropped later with nothing applied, a waiting op carried by merge); the quota (54000); malformed ops (22023); default identity; labels and grants |
-| `31_generated` | stored generated column, GIN full-text index and expression index used by the planner, `like`, REINDEX and updates under `search_path = pg_catalog, pg_temp` |
-| `32_review` | regressions from the adversarial review: linear cost of 8,000 deletes and 8,000 random inserts in one apply, a second save from the same base, malformed states (23514, 22023), seq and len written as 1.0, seq 2147483647, pending entries that are not pending |
-| `33_review2` | regressions for the sibling ydoc_'s review, checked on yseq_: key length and device caps, 3,000 chained runs in one op on a 10,000-run document, the run cap, malformed waiting ops dropped, a three-way save's op after two saves from one base passing V3/V5 on a peer, pinned search_path for every PL/pgSQL function, bases and merges across documents (22023), positions near 2^31 |
-| `40_differential` | all JS reference fixtures (`experiments/text-ref/fixtures/fixtures.sql`), `malicious-*` included: validated one op per call (shuffled with duplicates, and causal) with the reference's text and decisions, two validated halves merged, ops_since replayed on the trusted path, honest fixtures in one trusted call |
+| `01_basics` (`70_yseq_basics`) | empty, value, length, version, insert, delete, set (minimal diff), set with base, null handling, errors (22004, 22023), the domain envelope |
+| `02_model` (`71_yseq_model`) | 40 random sessions of 150 edits from 3 replicas against a plain text model; every 10th state passes `yseq_is_valid`; `yseq_diff` of every checked edit reproduces it; 3,000 editor keystrokes ending in many chunks |
+| `03_unicode` (`72_yseq_unicode`) | code point positions, non-BMP, combining marks, ZWJ sequences; set() across shared UTF-8 lead and trail bytes; unicode replica ids; U+FFFD for deleted text in ops |
+| `10_merge_laws` (`73_yseq_merge_laws`) | 300 random triples with shared history: commutative, associative, idempotent, empty and null identities, valid results, `yseq_merge_agg` = fold, version = per-replica max |
+| `11_convergence` (`74_yseq_convergence`) | 40 trials of 2 to 5 replicas editing and syncing (merge and partial apply); the whole log shuffled with duplicates one op per call, all in one call, and every replica after the log, all equal; nothing pending; valid |
+| `12_sync` (`75_yseq_sync`) | non-interleaving of concurrent typing at one spot (both merge orders, C collation), ops_since with version vectors, delete set, yseq_diff, causal order of ops_since, three-way set |
+| `20_concurrency` (`76_yseq_concurrency`) | two dblink sessions: three-way set with a lock wait, stale set without base (pinned), 600 concurrent `yseq_insert`, `yseq_set` and `yseq_merge` transactions each lose nothing, negative control |
+| `30_apply` (`77_yseq_apply`) | owner rule (id, device key, exact match), null and malformed caller ids, deletes of others, arrays of ops, idempotence; each causal rule V0 to V7 (the reviewer's repro, a two-run op rejected whole, a waiting op dropped later with nothing applied, a waiting op carried by merge); the quota (54000); malformed ops (22023); default identity; labels and grants |
+| `31_generated` (`78_yseq_generated`) | stored generated column, GIN full-text index and expression index used by the planner, `like`, REINDEX and updates under `search_path = pg_catalog, pg_temp` |
+| `32_review` (`79_yseq_review`) | regressions from the adversarial review: linear cost of 8,000 deletes and 8,000 random inserts in one apply, a second save from the same base, malformed states (23514, 22023), seq and len written as 1.0, seq 2147483647, pending entries that are not pending |
+| `33_review2` (`80_yseq_review2`) | regressions for the sibling ydoc_'s review, checked on yseq_: key length and device caps, 3,000 chained runs in one op on a 10,000-run document, the run cap, malformed waiting ops dropped, a three-way save's op after two saves from one base passing V3/V5 on a peer, pinned search_path for every PL/pgSQL function, bases and merges across documents (22023), positions near 2^31 |
+| `40_differential` (`81_yseq_differential`) | all JS reference fixtures (`experiments/text-ref/fixtures/fixtures.sql`), `malicious-*` included: validated one op per call (shuffled with duplicates, and causal) with the reference's text and decisions, two validated halves merged, ops_since replayed on the trusted path, honest fixtures in one trusted call |
 
 ## Limitations
 
@@ -321,7 +323,7 @@ The trace's ops all come from one up-to-date writer, so V3 never scans and V4/V5
 - `yseq_ops_since` sends the whole delete set every time.
 - Positions are code points; JS clients must convert from UTF-16 indexes. Grapheme clusters (combining marks, ZWJ sequences) can be split by a position edit or by set()'s diff.
 - Postgres 18 virtual generated columns do not accept user-defined functions; use stored ones.
-- Tested on Postgres 16.4 only (Postgres.app); not yet through pg_tle or Docker.
+- Tested on Postgres 16.4 only (Postgres.app) while it was an experiment; since the move it runs with the extension's suite, also through pg_tle and the control file on Postgres 16, 17 and 18 (`test/docker.sh`).
 
 ## Follow-ups
 
@@ -329,4 +331,4 @@ The trace's ops all come from one up-to-date writer, so V3 never scans and V4/V5
 - A delta form of `yseq_merge` for the common case (one replica's new runs) that skips the full parse, and an incremental delete set (or a delete-set version) for `yseq_ops_since`.
 - Tombstone GC behind a horizon all replicas have passed.
 - Rich text and marks, cursors, undo (non-goals tonight).
-- Promotion into the extension file: reference entries, error table rows, `02_security`-style grant checks for the new functions.
+- ~~Promotion into the extension file: reference entries, error table rows, `02_security`-style grant checks for the new functions.~~ Done on 2026-11-10 (experimental).

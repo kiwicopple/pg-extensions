@@ -16,7 +16,7 @@ npm run docs:preview            # serve the built site
 
 ## The production URL
 
-The production URL is not decided. The site uses the placeholder `https://pg-crdt.vercel.app`, one constant, `DEFAULT_SITE`, in `astro.config.mjs`. It sets canonical URLs and the sitemap. Change it there, and change `userSite` in `../research/navigation.json` to the same value so that research pages link to the right place. A build can override it without a code change: set `DOCS_SITE` (and `DOCS_BASE` below a path).
+The production URL is `https://crdt.postgres.tools`, set in one constant, `DEFAULT_SITE`, in `astro.config.mjs`. It sets canonical URLs and the sitemap. If the domain changes, change it there, and change `userSite` in `../research/navigation.json` to the same value so that research pages link to the right place. A build can override it without a code change: set `DOCS_SITE` (and `DOCS_BASE` below a path).
 
 ## Page inventory and navigation
 
@@ -49,6 +49,6 @@ Sync rewrites relative links between pages to site routes; links to code and oth
 - the Markdown exports keep their code, with the tab labels, and their links resolve;
 - every rendered tab group has at least two tabs, JavaScript first, and matches the source;
 - every sidebar route exists;
-- every public function in `../pg_crdt--0.0.1.sql` has one reference entry (a `### \`name\`` heading in `docs/reference/shared.md` or `pn.md`), and every SQLSTATE the file raises is in `docs/reference/errors.md`.
+- every public function in `../pg_crdt--0.0.1.sql` has one reference entry (a `### \`name\`` heading in `docs/reference/shared.md`, `pn.md`, `yseq.md` or `ydoc.md`), and every SQLSTATE the file raises is in `docs/reference/errors.md`.
 
 The SQL examples are not run by the build. Run the quickstart and the guides against a throwaway cluster after you change them: `pg_crdt/test/lib/cluster.sh` starts one.

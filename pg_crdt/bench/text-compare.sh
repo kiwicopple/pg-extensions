@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Head-to-head benchmark of the two text-CRDT shapes on one blog-post table:
-#   shape A  experiments/text-column  jsonb column crdt.yseq   (yseq_ functions)
-#   shape B  experiments/text-table   table-backed documents   (ydoc_ functions),
-#            now part of the extension (pg_crdt--0.0.1.sql)
-# Both load into ONE database (they coexist: different prefixes),
+#   shape A  jsonb column crdt.yseq   (yseq_ functions; from experiments/text-column)
+#   shape B  table-backed documents   (ydoc_ functions; from experiments/text-table)
+# Both are part of the extension (pg_crdt--0.0.1.sql) and coexist in ONE
+# database (different prefixes),
 # and every workload runs on both, on the same machine, in one run, so the
 # numbers are comparable. Prints Markdown tables for research/benchmarks/text.md.
 #
@@ -33,8 +33,7 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 EXT_DIR=$(dirname "$HERE")
 TRACES="$EXT_DIR/experiments/text-ref/traces"
-IMPL_A="$EXT_DIR/experiments/text-column/impl.sql"
-IMPL_B="$EXT_DIR/pg_crdt--0.0.1.sql"
+IMPL="$EXT_DIR/pg_crdt--0.0.1.sql"
 . "$EXT_DIR/test/lib/cluster.sh"
 
 QUICK=0
@@ -79,7 +78,7 @@ WARNINGS=0
 warn() { echo "WARNING: $*" >&2; echo "> WARNING: $*"; WARNINGS=$((WARNINGS + 1)); }
 progress() { echo "[$(date +%H:%M:%S)] $*" >&2; }
 
-"${PSQL[@]}" -f "$IMPL_B" -f "$IMPL_A"
+"${PSQL[@]}" -f "$IMPL"
 
 echo "Postgres: $(q -c 'show server_version')"
 if [ "$(uname -s)" = Darwin ]; then
@@ -89,7 +88,7 @@ else
 fi
 echo "Date:     $(date '+%Y-%m-%d %H:%M %Z')"
 echo "Settings: $(q -c "select string_agg(name || '=' || current_setting(name), ', ' order by name) from pg_settings where name in ('shared_buffers','fsync','full_page_writes','synchronous_commit','wal_compression','max_wal_size','checkpoint_timeout','default_toast_compression','autovacuum','wal_level')")"
-echo "Impl:     A $(md5 -q "$IMPL_A" 2>/dev/null || md5sum "$IMPL_A" | cut -c1-32), B $(md5 -q "$IMPL_B" 2>/dev/null || md5sum "$IMPL_B" | cut -c1-32) (md5 of A's impl.sql and of the extension file); git $(git -C "$EXT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)$(git -C "$EXT_DIR" diff --quiet -- experiments pg_crdt--0.0.1.sql 2>/dev/null || echo " + uncommitted changes")"
+echo "Impl:     $(md5 -q "$IMPL" 2>/dev/null || md5sum "$IMPL" | cut -c1-32) (md5 of the extension file); git $(git -C "$EXT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)$(git -C "$EXT_DIR" diff --quiet -- experiments pg_crdt--0.0.1.sql 2>/dev/null || echo " + uncommitted changes")"
 echo "Mode:     $([ $QUICK = 1 ] && echo quick || echo full): $NPOSTS posts of 5 kB, one of 100 kB"
 echo
 

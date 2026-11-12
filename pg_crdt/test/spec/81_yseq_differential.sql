@@ -19,7 +19,7 @@
 --   5. honest fixtures only: all ops in one trusted call: expected text.
 -- Without the fixture file the file passes with a SKIP assertion.
 
-\set fixtures :exp_dir/../text-ref/fixtures/fixtures.sql
+\set fixtures :ext_dir/experiments/text-ref/fixtures/fixtures.sql
 select (pg_stat_file(:'fixtures', true)).size is not null as has_fixtures \gset
 
 \if :has_fixtures

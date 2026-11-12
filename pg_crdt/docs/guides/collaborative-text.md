@@ -1,29 +1,472 @@
 # Collaborative text for a blog post
 
-Build a blog post whose body several people edit at once. By the end you have a `posts` table whose body is a [collaborative text](../types/collaborative-text.md) document, wrapper functions that decide who may edit which post, form saves that keep every editor's change, live editing by streaming ops, full-text search, and a maintenance job that compacts documents.
+Build a blog post whose body several people edit at once: wrapper functions that decide who may edit which post, form saves that keep every editor's change, live editing by streaming ops, and full-text search. [Collaborative text](../types/collaborative-text.md) comes in two shapes, and this page builds the post with each:
 
-**Prerequisites.** [Install the extension](../install.md) in an empty test database and run the examples in order, as the database owner, in one psql session or one Node.js module with a connected `client` (see the [quickstart](../get-started/quickstart.md#before-you-start)). The page creates the roles `app_owner` and `app_writer`. They are examples: use your own.
+- **Part 1** keeps the body in a `crdt.yseq` column of your own table (`yseq_`, experimental). It is the simpler shape: the text is in your row, a generated column can index it, and there is nothing to grant on the extension. Its cost per edit grows with the document.
+- **Part 2** keeps the body in the extension's tables (`ydoc_`) and your table holds its id. Use it for large documents, documents edited per keystroke by many people, and many untrusted writers. It adds compaction and grants on the extension's tables.
+
+[Choose a shape](../types/collaborative-text.md#choose-a-shape) compares them.
+
+**Prerequisites.** [Install the extension](../install.md) in an empty test database and run the examples in order, as the database owner, in one psql session or one Node.js module with a connected `client` (see the [quickstart](../get-started/quickstart.md#before-you-start)). The page creates the roles `app_owner` and `app_writer` in Part 1, and Part 2 uses them too. They are examples: use your own.
 
 **Who does what.**
 
 | Database role | Does |
 | --- | --- |
-| The database owner (or the role that installed the extension) | Installs the extension and grants its tables to `app_owner`. |
-| `app_owner` | Owns `posts` and the wrapper functions. It is the only role with privileges on the `crdt.ydoc_*` tables. |
+| The database owner (or the role that installed the extension) | Installs the extension, creates the roles, and in Part 2 grants the extension's tables to `app_owner`. |
+| `app_owner` | Owns the tables and the wrapper functions. In Part 2 it is the only role with privileges on the `crdt.ydoc_*` tables. |
 | `app_writer` | The role your application or API layer connects as for users. It may call the wrappers and nothing else. |
 
-The wrappers are `security definer` functions of `app_owner`. Each one checks your application's rule (is this user an editor of this post?) and then calls a `crdt.ydoc_` function with the identity your application trusts. This is the same pattern as for counters in [Accept writes from untrusted clients](security.md).
+The wrappers are `security definer` functions of `app_owner`. Each one checks your application's rule (is this user an editor of this post?) and then calls a `crdt.yseq_` or `crdt.ydoc_` function with the identity your application trusts. This is the same pattern as for counters in [Accept writes from untrusted clients](security.md).
 
-## Set up the roles and grants
+## Part 1: the body in a column (`yseq_`)
+
+> **Experimental.** Every edit of a `crdt.yseq` value rewrites the whole value, so its WAL and TOAST churn grow with the document, and deleted characters are never removed. It suits posts of a few kilobytes that are saved from forms or edited at a modest rate. Read the [limits of the column](../types/collaborative-text.md#limits-of-the-column) before you use it for large or heavily edited documents, or use [Part 2](#part-2-the-body-in-tables-ydoc_).
+
+The body is a column of your table `articles`. The extension has no tables to grant for it: the privileges on `articles` decide who may write the column, as for any column. Writers get no `update` on it; they call wrappers.
+
+### Set up the roles
+
+```sql
+create role app_owner nologin;
+create role app_writer nologin;
+grant create on schema public to app_owner;
+```
+
+### Create the articles table
+
+`body` holds the whole document. Its default, `crdt.yseq_new()`, gives each document an id, so that a state from one article cannot be merged or saved into another by mistake. `compression lz4` makes edits of larger documents several times faster than the default compression. `body_text` is a stored generated column on `crdt.yseq_value`, which is `IMMUTABLE`: it is current after every write, and a full-text index can use it. Editors are listed in `article_editors`: that is your application's rule, and the wrappers check it.
+
+```sql
+set role app_owner;
+
+create table public.articles (
+  id bigint generated always as identity primary key,
+  title text not null,
+  body crdt.yseq compression lz4 not null default crdt.yseq_new(),
+  body_text text generated always as (crdt.yseq_value(body)) stored
+);
+
+create index articles_body_search
+  on public.articles
+  using gin (to_tsvector('english', body_text));
+
+create table public.article_editors (
+  article_id bigint references public.articles (id) on delete cascade,
+  editor text not null,
+  primary key (article_id, editor)
+);
+
+reset role;
+```
+
+The writer's identity in these examples is the setting `crdt.replica_id`, which your app server sets per transaction after it has authenticated the user (`set local`). `crdt.current_replica_id()` reads it, or a JWT claim when an API layer such as PostgREST verifies a token. A client that has direct SQL access can set any setting, so for such clients pass `session_user` or your own lookup instead. See [Replicas and identity](replicas-and-identity.md#where-the-identity-comes-from).
+
+### Write the article wrappers
+
+Create every wrapper as `app_owner`, pin `search_path`, and qualify every name. `create_article` writes the first text with `crdt.yseq_set` under the author's replica id and makes the author an editor.
+
+`open_article` returns the text and the base a form saves from. The base is the whole `crdt.yseq` value: the column keeps no text of deleted characters, so a three-way save needs the state the form started from, not a small version token. `save_article` takes the form's text and that base. `crdt.yseq_set` with a base diffs the new text against the text of the base, not against the current text, so a change that another editor saved in the meantime survives.
+
+```sql
+set role app_owner;
+
+create function public.create_article(title text, body text)
+returns bigint
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  author text := crdt.current_replica_id();
+  article_id bigint;
+begin
+  if author is null then
+    raise exception 'no user' using errcode = '42501';
+  end if;
+  insert into public.articles (title, body)
+  values (title, crdt.yseq_set(crdt.yseq_new(), body, replica => author))
+  returning id into article_id;
+  insert into public.article_editors values (article_id, author);
+  return article_id;
+end;
+$$;
+
+create function public.open_article(article_id bigint)
+returns table (title text, body text, base crdt.yseq)
+language sql
+stable
+security definer
+set search_path = pg_catalog, pg_temp
+begin atomic
+  select a.title, a.body_text, a.body
+  from public.articles a
+  join public.article_editors e on e.article_id = a.id
+  where a.id = open_article.article_id
+    and e.editor = crdt.current_replica_id();
+end;
+
+create function public.save_article(
+  article_id bigint,
+  body text,
+  base crdt.yseq
+)
+returns text
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  writer text := crdt.current_replica_id();
+  merged text;
+begin
+  update public.articles a
+  set body = crdt.yseq_set(a.body, save_article.body,
+                           replica => writer, base => base)
+  where a.id = save_article.article_id
+    and exists (
+      select 1 from public.article_editors e
+      where e.article_id = a.id and e.editor = writer
+    )
+  returning a.body_text into merged;
+  if not found then
+    raise exception 'not an editor of article %', article_id
+      using errcode = '42501';
+  end if;
+  return merged;
+end;
+$$;
+```
+
+Live editors send ops instead of whole texts. `edit_article` hands them to `crdt.yseq_apply`, the write path for input you do not trust: it accepts inserts only under the writer's own replica id (or `<replica id>:<device>`), and checks that the op is consistent with what the writer says it has seen. Each call is one `update`, so the row lock serializes concurrent edits of one article. `sync_article` returns the ops that an editor at version `vv` lacks, and the version to ask from next time.
+
+```sql
+create function public.edit_article(article_id bigint, ops jsonb)
+returns void
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  writer text := crdt.current_replica_id();
+begin
+  update public.articles a
+  set body = crdt.yseq_apply(a.body, ops, replica => writer)
+  where a.id = edit_article.article_id
+    and exists (
+      select 1 from public.article_editors e
+      where e.article_id = a.id and e.editor = writer
+    );
+  if not found then
+    raise exception 'not an editor of article %', article_id
+      using errcode = '42501';
+  end if;
+end;
+$$;
+
+create function public.sync_article(article_id bigint, vv jsonb)
+returns jsonb
+language sql
+stable
+security definer
+set search_path = pg_catalog, pg_temp
+return (
+  select jsonb_build_object(
+    'ops', crdt.yseq_ops_since(a.body, vv),
+    'version', crdt.yseq_version(a.body)
+  )
+  from public.articles a
+  join public.article_editors e on e.article_id = a.id
+  where a.id = sync_article.article_id
+    and e.editor = crdt.current_replica_id()
+);
+
+reset role;
+```
+
+Postgres grants `execute` on a new function to `public`. Take that away and grant the wrappers to `app_writer`:
+
+```sql
+revoke all on function
+  public.create_article(text, text),
+  public.open_article(bigint),
+  public.save_article(bigint, text, crdt.yseq),
+  public.edit_article(bigint, jsonb),
+  public.sync_article(bigint, jsonb)
+from public;
+grant execute on function
+  public.create_article(text, text),
+  public.open_article(bigint),
+  public.save_article(bigint, text, crdt.yseq),
+  public.edit_article(bigint, jsonb),
+  public.sync_article(bigint, jsonb)
+to app_writer;
+```
+
+`app_writer` has no privileges on `articles`, so it cannot write the column directly, under any writer's name:
+
+```sql
+set role app_writer;
+update public.articles set body = crdt.yseq_empty();
+-- ERROR:  permission denied for table articles
+reset role;
+```
+
+### Create and save an article
+
+Your server authenticates the user, then sets the identity and calls the wrapper in one transaction. Run the statements on one client: a pool hands each `pool.query` a different connection. `asUser` runs one statement as a user, in its own transaction. The rest of the page uses it too.
+
+```js tab="JavaScript"
+async function asUser(user, sql, params) {
+  await client.query('begin')
+  await client.query(
+    "select set_config('crdt.replica_id', $1, true)",
+    [user],
+  )
+  const { rows } = await client.query(sql, params)
+  await client.query('commit')
+  return rows
+}
+
+const [article] = await asUser(
+  'alice',
+  'select public.create_article($1, $2) as id',
+  ['Launch notes', 'We launch on Monday.\nBring snacks.'],
+)
+await client.query(
+  'insert into public.article_editors values ($1, $2)',
+  [article.id, 'bob'],
+)
+console.log(article.id) // '1'
+```
+
+```sql tab="SQL"
+begin;
+set local role app_writer;
+set local crdt.replica_id = 'alice';
+select public.create_article(
+  'Launch notes',
+  E'We launch on Monday.\nBring snacks.'
+);
+-- 1
+commit;
+insert into public.article_editors values (1, 'bob');
+```
+
+Alice is the author, and bob is added as a second editor. (Adding editors is an ordinary write to your own table; here the database owner does it.)
+
+Alice and bob open the article at the same time. Each form gets the text and the base. node-postgres returns the base as a JavaScript object (a `crdt.yseq` is `jsonb`), and sends it back as JSON. The SQL keeps it in a psql variable with `\gset`:
+
+```js tab="JavaScript"
+const [articleAliceForm] = await asUser(
+  'alice',
+  'select body, base from public.open_article($1)',
+  [1],
+)
+const [articleBobForm] = await asUser(
+  'bob',
+  'select body, base from public.open_article($1)',
+  [1],
+)
+console.log(articleAliceForm.body)
+// We launch on Monday.
+// Bring snacks.
+```
+
+```sql tab="SQL"
+begin;
+set local role app_writer;
+set local crdt.replica_id = 'alice';
+select body from public.open_article(1);
+--          body
+-- ----------------------
+--  We launch on Monday.+
+--  Bring snacks.
+select base as article_base from public.open_article(1) \gset
+commit;
+```
+
+Alice changes the first line and saves. Then bob, whose form still shows the old text, changes the second line and saves with the same base:
+
+```js tab="JavaScript"
+await asUser(
+  'alice',
+  'select public.save_article($1, $2, $3)',
+  [1, 'We launch on Tuesday.\nBring snacks.', articleAliceForm.base],
+)
+const [articleBobSaved] = await asUser(
+  'bob',
+  'select public.save_article($1, $2, $3) as body',
+  [1, 'We launch on Monday.\nBring cake.', articleBobForm.base],
+)
+console.log(articleBobSaved.body)
+// We launch on Tuesday.
+// Bring cake.
+```
+
+```sql tab="SQL"
+begin;
+set local role app_writer;
+set local crdt.replica_id = 'alice';
+select public.save_article(
+  1,
+  E'We launch on Tuesday.\nBring snacks.',
+  :'article_base'
+);
+commit;
+
+begin;
+set local role app_writer;
+set local crdt.replica_id = 'bob';
+select public.save_article(
+  1,
+  E'We launch on Monday.\nBring cake.',
+  :'article_base'
+);
+--     save_article
+-- -----------------------
+--  We launch on Tuesday.+
+--  Bring cake.
+commit;
+```
+
+Both changes are in the text. Bob's save changed only the line he edited, because it was diffed against the text of his base.
+
+> **Warning:** without a base, `yseq_set` diffs against the current text. A form opened before another editor's save then reverts that save, between the first and the last character the form changed. Always pass the base that was read with the text.
+
+The base is the whole value, so a form sends the document's state back on every save: a few kilobytes for a short post, about 450 kB at 100,000 characters in the benchmarks.
+
+### Send ops from an editor
+
+A live editor keeps its own replica of the document and sends each edit as an op as the user types. The ops have the same format as for `ydoc_` (see [Ops](../types/collaborative-text.md#ops) and [Stream edits from an editor](#stream-edits-from-an-editor) in Part 2). The [JavaScript client](../reference/client.md) syncs `ydoc_` documents today; for a column, your own transport calls `edit_article` and `sync_article`.
+
+Each editor uses its own entry key: the user's replica id and a device suffix, such as `bob:laptop`. Bob's editor is at the version `{"alice": 34}`, the text alice created, where the full stop at the end is `["alice", 34]`. Bob types `!` after it, and his editor sends the op, then asks for what it lacks:
+
+```js tab="JavaScript"
+const laptopOp = {
+  v: { alice: 34 },
+  i: [['bob:laptop', 1, ['alice', 34], null, '!']],
+  d: [],
+}
+await asUser(
+  'bob',
+  'select public.edit_article($1, $2)',
+  [1, laptopOp],
+)
+const [articleSync] = await asUser(
+  'bob',
+  'select public.sync_article($1, $2) as s',
+  [1, { alice: 34 }],
+)
+console.log(articleSync.s.version)
+// { bob: 4, alice: 38, 'bob:laptop': 1 }
+```
+
+```sql tab="SQL"
+begin;
+set local role app_writer;
+set local crdt.replica_id = 'bob';
+select public.edit_article(
+  1,
+  '{
+    "v": {"alice": 34},
+    "i": [["bob:laptop", 1, ["alice", 34], null, "!"]],
+    "d": []
+  }'
+);
+select public.sync_article(1, '{"alice": 34}') -> 'version';
+-- {"bob": 4, "alice": 38, "bob:laptop": 1}
+commit;
+```
+
+`sync_article` returns the inserts above the version, in an order the editor can apply directly, and every delete of the document. Characters deleted since are sent as U+FFFD, because the column does not keep their text; the deletes in the same op hide them. `body_text` is already current: the generated column is recomputed on every write.
+
+An op that breaks a rule is refused as a whole, with SQLSTATE `22023` and the rule in the message. An insert under another user's key is refused with `42501`:
+
+```sql
+begin;
+set local role app_writer;
+set local crdt.replica_id = 'bob';
+select public.edit_article(
+  1,
+  '{
+    "v": {"alice": 38},
+    "i": [["alice", 39, ["alice", 38], null, "?"]],
+    "d": []
+  }'
+);
+-- ERROR:  crdt.yseq_apply: replica 'bob' cannot insert characters of replica 'alice'
+rollback;
+```
+
+Server code that edits by position, such as a bot, gets the new state back, not the op. To send the op on to editors, take `crdt.yseq_diff(old, new)` in the same statement, with the row locked:
+
+```sql
+set role app_owner;
+with old as (
+  select body from public.articles where id = 1 for update
+)
+update public.articles a
+set body = crdt.yseq_insert(old.body, 0, '[draft] ', replica => 'editor-bot')
+from old
+where a.id = 1
+returning crdt.yseq_diff(old.body, a.body) as op;
+--                                            op
+-- ----------------------------------------------------------------------------------------
+--  {"d": [], "i": [["editor-bot", 1, null, ["alice", 1], "[draft] "]], "v": {"alice": 1}}
+reset role;
+```
+
+### Search the articles
+
+`body_text` is a generated column with a full-text index, so search it like any text column. A reader that may see every article needs `select` on `articles` (or a `security definer` search function that filters what the user may read):
+
+```js tab="JavaScript"
+const { rows: foundArticles } = await client.query(
+  `select id, title
+   from public.articles
+   where to_tsvector('english', body_text)
+         @@ plainto_tsquery('english', $1)`,
+  ['cake'],
+)
+console.log(foundArticles) // [ { id: '1', title: 'Launch notes' } ]
+```
+
+```sql tab="SQL"
+select id, title
+from public.articles
+where to_tsvector('english', body_text)
+      @@ plainto_tsquery('english', 'cake');
+--  id |    title
+-- ----+--------------
+--   1 | Launch notes
+```
+
+### Delete an article, back up, uninstall
+
+- **Delete.** The document is the row: deleting the article deletes its body. A `delete_article` wrapper checks the editor and deletes the row, as `delete_post` does in Part 2 without the `ydoc_drop`.
+- **pg_dump.** The column is dumped with your table. Restoring needs the extension in the target database first, for the type.
+- **Dropping the extension** is refused with `2BP01` while a column uses `crdt.yseq`, and `drop extension pg_crdt cascade` drops that column and the generated columns that call `crdt.yseq_value`, with their data. To keep the text, turn `body_text` into an ordinary column first with `alter table public.articles alter column body_text drop expression`. See [Uninstall](../install.md#uninstall).
+
+### Checklist for the column
+
+- No client role has `update` on the column. Writers go through `security definer` wrappers that check your rule and call `yseq_apply` or `yseq_set` with an identity your application trusts.
+- The column defaults to `crdt.yseq_new()` and uses `compression lz4`.
+- Forms pass the base they read with the text: the whole value.
+- Each editor and device writes under its own entry key (`bob:laptop`); two writers that share one key lose text silently.
+- Documents stay small, or are edited at form-save rate. For keystroke-rate editing of many documents of 20 kB and more, tune autovacuum on the table or use Part 2.
+
+## Part 2: the body in tables (`ydoc_`)
+
+The same blog post, with its body in the extension's tables: the table `posts` holds the document's id. It uses the roles of [Part 1](#set-up-the-roles); if you skipped Part 1, create them first.
+
+### Set up the roles and grants
 
 A text document lives in the extension's tables, not in a column of yours. At install nobody but their owner has privileges on them, and the `ydoc_` functions run with the caller's privileges, so a role without grants gets `42501` from every `ydoc_` function. Grant the tables and sequences to the role that owns your wrappers, and to no client role. `references` on `crdt.ydoc_docs` lets that role's tables point at documents with a foreign key, to the document id `uid`.
 
 > **Warning:** do not grant these tables to `app_writer`, `public` or a role that your API layer exposes. A role with privileges on them can rewrite any document directly, under any writer's name.
 
 ```sql
-create role app_owner nologin;
-create role app_writer nologin;
-
 grant select, insert, update, delete
   on crdt.ydoc_docs, crdt.ydoc_replicas, crdt.ydoc_items,
      crdt.ydoc_blocks, crdt.ydoc_pending,
@@ -32,10 +475,9 @@ grant select, insert, update, delete
   to app_owner;
 grant references on crdt.ydoc_docs to app_owner;
 grant usage on all sequences in schema crdt to app_owner;
-grant create on schema public to app_owner;
 ```
 
-## Create the posts table
+### Create the posts table
 
 The post keeps the document id in `body_doc`, a foreign key to `crdt.ydoc_docs (uid)`. The id is text: the client may choose it (see [Create a post](#create-a-post)). That the post's `body_doc` names a document, and that the author is its editor, is how your application records who owns the document: the extension does not. Editors are listed in `post_editors`: that is your application's rule, and the wrappers check it. `body_text` is a copy of the text for search, refreshed on save (see [Search the posts](#search-the-posts)). `text_gen` and `compact_gen` record the document's write counter at the last refresh and compaction.
 
@@ -62,7 +504,7 @@ reset role;
 
 The writer's identity in these examples is the setting `crdt.replica_id`, which your app server sets per transaction after it has authenticated the user (`set local`). `crdt.current_replica_id()` reads it, or a JWT claim when an API layer such as PostgREST verifies a token. A client that has direct SQL access can set any setting, so for such clients pass `session_user` or your own lookup instead. See [Replicas and identity](replicas-and-identity.md#where-the-identity-comes-from).
 
-## Write the wrappers
+### Write the wrappers
 
 Create every wrapper as `app_owner`, pin `search_path`, and qualify every name. `create_post` makes the document, the post and its first editor in one transaction. It writes the first text with `crdt.ydoc_set` under the author's replica id. The client may pass the id of the document, `doc_id`, so that it knows the id before the server answers and can retry safely. Without one, the document gets a random UUID.
 
@@ -249,7 +691,7 @@ select crdt.ydoc_value('0192f1c4-7b3e-7c1a-9d52-3f6a8e1b2c4d');
 reset role;
 ```
 
-## Create a post
+### Create a post
 
 Your server authenticates the user, then sets the identity and calls the wrapper in one transaction. Run the statements on one client: a pool hands each `pool.query` a different connection.
 
@@ -291,7 +733,7 @@ insert into public.post_editors values (1, 'bob');
 
 Alice is the author, and bob is added as a second editor. (Adding editors is an ordinary write to your own table; here the database owner does it.)
 
-### Create a document with a client-chosen id
+#### Create a document with a client-chosen id
 
 The id is the client's to choose, and the extension does not decide whose it is: an id names a document and grants nothing, and that a document exists is never proof that the caller owns it. What protects a document is your wrapper (it records the owner, here in `posts` and `post_editors`, and checks it on every call) and the tables' privileges (clients have none).
 
@@ -299,20 +741,9 @@ The id is the client's to choose, and the extension does not decide whose it is:
 - **Someone else's id is refused.** The wrapper raises `23505` again, and does not say whose document it is or what it contains.
 - **Pick random ids.** `ydoc_create` never hands out an existing document, but an id that others can guess (`post:1`) lets them take it before you do, and then your create fails. A UUID, UUIDv7 or ULID cannot be guessed.
 
-`asUser` runs one statement as a user, in its own transaction. The sections below use it too.
+`asUser`, from [Create and save an article](#create-and-save-an-article), runs one statement as a user, in its own transaction. The sections below use it too.
 
 ```js tab="JavaScript"
-async function asUser(user, sql, params) {
-  await client.query('begin')
-  await client.query(
-    "select set_config('crdt.replica_id', $1, true)",
-    [user],
-  )
-  const { rows } = await client.query(sql, params)
-  await client.query('commit')
-  return rows
-}
-
 const [retried] = await asUser(
   'alice',
   'select public.create_post($1, $2, $3) as id',
@@ -354,7 +785,7 @@ select public.create_post('Mine now', 'Spam', '0192f1c4-7b3e-7c1a-9d52-3f6a8e1b2
 rollback;
 ```
 
-## Save from a form
+### Save from a form
 
 Alice and bob open the post at the same time. Each form gets the text and the base.
 
@@ -446,9 +877,9 @@ select public.save_post(1, 'Spam', '{"d": "0192f1c4-7b3e-7c1a-9d52-3f6a8e1b2c4d"
 rollback;
 ```
 
-## Stream edits from an editor
+### Stream edits from an editor
 
-A live editor keeps its own replica of the document and sends each edit as an op as the user types. It needs an implementation of the same algorithm in the client: the op format and the YjsMod order are specified in [`research/text.md`](../../research/text.md), and [`experiments/text-ref`](../../experiments/text-ref/) has the JavaScript reference implementation that the extension is tested against. pg_crdt does not ship a client library.
+A live editor keeps its own replica of the document and sends each edit as an op as the user types. In JavaScript, the [JavaScript client](../reference/client.md) does this for you: it converts the editor's positions, queues the ops, and syncs them through a transport that calls `edit_post` and `sync_post`. This section shows the ops and the calls it makes, for a client in another language or for debugging. The op format and the YjsMod order are specified in [`research/text.md`](../../research/text.md).
 
 An op is a JSON object:
 
@@ -563,7 +994,7 @@ rollback;
 
 Streamed edits do not refresh `body_text`: rendering and rewriting the whole text on every keystroke costs far more than the edit (in the benchmarks, 13 to 34 times the latency of the edit at 10,000 and 100,000 characters). The maintenance job below refreshes it.
 
-## Search the posts
+### Search the posts
 
 `body_text` is an ordinary column, so it takes an ordinary full-text index. It cannot be a generated column: `crdt.ydoc_value` reads tables, so it is `STABLE`, and generated columns need `IMMUTABLE` functions.
 
@@ -598,7 +1029,7 @@ where to_tsvector('english', body_text)
 
 A form save refreshes `body_text` at once. After streamed edits it lags until the next run of the maintenance job.
 
-## Compact on a schedule
+### Compact on a schedule
 
 Every delete leaves a tombstone row, and typing splits runs of characters into rows, so a document that is edited for a long time grows. `crdt.ydoc_compact(doc, horizon)` merges adjacent rows that continue one run, and tombstones stamped at or before `horizon`, a value of the document's write counter. The text, the version and the ops that peers receive do not change.
 
@@ -654,7 +1085,7 @@ reset role;
 
 The first run uses the horizon 0, so it merges only runs that are split but not deleted (none here). Later runs use the write counter of the run before. Each call of `ydoc_compact` takes the document's lock, like an edit, and reads all of its rows, so a job over many posts should handle them in batches, and only the posts that changed (`text_gen` against the write counter tells you which).
 
-## Delete a post
+### Delete a post
 
 A document is not deleted with the post: `crdt.ydoc_drop` deletes it and its rows. Do both in one wrapper:
 
@@ -691,22 +1122,22 @@ grant execute on function public.delete_post(bigint) to app_writer;
 reset role;
 ```
 
-## Backups and uninstalling
+### Backups and uninstalling
 
 - **pg_dump.** With `create extension` (pg_tle or the control file), the document tables and their sequences are marked as configuration tables, so `pg_dump` includes the documents and restores the sequences after them. A direct install (`psql -f`) has no extension object: the tables are ordinary tables in the schema `crdt`, dumped like yours. Either way, back up the schema `crdt` with your own tables: a dump of only `public` has posts that point at documents it does not contain.
 - **Dropping the extension drops every document.** The `crdt.ydoc_*` tables belong to the extension. `drop extension pg_crdt` is refused while a foreign key such as `posts.body_doc` points at them, and `drop extension pg_crdt cascade` drops that foreign key and every document. See [Uninstall](../install.md#uninstall).
 
-## Checklist
+### Checklist for the tables
 
 - The `crdt.ydoc_*` tables and sequences are granted to the owner of your wrappers only.
 - Every wrapper is `security definer`, pins `search_path`, checks your own rule, and passes an identity that your application trusts.
 - Forms pass the base they read with the text.
-- Live editors write under device keys (`bob:laptop`), and catch up with `ydoc_ops_since`.
+- Live editors write under device keys (`bob:laptop`), and catch up with `ydoc_ops_since` (the [JavaScript client](../reference/client.md) does both).
 - Search reads a cached text column, refreshed on save and by the maintenance job.
 - A scheduled job compacts documents, with a horizon no newer than the oldest base you want to accept.
 
 ## Next
 
 - How the document behaves and what it cannot do: [Collaborative text](../types/collaborative-text.md).
-- Every function, error and limit: [Collaborative text functions](../reference/ydoc.md).
+- Every function, error and limit: [Collaborative text column functions](../reference/yseq.md) (`yseq_`) and [Collaborative text functions](../reference/ydoc.md) (`ydoc_`).
 - The measurements behind these recommendations: [text benchmarks](../../research/benchmarks/text.md).

@@ -9,4 +9,6 @@ Research record for pg_crdt, a Postgres extension for CRDTs, written in PL/pgSQL
 - [`sql-integration.md`](./sql-integration.md): namespacing (following pg_permissions), concurrency, representation, WAL, RLS, versioning.
 - [`orioledb.md`](./orioledb.md): can OrioleDB reduce write amplification? (Partly; optional accelerator only.)
 - [`benchmarks/pn-counter.md`](./benchmarks/pn-counter.md): PN-Counter merge latency (SQL vs PL/pgSQL, merge shapes) and WAL per write (state column vs delta table).
+- [`benchmarks/text.md`](./benchmarks/text.md): the two text shapes head to head (yseq_ column against ydoc_ tables).
+- [`benchmarks/vacuum-wal.md`](./benchmarks/vacuum-wal.md): bloat, VACUUM and autovacuum, HOT updates and WAL split into records and full-page images, for pn_, yseq_ and ydoc_ against a plain text column.
 - [`journal.md`](./journal.md): session log.
