@@ -16,7 +16,7 @@ npm run docs:preview            # serve the built site
 
 ## The production URL
 
-The production URL is not decided. The site uses the placeholder `https://pg-crdt.vercel.app`, one constant, `DEFAULT_SITE`, in `astro.config.mjs`. It sets canonical URLs and the sitemap. Change it there, and change `userSite` in `../research/navigation.json` to the same value so that research pages link to the right place. A build can override it without a code change: set `DOCS_SITE` (and `DOCS_BASE` below a path).
+The production URL is `https://crdt.postgres.tools`, set in one constant, `DEFAULT_SITE`, in `astro.config.mjs`. It sets canonical URLs and the sitemap. If the domain changes, change it there, and change `userSite` in `../research/navigation.json` to the same value so that research pages link to the right place. A build can override it without a code change: set `DOCS_SITE` (and `DOCS_BASE` below a path).
 
 ## Page inventory and navigation
 

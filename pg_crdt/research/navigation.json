@@ -1,7 +1,7 @@
 {
-  "description": "Page inventory and sidebar for the pg_crdt section of the research docs site (research-site/ at the repo root). src is relative to this directory; route and slug are relative to /pg_crdt/ (an empty route is the index). userSite is the placeholder URL of the user documentation (DEFAULT_SITE in ../site/astro.config.mjs): change both together.",
+  "description": "Page inventory and sidebar for the pg_crdt section of the research docs site (research-site/ at the repo root). src is relative to this directory; route and slug are relative to /pg_crdt/ (an empty route is the index). userSite is the URL of the user documentation (DEFAULT_SITE in ../site/astro.config.mjs): change both together.",
   "title": "pg_crdt",
-  "userSite": "https://pg-crdt.vercel.app",
+  "userSite": "https://crdt.postgres.tools",
   "pages": [
     {
       "src": "README.md",

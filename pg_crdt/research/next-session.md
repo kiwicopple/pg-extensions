@@ -28,7 +28,7 @@
 4. **Public EXECUTE on `_ydoc_*` and `_yseq_*` internals:** accepted. The tables, which have no grants, are the gate.
 5. **Pinned `search_path`** on every PL/pgSQL function: kept (about 18% on `ydoc_apply`).
 6. **pg_dump config:** confirmed. `pg_extension_config_dump` stays on the 9 ydoc tables and 4 sequences.
-7. **Production docs URL:** the placeholder `https://pg-crdt.vercel.app` stays; no Vercel project yet.
+7. **Production docs URL:** `https://crdt.postgres.tools` (Vercel project, Root Directory `pg_crdt`; updated 2026-11-12).
 8. **Push and PR:** deferred, not yet. Nothing on `worktree-crdts` is pushed.
 
 ## Small fixes queued
