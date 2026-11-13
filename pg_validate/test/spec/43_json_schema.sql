@@ -14,7 +14,7 @@ create function app.allowed_code(value text) returns boolean language sql stable
 as $$ select exists (select 1 from app.allowed where code = value) $$;
 select validate.register_format(name => 'allowed-code', validator => 'app.allowed_code(text)');
 
-select tap.plan(30);
+select tap.plan(31);
 
 -- format through the registry
 select tap.is(validate.json_schema('"ada@example.com"', '{"format": "email"}'), true, 'format email: valid');
@@ -25,8 +25,17 @@ select tap.is(validate.json_schema('"GB82WEST12345698765432"', '{"format": "iban
 select tap.is(validate.json_schema('12', '{"format": "no-such-format"}'), true, 'format ignores non-strings, even when unknown');
 select tap.throws_ok($$ select validate.json_schema('"x"', '{"format": "no-such-format"}') $$, '42704',
                      'an unknown format raises when a string reaches it');
-select tap.throws_ok($$ select validate.json_schema('"x"', '{"format": "idn-email"}') $$, '42704',
-                     'a JSON Schema format without a validator raises');
+select tap.is(validate.json_schema('"실례@실례.테스트"', '{"format": "idn-email"}'), true,
+              'every JSON Schema format has a validator: idn-email');
+
+-- built-in formats skip format()'s dynamic SQL; the result must be the same
+select tap.is(
+    (select count(*)::int
+     from validate.list_formats() l
+     cross join unnest(array['', 'a', 'ada@example.com', '2026-01-01', 'https://例え.テスト/', '/a/b', '0#', '{x}', '[a-z]', 'xn--mnchen-3ya.de']) v
+     where l.builtin
+       and validate.json_schema(to_jsonb(v), jsonb_build_object('format', l.name)) is distinct from validate.format(l.name, v)),
+    0, 'format in json_schema gives what validate.format gives, for every built-in format');
 
 select tap.lives_ok($$ select validate.register_format(name => 'product-sku', validator => 'app.product_sku(text)') $$,
                     'register product-sku');

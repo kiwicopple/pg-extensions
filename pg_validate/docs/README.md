@@ -14,6 +14,7 @@ New to the project? Read the [overview](overview.md), then [install the extensio
 | Know which spelling each validator accepts, and normalize input before the check | [Canonical forms and normalizing input](guides/normalization.md) |
 | Register your own format and control who can | [Custom formats](registry.md) |
 | Validate `jsonb` documents against a JSON Schema | [JSON Schema](json-schema.md) |
+| Register a JSON Schema by name and use it in constraints | [Named JSON schemas](guides/named-schemas.md) |
 | Understand an error or a limit | [Errors and limits](errors-and-limits.md) |
 
 <span id="reference"></span>
@@ -25,13 +26,13 @@ Each validator has its signature, the specification it follows, examples, and wh
 | Group | Validators |
 | --- | --- |
 | [Identifiers](reference/identifiers.md) | `uuid`, `ulid`, `nanoid`, `slug`, `semver`, `git_sha` |
-| [Internet](reference/internet.md) | `email`, `url`, `uri`, `uri_reference`, `domain`, `hostname`, `ipv4`, `ipv6`, `mac`, `port` |
+| [Internet](reference/internet.md) | `email`, `idn_email`, `url`, `uri`, `uri_reference`, `iri`, `iri_reference`, `domain`, `hostname`, `idn_hostname`, `ipv4`, `ipv6`, `mac`, `port` |
 | [Dates and times](reference/dates.md) | `iso8601`, `rfc3339`, `rfc3339_date`, `rfc3339_time`, `duration` |
 | [International](reference/international.md) | `e164`, `country_code`, `country_code_alpha3`, `currency_code`, `language_code` |
-| [Developer formats](reference/developer.md) | `base64`, `base64url`, `hex`, `json_pointer`, `cron` |
+| [Developer formats](reference/developer.md) | `base64`, `base64url`, `hex`, `json_pointer`, `relative_json_pointer`, `uri_template`, `regex`, `cron` |
 | [Financial](reference/financial.md) | `iban`, `isbn`, `isbn10`, `isbn13`, `card_number`, `luhn` |
-| [Registry](reference/registry.md) | `format`, `list_formats`, `register_format`, `unregister_format` |
-| [JSON Schema](json-schema.md) | `json_schema`, `json_schema_errors` |
+| [Registry](reference/registry.md) | `format`, `list_formats`, `register_format`, `unregister_format`, `register_schema`, `unregister_schema`, `list_schemas` |
+| [JSON Schema](json-schema.md) | `json_schema`, `json_schema_errors`, `json_schema_named`, `json_schema_named_errors` |
 
 ## Plans
 
@@ -39,6 +40,6 @@ The [roadmap](roadmap.md) lists candidate formats and the rules new validators f
 
 ## Example conventions
 
-SQL examples use named arguments and lowercase keywords. Comments after a statement show its result (`-- true`). Each task page states its prerequisites; run its blocks in order unless one is marked as an expected error. The test suite runs the quickstart, custom formats, JSON Schema and normalization examples (`test/spec/90_usage_quickstart.sql`, `91_usage_registry.sql`, `92_usage_json_schema.sql`, `93_usage_normalization.sql`).
+SQL examples use named arguments and lowercase keywords. Comments after a statement show its result (`-- true`). Each task page states its prerequisites; run its blocks in order unless one is marked as an expected error. The test suite runs the quickstart, custom formats, JSON Schema, normalization and named schema examples (`test/spec/90_usage_quickstart.sql`, `91_usage_registry.sql`, `92_usage_json_schema.sql`, `93_usage_normalization.sql`, `94_usage_named_schemas.sql`).
 
 The examples call the role that installed the extension the extension owner. It owns the registry and can let other roles register formats.

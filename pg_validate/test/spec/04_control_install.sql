@@ -2,7 +2,9 @@
 -- directory, a non-superuser runs `create extension pg_validate`: the extension
 -- lands in schema validate, is not relocatable, and marks the registry for
 -- pg_dump. A dump keeps registered formats but not the built-in rows, and
--- restores into a new database with the owner of each entry intact.
+-- named JSON schemas, and restores into a new database with the owner of
+-- each entry intact. A CHECK constraint that uses json_schema_named, added
+-- NOT VALID as docs/json-schema.md recommends, is restored after the data.
 --
 -- docker/run-matrix.sh copies the two files into each server before the run.
 -- A local throwaway cluster has neither, so the file then passes with SKIP
@@ -21,6 +23,8 @@ select exists (select 1 from pg_available_extensions where name = 'pg_validate')
 \set restore_builtins ''
 \set restore_custom ''
 \set restore_owner ''
+\set restore_schema ''
+\set restore_docs ''
 
 drop database if exists pgval_ctl_scratch with (force);
 drop database if exists pgval_ctl_restore with (force);
@@ -34,10 +38,15 @@ drop role if exists val_ctl_owner;
     create extension pg_validate;
     select extnamespace::regnamespace::text as ext_schema,
            extrelocatable::text as ext_reloc,
-           (extconfig = array['validate.formats'::regclass::oid] and extcondition = array['where not builtin'])::text as ext_config
+           (extconfig = array['validate.formats'::regclass::oid, 'validate.schemas'::regclass::oid]
+            and extcondition = array['where not builtin', ''])::text as ext_config
     from pg_extension where extname = 'pg_validate' \gset
     create function public.ticket(value text) returns boolean language sql immutable as $$ select value ~ '^T-[0-9]+$' $$;
     select validate.register_format(name => 'ticket', validator => 'public.ticket(text)', description => 'Ticket id');
+    select validate.register_schema(name => 'doc', schema => '{"type": "object", "required": ["id"]}', description => 'Doc');
+    create table public.docs (body jsonb);
+    alter table public.docs add constraint docs_body_check check (validate.json_schema_named(body, 'doc')) not valid;
+    insert into public.docs values ('{"id": 1}');
     reset session authorization;
 
     \set dump `pg_dump -d pgval_ctl_scratch`
@@ -52,23 +61,37 @@ drop role if exists val_ctl_owner;
     select count(*)::text as restore_builtins from validate.formats where builtin \gset
     select validate.format('ticket', 'T-7')::text as restore_custom \gset
     select owner::text as restore_owner from validate.formats where name = 'ticket' \gset
+    select (validate.json_schema_named('{"id": 2}', 'doc') and not validate.json_schema_named('{}', 'doc')
+            and (select owner from validate.schemas where name = 'doc') = 'val_ctl_owner')::text as restore_schema \gset
+    create function pg_temp.rejects_bad_row() returns boolean language plpgsql as $$
+    begin
+        insert into public.docs values ('{}');
+        return false;
+    exception when check_violation then
+        return true;
+    end;
+    $$;
+    select ((select count(*) from public.docs) = 1 and pg_temp.rejects_bad_row())::text as restore_docs \gset
 \endif
 
 \connect :"orig_db"
 
-select tap.plan(6);
+select tap.plan(8);
 
 \if :ctl_avail
     select tap.ok(:'ext_schema'::text = 'validate' and :'ext_reloc'::text = 'false',
                   'a non-superuser can create extension pg_validate; it is in schema validate and not relocatable');
-    select tap.is(:'ext_config'::text, 'true', 'validate.formats is a config table dumping rows where not builtin');
+    select tap.is(:'ext_config'::text, 'true', 'validate.formats (rows where not builtin) and validate.schemas are config tables');
     select tap.is(:'dump_ext'::text, 'true', 'pg_dump emits create extension pg_validate');
     select tap.ok(:'dump_custom'::text = 'true' and :'dump_builtin'::text = 'false',
                   'pg_dump keeps the registered format and leaves out the built-in rows');
-    select tap.is(:'restore_builtins'::text, '42', 'after restore, the built-in rows exist once');
+    select tap.is(:'restore_builtins'::text, '54', 'after restore, the built-in rows exist once');
     select tap.ok(:'restore_custom'::text = 'true' and :'restore_owner'::text = 'val_ctl_owner',
                   'after restore, the registered format works and keeps its owner (restore output: '
                   || coalesce(nullif(:'restore_out'::text, ''), 'none') || ')');
+    select tap.is(:'restore_schema'::text, 'true', 'after restore, the named schema works and keeps its owner');
+    select tap.is(:'restore_docs'::text, 'true',
+                  'after restore, the table data is back and the NOT VALID json_schema_named constraint still rejects bad rows');
 \else
     \echo '# pg_validate.control is not installed on this server; create extension was NOT tested'
     select tap.pass('SKIP control file not installed: create extension');
@@ -77,6 +100,8 @@ select tap.plan(6);
     select tap.pass('SKIP control file not installed: dump contents');
     select tap.pass('SKIP control file not installed: restore');
     select tap.pass('SKIP control file not installed: restored format');
+    select tap.pass('SKIP control file not installed: restored schema');
+    select tap.pass('SKIP control file not installed: restored constraint');
 \endif
 
 drop database if exists pgval_ctl_scratch with (force);

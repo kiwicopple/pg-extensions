@@ -1,6 +1,6 @@
 # Code list sources
 
-Five validators embed a code list in their function bodies: `country_code`, `country_code_alpha3`, `currency_code`, `language_code` and `iban`. This directory records where each list comes from, and `refresh.py` compares the lists in `pg_validate--0.0.1.sql` with their sources. Nothing here is needed to install the extension; the SQL file stays the only artifact.
+Five validators embed a code list in their function bodies: `country_code`, `country_code_alpha3`, `currency_code`, `language_code` and `iban`. Three more, `hostname`, `idn_hostname` and `idn_email`, use an embedded IDNA table (see [IDNA tables](#idna-tables)). This directory records where each list comes from, and `refresh.py` and `refresh_idna.py` compare the lists in `pg_validate--0.0.1.sql` with their sources. Nothing here is needed to install the extension; the SQL file stays the only artifact.
 
 ## Snapshot in this release
 
@@ -60,3 +60,38 @@ Run this before each release, and at least every three months: ISO 4217 and the 
 3. For a list that differs, `--sql` prints the regenerated string literal or `case` arms to paste into `pg_validate--0.0.1.sql` (or the next version's script), and `--examples` prints the registry example IBANs as rows for `test/spec/15_financial.sql`.
 4. Update the counts in `test/spec/13_international.sql`, add cases for the codes added and removed, and update this file, the comments above the validators, and `docs/reference/international.md` and `financial.md`.
 5. Run `docker/run-matrix.sh` and `npm run docs:build`.
+
+## IDNA tables
+
+`validate._idna_label` embeds one table of code point ranges for the IDNA2008 checks, and `validate._idna_hostname` the list of code points that the UTS #46 mapping ignores. Both are generated blocks in `pg_validate--0.0.1.sql`, between `-- BEGIN GENERATED ... by data/refresh_idna.py --sql` and `-- END GENERATED ...`.
+
+Retrieved 2026-11-05. The SHA-256 is of the file as fetched.
+
+| Data | Source | Version | SHA-256 |
+| --- | --- | --- | --- |
+| Derived property of every code point: PVALID, CONTEXTJ, CONTEXTO, DISALLOWED, UNASSIGNED (RFC 5892) | IANA IDNA Parameters: <https://www.iana.org/assignments/idna-tables-12.0.0/idna-tables-properties.csv> | 12.0.0, the latest version in the registry | `160b72e33a377a84253393c572dc338879f39b93beccbb9cb9baebbf4d6dd743` |
+| Bidi_Class, for the Bidi rule (RFC 5893) | <https://www.unicode.org/Public/12.0.0/ucd/extracted/DerivedBidiClass.txt> | Unicode 12.0.0 | `a50670c09adf9a7f6e7344bdef81d5c8a2c5d116191c6f141bd772f149d8ecdc` |
+| Joining_Type, for ZERO WIDTH NON-JOINER (RFC 5892 A.1) | <https://www.unicode.org/Public/12.0.0/ucd/extracted/DerivedJoiningType.txt> | Unicode 12.0.0 | `2a92a39d6713b8cc9a6d4eb808efaf93c52a4fcc01c149fec9892113838dae8b` |
+| Canonical_Combining_Class = Virama (A.1, A.2) | <https://www.unicode.org/Public/12.0.0/ucd/extracted/DerivedCombiningClass.txt> | Unicode 12.0.0 | `a857ee16245430a68577c060adbeae6e72cb25aac1dcd5f6c940eb0fdcee31f6` |
+| General_Category M, for a leading combining mark (RFC 5891 §4.2.3.2) | <https://www.unicode.org/Public/12.0.0/ucd/extracted/DerivedGeneralCategory.txt> | Unicode 12.0.0 | `d4db33ff590a6c80d7c34d2968595586ae59bfb280978470b6e2fa2b34808405` |
+| Script Greek, Hebrew, Hiragana, Katakana, Han (A.4 to A.7) | <https://www.unicode.org/Public/12.0.0/ucd/Scripts.txt> | Unicode 12.0.0 | `bd327cbb8bffd2e4b40b1e9842c9a7d641d1c4e91c34a41020cf174f3a1c86a1` |
+| Code points with status "ignored" in the UTS #46 mapping | <https://www.unicode.org/Public/idna/12.0.0/IdnaMappingTable.txt> | 12.0.0 | `87848ce5634c2b018a88dd8e97dd4dfdf575fd2861c3f930817f272e7433d912` |
+
+What the table holds: the 123,006 PVALID, 2 CONTEXTJ and 25 CONTEXTO code points of IANA 12.0.0, as 2,865 ranges in 34 classes. Each class records the derived property, the Bidi class, whether the code point is a combining mark or a virama, its joining type, and whether its script is one of the five that the contextual rules name. Every other code point is a gap, rejected as DISALLOWED or UNASSIGNED. The UCD files are of the same Unicode version as the IANA table, so every attribute describes the same character repertoire.
+
+### Policy and known gaps
+
+- **Unicode version.** IANA has not published derived property tables after 12.0.0. Characters added in Unicode 13.0 and later are UNASSIGNED in this table and rejected, although newer derivations (for example the Python `idna` package's) list many of them as PVALID. Deriving the table from a newer UCD with the RFC 5892 algorithm is possible, but it would no longer be IANA's published table; this release keeps the registry's version.
+- **Mapping.** `idn_hostname` applies a subset of UTS #46: it removes the ignored code points, normalizes to NFKC with Postgres's own Unicode tables (`normalize()`), maps U+3002 to `.` and lowercases ASCII. It does not apply the rest of the UTS #46 mapping table, which case-folds non-ASCII letters and maps other characters that NFKC leaves alone; embedding it would add its 5,522 "mapped" entries, most with a replacement string.
+- **What is not stored.** Only the attributes the IDNA2008 rules use. Names, ages and the other UCD properties are not needed.
+
+### Refresh the IDNA tables
+
+From `pg_validate/`:
+
+```bash
+data/refresh_idna.py            # compare the SQL file with the sources
+data/refresh_idna.py --sql      # also print the two generated blocks
+```
+
+It exits 1 when a block differs. To move to a newer version, change the version in the URLs at the top of the script, replace the two blocks with the `--sql` output, run `test/run.sh 11_internet 42_`, and update this section and the reference of `idn_hostname`. Python 3.9 or later, standard library only.

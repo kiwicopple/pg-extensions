@@ -12,16 +12,18 @@ This page lists formats under consideration and the rules a new validator must f
 
 ## JSON Schema follow-ups
 
-[`validate.json_schema`](json-schema.md) ships in 0.0.1. Possible next steps:
+[`validate.json_schema`](json-schema.md) ships in 0.0.1 with a validator for every Draft 2020-12 format and [named schemas](guides/named-schemas.md), which are checked and indexed once. Possible next steps:
 
-- Bundle the Draft 2020-12 metaschemas as known resources, so that `$ref` to `https://json-schema.org/draft/2020-12/schema` works and schemas can be validated against them.
-- The JSON Schema formats without a validator: `relative-json-pointer` and `regex` (ECMA-262 syntax) are small; `uri-template` (RFC 6570) is moderate; `iri`, `iri-reference`, `idn-email` and `idn-hostname` need Unicode and IDNA 2008 tables.
-- A compiled form (`validate.compile_schema(schema)`) so that a schema is indexed once and reused, and an `IMMUTABLE` variant restricted to built-in formats, for indexes and generated columns.
+- Bundle the Draft 2020-12 metaschemas as known resources, so that `$ref` to `https://json-schema.org/draft/2020-12/schema` works and schemas can be validated against them, including at registration.
+- An `IMMUTABLE` variant restricted to built-in formats, for indexes and generated columns.
 - A registry-backed translation of common `\p{...}` classes in patterns.
+- A faster evaluator for named schemas: generating a PL/pgSQL function per registered schema would remove most of the per-keyword checks, at the cost of `CREATE FUNCTION` at registration.
+- Restore order: a way for `pg_dump` to restore the registries before tables whose constraints use them, so that those constraints need not be `NOT VALID`.
+- IDNA: the IANA tables for a newer Unicode version when IANA publishes them, the rest of the UTS #46 mapping (case folding of non-ASCII letters), and the list of Script values for `\p{Script=...}` in `regex`.
 
 ## Implemented early
 
-These were on the list and cost little, so they ship in 0.0.1: `ipv4`, `ipv6`, `mac`, `port`, `git_sha`, `duration`, `uri_reference`, `base64url`, `luhn`, `rfc3339_date` and `rfc3339_time`.
+These were on the list and cost little, so they ship in 0.0.1: `ipv4`, `ipv6`, `mac`, `port`, `git_sha`, `duration`, `uri_reference`, `base64url`, `luhn`, `rfc3339_date` and `rfc3339_time`. The JSON Schema formats `iri`, `iri_reference`, `idn_hostname`, `idn_email`, `uri_template`, `relative_json_pointer` and `regex` ship in 0.0.1 too.
 
 ## Candidates
 
@@ -44,8 +46,6 @@ These were on the list and cost little, so they ship in 0.0.1: `ipv4`, `ipv6`, `
 | Origin | RFC 6454 serialized origin: scheme, host and port, no path. |
 | WebSocket URL | `ws` and `wss`, as `url` is for `http` and `https` (RFC 6455 §3). |
 | MIME type | RFC 9110 §8.3.1 `media-type` with parameters. |
-| IRI, IDN email, IDN host name | Need IDNA 2008 and Unicode tables (RFC 3987, 5890, 6531); needed for JSON Schema's `iri`, `idn-email`, `idn-hostname`. |
-| URI template | RFC 6570 level 4 syntax. |
 
 ### Dates, places and locales
 

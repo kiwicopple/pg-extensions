@@ -1,8 +1,8 @@
--- Goal: the install creates schema validate with the documented API: 37
+-- Goal: the install creates schema validate with the documented API: 44
 -- built-in validators, each registered under its own name with a
--- description, five JSON Schema format names as built-in aliases, the uuid
--- and nanoid overloads, the registry functions and json_schema. No C, no
--- other extension.
+-- description, ten JSON Schema format names as built-in aliases, the uuid
+-- and nanoid overloads, the registry functions, json_schema and the named
+-- schema functions. No C, no other extension.
 select tap.plan(9);
 
 select tap.ok(to_regnamespace('validate') is not null, 'schema validate exists');
@@ -11,27 +11,32 @@ select tap.set_eq(
     array(select l.name from validate.list_formats() l where l.builtin),
     array['base64', 'base64url', 'card_number', 'country_code', 'country_code_alpha3', 'cron',
           'currency_code', 'domain', 'duration', 'e164', 'email', 'git_sha', 'hex', 'hostname',
-          'iban', 'ipv4', 'ipv6', 'isbn', 'isbn10', 'isbn13', 'iso8601', 'json_pointer',
-          'language_code', 'luhn', 'mac', 'nanoid', 'port', 'rfc3339', 'rfc3339_date',
-          'rfc3339_time', 'semver', 'slug', 'ulid', 'uri', 'uri_reference', 'url', 'uuid',
-          'date-time', 'date', 'time', 'uri-reference', 'json-pointer'],
-    'the 37 built-in validators and 5 JSON Schema aliases are registered');
+          'iban', 'idn_email', 'idn_hostname', 'ipv4', 'ipv6', 'iri', 'iri_reference', 'isbn',
+          'isbn10', 'isbn13', 'iso8601', 'json_pointer', 'language_code', 'luhn', 'mac', 'nanoid',
+          'port', 'regex', 'relative_json_pointer', 'rfc3339', 'rfc3339_date', 'rfc3339_time',
+          'semver', 'slug', 'ulid', 'uri', 'uri_reference', 'uri_template', 'url', 'uuid',
+          'date-time', 'date', 'time', 'uri-reference', 'json-pointer', 'relative-json-pointer',
+          'uri-template', 'iri-reference', 'idn-hostname', 'idn-email'],
+    'the 44 built-in validators and 10 JSON Schema aliases are registered');
 
 select tap.is(
     (select count(*)::int from validate.list_formats() l
      where l.builtin and l.name = any(validate._builtin_formats())
        and l.validator = format('validate.%I(text)', l.name)::regprocedure),
-    37, 'each built-in validator''s format points at validate.<name>(text)');
+    44, 'each built-in validator''s format points at validate.<name>(text)');
 select tap.set_eq(
     array(select l.name || '=' || l.validator::text from validate.list_formats() l
           where l.builtin and not l.name = any(validate._builtin_formats())),
     array['date-time=validate.rfc3339(text)', 'date=validate.rfc3339_date(text)', 'time=validate.rfc3339_time(text)',
-          'uri-reference=validate.uri_reference(text)', 'json-pointer=validate.json_pointer(text)'],
+          'uri-reference=validate.uri_reference(text)', 'json-pointer=validate.json_pointer(text)',
+          'relative-json-pointer=validate.relative_json_pointer(text)', 'uri-template=validate.uri_template(text)',
+          'iri-reference=validate.iri_reference(text)', 'idn-hostname=validate.idn_hostname(text)',
+          'idn-email=validate.idn_email(text)'],
     'the JSON Schema aliases point at the matching validators');
 
 select tap.is(
     (select count(*)::int from validate.list_formats() l where l.builtin and l.description is not null),
-    42, 'each built-in format has a description');
+    54, 'each built-in format has a description');
 
 select tap.set_eq(
     array(select p.oid::regprocedure::text from pg_proc p
@@ -40,8 +45,11 @@ select tap.set_eq(
     array['validate.uuid(text,integer)', 'validate.nanoid(text,integer,text)',
           'validate.format(text,text)', 'validate.list_formats()',
           'validate.register_format(text,regprocedure,text)', 'validate.unregister_format(text)',
-          'validate.json_schema(jsonb,jsonb)', 'validate.json_schema_errors(jsonb,jsonb)'],
-    'the other public functions are the two overloads, the registry API and json_schema');
+          'validate.json_schema(jsonb,jsonb)', 'validate.json_schema_errors(jsonb,jsonb)',
+          'validate.json_schema_named(jsonb,text)', 'validate.json_schema_named_errors(jsonb,text)',
+          'validate.register_schema(text,jsonb,text)', 'validate.unregister_schema(text)',
+          'validate.list_schemas()'],
+    'the other public functions are the two overloads, the registry API, json_schema and named schemas');
 
 select tap.is(
     (select count(*)::int from pg_proc p join pg_language l on l.oid = p.prolang

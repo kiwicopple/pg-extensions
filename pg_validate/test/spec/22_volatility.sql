@@ -1,10 +1,11 @@
 -- Goal: volatility markings are true. Every built-in validator (and
 -- overload) is IMMUTABLE STRICT PARALLEL SAFE and none reads a catalog or a
--- setting; format() and json_schema() are STABLE (the registry changes) and
--- PARALLEL UNSAFE (a registered validator may be); nothing is SECURITY
+-- setting; format(), json_schema() and the named schema functions are STABLE
+-- (the registries change) and PARALLEL UNSAFE (a registered validator may
+-- be); nothing is SECURITY
 -- DEFINER; every function pins search_path. Results do not change with
 -- TimeZone, DateStyle, standard_conforming_strings or a Turkish collation.
-select tap.plan(19);
+select tap.plan(22);
 
 with b as (
     select p.*
@@ -14,7 +15,7 @@ with b as (
 )
 select tap.is(
     (select count(distinct oid)::int from b where provolatile = 'i' and proisstrict and proparallel = 's'),
-    37, 'all 37 built-in validators are IMMUTABLE STRICT PARALLEL SAFE');
+    44, 'all 44 built-in validators are IMMUTABLE STRICT PARALLEL SAFE');
 
 select tap.is(
     (select string_agg(p.oid::regprocedure::text, ', ')
@@ -22,7 +23,8 @@ select tap.is(
      where p.pronamespace = 'validate'::regnamespace
        and p.proname not like '\_%'
        and p.proname not in ('format', 'list_formats', 'register_format', 'unregister_format',
-                             'json_schema', 'json_schema_errors')
+                             'json_schema', 'json_schema_errors', 'json_schema_named', 'json_schema_named_errors',
+                             'register_schema', 'unregister_schema', 'list_schemas')
        and not (p.provolatile = 'i' and p.proisstrict and p.proparallel = 's')),
     null, 'every public validator, overloads included, is IMMUTABLE STRICT PARALLEL SAFE');
 
@@ -31,8 +33,10 @@ select tap.is(
      from pg_proc p
      where p.pronamespace = 'validate'::regnamespace
        and p.proname like '\_%'
-       -- the registry trigger, and the JSON Schema evaluator (it calls format())
-       and p.proname not in ('_can_manage', '_formats_guard', '_js_eval', '_js_target', '_js_pct_decode')
+       -- the registry trigger, and the JSON Schema evaluator (it calls format()
+       -- and reads the schema registry)
+       and p.proname not in ('_can_manage', '_registry_guard', '_js_eval', '_js_target', '_js_pct_decode',
+                             '_js_format', '_js_named', '_js_compile_named')
        and not (p.provolatile = 'i' and p.proparallel = 's')),
     null, 'every other internal helper is IMMUTABLE PARALLEL SAFE');
 select tap.is(
@@ -42,6 +46,20 @@ select tap.is(
        and p.provolatile = 's' and p.proisstrict and p.proparallel = 'u' and not p.prosecdef),
     'validate.json_schema(jsonb,jsonb), validate.json_schema_errors(jsonb,jsonb)',
     'json_schema() and json_schema_errors() are STABLE STRICT PARALLEL UNSAFE SECURITY INVOKER');
+select tap.is(
+    (select string_agg(p.oid::regprocedure::text, ', ' order by 1)
+     from pg_proc p
+     where p.oid in ('validate.json_schema_named(jsonb, text)'::regprocedure, 'validate.json_schema_named_errors(jsonb, text)'::regprocedure)
+       and p.provolatile = 's' and p.proisstrict and p.proparallel = 'u' and not p.prosecdef),
+    'validate.json_schema_named(jsonb,text), validate.json_schema_named_errors(jsonb,text)',
+    'json_schema_named() and json_schema_named_errors() are STABLE STRICT PARALLEL UNSAFE SECURITY INVOKER');
+select tap.is(
+    (select string_agg(p.oid::regprocedure::text || '=' || p.provolatile::text || p.proparallel::text, ', ' order by p.proname)
+     from pg_proc p
+     where p.oid in ('validate.register_schema(text, jsonb, text)'::regprocedure, 'validate.unregister_schema(text)'::regprocedure,
+                     'validate.list_schemas()'::regprocedure)),
+    'validate.list_schemas()=su, validate.register_schema(text,jsonb,text)=vu, validate.unregister_schema(text)=vu',
+    'list_schemas() is STABLE; register_schema() and unregister_schema() are VOLATILE (they write)');
 
 select tap.ok(
     (select provolatile = 's' and proparallel = 'u' and proisstrict and not prosecdef
@@ -76,6 +94,9 @@ select tap.throws_ok($$ create index on tj ((validate.json_schema(doc, '{"type":
                      'json_schema() cannot be indexed: it is not immutable');
 select tap.lives_ok($$ alter table tj add constraint tj_doc check (validate.json_schema(doc, '{"type": "object"}')) $$,
                     'json_schema() can be used in a CHECK constraint');
+select validate.register_schema(name => 'vol', schema => '{"type": "object"}');
+select tap.throws_ok($$ create index on tj ((validate.json_schema_named(doc, 'vol'))) $$, '42P17',
+                     'json_schema_named() cannot be indexed: it is not immutable');
 
 -- Session settings do not change results
 set timezone = 'Asia/Kathmandu';
@@ -99,7 +120,10 @@ select exists (select 1 from pg_collation where collname = 'tr-TR-x-icu') as has
 select tap.ok(validate.cron('0 0 * jan-mar mon' collate "tr-TR-x-icu")
               and validate.country_code('TR' collate "tr-TR-x-icu")
               and validate.url('HTTPS://EXAMPLE.COM/I' collate "tr-TR-x-icu")
-              and validate.email('IIi@example.com' collate "tr-TR-x-icu"),
+              and validate.email('IIi@example.com' collate "tr-TR-x-icu")
+              and validate.idn_hostname('BIİ.example' collate "tr-TR-x-icu") is false
+              and validate.idn_hostname('XN--MNCHEN-3YA.DE' collate "tr-TR-x-icu")
+              and validate.iri('HTTPS://I.example/ı' collate "tr-TR-x-icu"),
               'results do not depend on the collation (Turkish dotted and dotless i)');
 \else
 select tap.pass('SKIP no tr-TR-x-icu collation on this server');

@@ -96,7 +96,8 @@ select validate.format('ticket', 'T-42')::text as smoke_reg \gset
     where d.refclassid = 'pg_extension'::regclass and d.deptype = 'e'
       and d.refobjid = (select oid from pg_extension where extname = :'tle_name')
       and p.pronamespace = 'validate'::regnamespace \gset
-    select (extconfig = array['validate.formats'::regclass::oid] and extcondition = array['where not builtin'])::text as tle_config
+    select (extconfig = array['validate.formats'::regclass::oid, 'validate.schemas'::regclass::oid]
+            and extcondition = array['where not builtin', ''])::text as tle_config
     from pg_extension where extname = :'tle_name' \gset
     create function public.ticket(value text) returns boolean language sql immutable as $$ select value ~ '^T-[0-9]+$' $$;
     select validate.register_format(name => 'ticket', validator => 'public.ticket(text)');
@@ -124,7 +125,7 @@ select tap.is(:'smoke_reg'::text, 'true', 'smoke: the installing role can regist
                   'pgtle.install_extension + create extension works as a non-superuser, in schema validate (extension: '
                   || :'tle_name'::text || ', functions: ' || :'tle_members'::text || ')');
     select tap.is(:'tle_config'::text, 'true',
-                  'validate.formats is an extension config table that dumps only rows where not builtin');
+                  'validate.formats (rows where not builtin) and validate.schemas (all rows) are extension config tables');
     select tap.ok(:'tle_smoke'::text = 'true' and :'tle_dropped'::text = 'true',
                   'a custom format works under pg_tle, and drop extension removes the functions');
 \else
