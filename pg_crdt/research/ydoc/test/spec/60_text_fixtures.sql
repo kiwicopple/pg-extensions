@@ -11,7 +11,7 @@
 -- with nothing left buffered (ops_since is causal).
 \i :ext_dir/test/lib/text-helpers.sql
 \set QUIET on
-\i :ext_dir/experiments/text-ref/fixtures/fixtures.sql
+\i :ext_dir/../../experiments/text-ref/fixtures/fixtures.sql
 \set QUIET off
 
 create temp table runs (name text, mode text, doc text);

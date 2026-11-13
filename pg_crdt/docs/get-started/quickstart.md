@@ -1,6 +1,6 @@
 # Quickstart: a counter column
 
-Add a like counter to a table, let two writers count under their own names, merge a count that arrives from somewhere else, and read the value. It takes a few minutes and needs no role setup.
+In this guide, you will add a like counter to a table, update it as two writers, and merge a count from an offline phone. You will also retry that merge to see why it does not count the same likes twice. You can complete the guide in a few minutes without setting up database roles.
 
 ## Before you start
 
@@ -36,7 +36,9 @@ insert into posts (id, title) values (1, 'Hello');
 
 ## Count as two writers
 
-Each writer counts under its own **replica id**: any name that identifies it, such as a user id or a device. `pn_increment` adds to that writer's running total; `pn_decrement` adds to its total of subtractions. The `update` reads the current state and writes the new one in a single statement, which is what makes it safe when several writers do it at once.
+Give each writer a name, called its replica id. This can be a user id or a device name. `pn_increment` records how much that writer has added, and `pn_decrement` records how much it has subtracted.
+
+Keep each change in one `update` statement, as below. Postgres then locks the row while it reads and updates the counter, so simultaneous writes do not overwrite each other.
 
 ```js tab="JavaScript"
 await client.query(
@@ -73,7 +75,7 @@ set likes = crdt.pn_decrement(likes, 'alice')
 where id = 1;
 ```
 
-Alice liked and then took her like back. Bob liked twice, for example from two buttons. The counter holds the sum of what each writer added, minus the sum of what each subtracted.
+Alice adds 1 and then subtracts 1. Bob adds 2. The counter adds up their contributions, giving a total of 2.
 
 ## Read the value
 
@@ -168,10 +170,10 @@ select crdt.pn_value(likes) from posts where id = 1;
 
 The value is 7: Alice and Bob's 2, plus Carol's 5, counted once.
 
-## Rules to keep from the start
+## Use this in your application
 
 - **Merge inside the `update`.** Never read the state, merge it in your application and write the result back: another writer's change in between is lost. See [Update safely](../guides/safe-updates.md).
-- **One writer per replica id.** If two writers count under the same id, they overwrite each other. See [Replicas and identity](../guides/replicas-and-identity.md).
+- Give each independent writer its own replica id. Two offline writers that send totals under the same id can lose counts. See [Replicas and identity](../guides/replicas-and-identity.md).
 - **Here the server chose the ids.** `alice`, `bob` and `carol` above came from trusted code. If clients send their own counts, a client can send an entry that claims to be someone else's, and merge keeps it forever. Give such clients a wrapper function instead of `update` access: see [Accept writes from untrusted clients](../guides/security.md).
 
 ## Next steps

@@ -2,7 +2,7 @@
 # Head-to-head benchmark of the two text-CRDT shapes on one blog-post table:
 #   shape A  jsonb column crdt.yseq   (yseq_ functions; from experiments/text-column)
 #   shape B  table-backed documents   (ydoc_ functions; from experiments/text-table)
-# Both are part of the extension (pg_crdt--0.0.1.sql) and coexist in ONE
+# Both are preserved in the research snapshot and coexist in ONE
 # database (different prefixes),
 # and every workload runs on both, on the same machine, in one run, so the
 # numbers are comparable. Prints Markdown tables for research/benchmarks/text.md.
@@ -33,7 +33,7 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 EXT_DIR=$(dirname "$HERE")
 TRACES="$EXT_DIR/experiments/text-ref/traces"
-IMPL="$EXT_DIR/pg_crdt--0.0.1.sql"
+IMPL="$EXT_DIR/research/ydoc/pg_crdt--0.0.1.sql"
 . "$EXT_DIR/test/lib/cluster.sh"
 
 QUICK=0

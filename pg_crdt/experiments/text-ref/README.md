@@ -1,12 +1,12 @@
 # text-ref: JS reference for the pg_crdt text CRDT
 
-Reference YjsMod sequence CRDT, validation rules for the untrusted write path, differential-test fixtures, and an editing-trace converter. Contract: `../../research/text.md` plus the rules below. Plain ESM, Node 23, no dependencies. The engine is shared with the client library: `ref.mjs` re-exports `../../client/src/doc.js`.
+Reference YjsMod sequence CRDT, validation rules for the untrusted write path, differential-test fixtures, and an editing-trace converter. Contract: `../../research/text.md` plus the rules below. Plain ESM, Node 23, no dependencies. The engine is shared with the client library: `ref.mjs` re-exports `engine.mjs`; the archived document client imports that same engine.
 
 ## Files
 
 | File | What |
 |---|---|
-| `ref.mjs` | `Doc` (reference CRDT), `OpRejected`, `mergeOps`. One item per character in memory, runs only on the wire. Since session 8 the code lives in [`../../client/src/doc.js`](../../client/src/doc.js), the engine of the [JavaScript client](../../docs/reference/client.md), without Node-only APIs; this file re-exports it. |
+| `ref.mjs` | `Doc` (reference CRDT), `OpRejected`, `mergeOps`. One item per character in memory, runs only on the wire. The code lives in [`engine.mjs`](engine.mjs), shared with the [archived document client](../../research/ydoc/README.md), without Node-only APIs; this file re-exports it. |
 | `sim.mjs` | Seeded PRNG (mulberry32) and the random honest multi-replica simulation. |
 | `byz.mjs` | Byzantine-writer simulation: honest replicas plus ops that lie about origins, seqs, `v` and delete targets. |
 | `test.mjs` | Self-tests. `node test.mjs` exits 0/1 (about 2 s). |

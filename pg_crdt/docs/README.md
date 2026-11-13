@@ -1,49 +1,28 @@
 # pg_crdt documentation
 
-`pg_crdt` adds conflict-free replicated data types (CRDTs) to Postgres, for values that several writers change independently and merge later. The extension is SQL and PL/pgSQL, runs on Postgres 16, 17 and 18, and works with any client, driver or API layer. Version 0.0.1 has two types: the PN-Counter, a counter that goes up and down, and collaborative text, a plain-text document that several people edit at once, in a column of your table (`yseq_`, experimental) or in the extension's tables (`ydoc_`).
+Choose the feature you want to build. Both keep their state in your own Postgres tables; the text column is experimental and has significant storage and sync limits.
 
-New to the project? Read the [overview](overview.md), [install the extension](install.md) and follow the [quickstart](get-started/quickstart.md). The quickstart adds a counter column to a table, counts as two writers and merges a count that arrives from another place.
+| Journey | First steps | Build your application |
+| --- | --- | --- |
+| Counters | [Install](install.md), then [your first counter](get-started/quickstart.md) | [Sync counts](guides/sync-counts.md), [identify writers](guides/replicas-and-identity.md), [accept client updates](guides/security.md), [store and query large counters](guides/storage-and-performance.md) |
+| Collaborative text | [Read the limitations](text/limits.md), [install](install.md), then [your first shared document](get-started/text.md) | [Save forms](text/forms.md), [control access](text/access.md), [connect a live editor](text/live-editor.md), [search](text/search.md) |
 
-## Build your application
+## Operate and troubleshoot
 
-| Task | Read |
-| --- | --- |
-| Understand CRDTs, and decide whether you need one | [Overview](overview.md) |
-| Install with a script, pg_tle or `create extension` | [Install](install.md) |
-| Add a counter column and count | [Quickstart](get-started/quickstart.md) |
-| Name your writers, use device ids, recover a lost device | [Replicas and identity](guides/replicas-and-identity.md) |
-| Write from several clients without losing updates | [Update safely](guides/safe-updates.md) |
-| Let clients send their own counts without forging each other's | [Accept writes from untrusted clients](guides/security.md) |
-| Index the value, keep counters as deltas, read the benchmarks | [Storage and performance](guides/storage-and-performance.md) |
-| Understand the state and its merge | [PN-Counter](types/pn-counter.md) |
-| Let several people edit a text, from forms or live editors | [Collaborative text for a blog post](guides/collaborative-text.md) |
-| Choose between a text column and table-backed documents; how text merges, and what it cannot do | [Collaborative text](types/collaborative-text.md) |
-| Connect a live editor in JavaScript | [JavaScript client](reference/client.md) |
-| Understand an error or a limit | [Errors](reference/errors.md), [Limits](reference/limits.md) |
+[Back up and restore](operations/backups.md), [maintain storage](operations/maintenance.md), [handle transaction retries](guides/safe-updates.md), [troubleshoot symptoms](operations/troubleshooting.md), or [uninstall](operations/uninstall.md).
 
-## Reference
+## Understand or look up behavior
 
-| Page | Contents |
-| --- | --- |
-| [Shared](reference/shared.md) | Schema and naming, privileges, replica ids, `current_replica_id`, the settings, the state envelope and versioning |
-| [PN-Counter functions](reference/pn.md) | `pn_empty`, `pn_increment`, `pn_decrement`, `pn_value`, `pn_merge`, `pn_merge_agg`, `pn_is_valid`, `pn_apply_delta` |
-| [Collaborative text column functions](reference/yseq.md) | The `crdt.yseq` domain (experimental) and `yseq_empty`, `yseq_new`, `yseq_value`, `yseq_length`, `yseq_version`, `yseq_insert`, `yseq_delete`, `yseq_set`, `yseq_diff`, `yseq_ops_since`, `yseq_merge`, `yseq_merge_agg`, `yseq_apply`, `yseq_is_valid`; limits |
-| [Collaborative text functions](reference/ydoc.md) | `ydoc_create`, `ydoc_value`, `ydoc_length`, `ydoc_version`, `ydoc_base`, `ydoc_insert`, `ydoc_delete`, `ydoc_set`, `ydoc_apply`, `ydoc_merge`, `ydoc_ops_since`, `ydoc_compact`, `ydoc_rejected_purge`, `ydoc_drop`; the tables and their grants; limits |
-| [JavaScript client](reference/client.md) | `pg-crdt-client` for `ydoc_` collaborative text: `openYdoc`, edits at UTF-16 positions, change events, `sync`, transports, refused ops |
-| [Errors](reference/errors.md) | Every SQLSTATE the extension raises, and the Postgres errors you can meet |
-| [Limits](reference/limits.md) | Numeric limits, growth, and what is not built |
-
-## Project
-
-| Page | Contents |
-| --- | --- |
-| [Changelog](../CHANGELOG.md) | What each version contains |
-| [Test suite](../test/README.md) | How to run the tests, and what each spec file checks |
-| [Conventions](../STYLE.md) | How these pages are written |
-| [Research](../research/README.md) | The architecture, prior art, benchmarks and the build journal. Planned types are described there |
+- Explanations: [How counters merge](types/pn-counter.md), [How text merges](types/collaborative-text.md).
+- Reference: [Counter functions](reference/pn.md), [text column functions](reference/yseq.md), [identity settings](reference/shared.md), [errors](reference/errors.md), [limits](reference/limits.md).
+- Project: [Changelog](../CHANGELOG.md), [tests](../test/README.md), [writing conventions](../STYLE.md), [research](../research/README.md).
 
 ## Example conventions
 
-The examples are generic Postgres. Run the SQL in psql, or in any client. Where an application does the work, choose **JavaScript** or **SQL**: the site remembers your selection. JavaScript examples use plain [node-postgres](https://node-postgres.com) (`pg`) and assume a connected `client`, as set up in the [quickstart](get-started/quickstart.md#before-you-start). The SQL uses lowercase keywords, qualifies every extension name with `crdt.`, and shows results as comments.
+Run a page's examples in order unless it says otherwise. Each task states its setup. SQL runs in psql; JavaScript uses a connected node-postgres `client`, as shown in the [counter quickstart](get-started/quickstart.md#before-you-start). On the website, language tabs show alternatives; GitHub and Markdown exports show both.
 
-Each task page states its prerequisites, and its examples run in order unless a block is introduced as a fragment, or ends with an `-- ERROR:` comment. Roles such as `app_writer` are examples: grant to your own.
+Sample role names are placeholders for your own roles. Statements marked with an `-- ERROR:` comment intentionally fail. API reference examples include their own small setup and can be read independently.
+
+## Earlier table-backed documents
+
+The `ydoc_` implementation and its JavaScript client are [archived research](../research/ydoc/README.md). They are not part of the current extension. Read the [scope decision](../research/scope.md) before changing an existing installation.

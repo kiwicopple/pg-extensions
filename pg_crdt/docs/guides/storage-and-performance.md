@@ -1,6 +1,8 @@
 # Storage and performance
 
-A counter can live in one column that you update, or in a table of insert-only deltas that you aggregate. This page compares the two, shows how to index the value, and says what the benchmarks measured. The numbers are observations from single runs on a laptop, not guarantees. The full report is in the [benchmark record](../../research/benchmarks/pn-counter.md).
+Start with a counter in a single column. If it grows to include many writers or receives frequent updates, you can store incoming deltas as separate rows and merge them when you read.
+
+This guide compares those options, shows how to index the counter's value, and gives a recipe for combining old deltas into a snapshot. The benchmark numbers come from single runs on a laptop; use them to understand the tradeoffs, then measure your own workload. The full report is in the [benchmark record](../../research/benchmarks/pn-counter.md).
 
 ## Two ways to store a counter
 
@@ -34,7 +36,7 @@ What has not been measured: lz4 against the default TOAST compression, `fillfact
 
 ## Keep counters as deltas
 
-A delta is a small `crdt.pn` with one entry. Insert it, and read the counter with the aggregate:
+A delta is a `crdt.pn` state containing only the entries a writer changed. Each entry still holds that writer's running total, not just the amount of the latest change. The examples below use deltas with one entry. Insert them as rows, then merge them with the aggregate when you read:
 
 ```sql
 create table like_deltas (

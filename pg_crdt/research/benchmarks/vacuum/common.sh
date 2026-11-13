@@ -10,7 +10,7 @@
 
 VAC_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 EXT_DIR=$(cd "$VAC_DIR/../../.." && pwd)
-IMPL="$EXT_DIR/pg_crdt--0.0.1.sql"
+IMPL="$EXT_DIR/research/ydoc/pg_crdt--0.0.1.sql"
 RESULTS="$VAC_DIR/results"
 mkdir -p "$RESULTS"
 . "$EXT_DIR/test/lib/cluster.sh"

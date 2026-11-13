@@ -1,69 +1,316 @@
-// Canonical page inventory. Sync, sidebar, and Markdown exports use this list.
-// `src` is relative to pg_crdt/; `route` is the site path.
+// Canonical Markdown sources and routes. Legacy routes remain published outside the sidebar.
 export const pages = [
-  { src: 'docs/overview.md', route: 'overview', label: 'Overview' },
-  { src: 'docs/README.md', route: 'guide', label: 'Documentation map' },
-  { src: 'docs/install.md', route: 'install', label: 'Install' },
-  { src: 'docs/get-started/quickstart.md', route: 'get-started/quickstart', label: 'Quickstart: a counter column' },
-  { src: 'docs/guides/replicas-and-identity.md', route: 'guides/replicas-and-identity', label: 'Replicas and identity' },
-  { src: 'docs/guides/safe-updates.md', route: 'guides/safe-updates', label: 'Update safely' },
-  { src: 'docs/guides/security.md', route: 'guides/security', label: 'Accept writes from untrusted clients' },
-  { src: 'docs/guides/storage-and-performance.md', route: 'guides/storage-and-performance', label: 'Storage and performance' },
-  { src: 'docs/guides/collaborative-text.md', route: 'guides/collaborative-text', label: 'Collaborative text for a blog post' },
-  { src: 'docs/types/pn-counter.md', route: 'types/pn-counter', label: 'PN-Counter' },
-  { src: 'docs/types/collaborative-text.md', route: 'types/collaborative-text', label: 'Collaborative text' },
-  { src: 'docs/reference/shared.md', route: 'reference/shared', label: 'Shared' },
-  { src: 'docs/reference/pn.md', route: 'reference/pn', label: 'PN-Counter functions' },
-  { src: 'docs/reference/yseq.md', route: 'reference/yseq', label: 'Text column functions (yseq_)' },
-  { src: 'docs/reference/ydoc.md', route: 'reference/ydoc', label: 'Text table functions (ydoc_)' },
-  { src: 'docs/reference/client.md', route: 'reference/client', label: 'JavaScript client' },
-  { src: 'docs/reference/errors.md', route: 'reference/errors', label: 'Errors' },
-  { src: 'docs/reference/limits.md', route: 'reference/limits', label: 'Limits' },
-  { src: 'CHANGELOG.md', route: 'changelog', label: 'Changelog' },
-  { src: 'test/README.md', route: 'contributing/test-suite', label: 'Test suite' },
-  { src: 'STYLE.md', route: 'contributing/style-guide', label: 'Conventions' },
+  {
+    "src": "docs/overview.md",
+    "route": "overview",
+    "label": "What pg_crdt does"
+  },
+  {
+    "src": "docs/install.md",
+    "route": "install",
+    "label": "Install"
+  },
+  {
+    "src": "docs/get-started/quickstart.md",
+    "route": "get-started/quickstart",
+    "label": "Your first counter"
+  },
+  {
+    "src": "docs/guides/sync-counts.md",
+    "route": "guides/sync-counts",
+    "label": "Sync counts from another device"
+  },
+  {
+    "src": "docs/guides/replicas-and-identity.md",
+    "route": "guides/replicas-and-identity",
+    "label": "Identify writers and devices"
+  },
+  {
+    "src": "docs/guides/security.md",
+    "route": "guides/security",
+    "label": "Accept client updates"
+  },
+  {
+    "src": "docs/guides/storage-and-performance.md",
+    "route": "guides/storage-and-performance",
+    "label": "Store and query large counters"
+  },
+  {
+    "src": "docs/get-started/text.md",
+    "route": "get-started/text",
+    "label": "Your first shared document"
+  },
+  {
+    "src": "docs/text/forms.md",
+    "route": "text/forms",
+    "label": "Save changes from a form"
+  },
+  {
+    "src": "docs/text/access.md",
+    "route": "text/access",
+    "label": "Control document access"
+  },
+  {
+    "src": "docs/text/live-editor.md",
+    "route": "text/live-editor",
+    "label": "Connect a live editor"
+  },
+  {
+    "src": "docs/text/search.md",
+    "route": "text/search",
+    "label": "Search documents"
+  },
+  {
+    "src": "docs/text/limits.md",
+    "route": "text/limits",
+    "label": "Limits and performance"
+  },
+  {
+    "src": "docs/operations/backups.md",
+    "route": "operations/backups",
+    "label": "Back up and restore"
+  },
+  {
+    "src": "docs/operations/maintenance.md",
+    "route": "operations/maintenance",
+    "label": "Maintain storage"
+  },
+  {
+    "src": "docs/guides/safe-updates.md",
+    "route": "guides/safe-updates",
+    "label": "Safe updates and retries"
+  },
+  {
+    "src": "docs/operations/troubleshooting.md",
+    "route": "operations/troubleshooting",
+    "label": "Troubleshooting"
+  },
+  {
+    "src": "docs/operations/uninstall.md",
+    "route": "operations/uninstall",
+    "label": "Uninstall"
+  },
+  {
+    "src": "docs/types/pn-counter.md",
+    "route": "types/pn-counter",
+    "label": "How counters merge"
+  },
+  {
+    "src": "docs/types/collaborative-text.md",
+    "route": "types/collaborative-text",
+    "label": "How text merges"
+  },
+  {
+    "src": "docs/reference/pn.md",
+    "route": "reference/pn",
+    "label": "Counter SQL functions"
+  },
+  {
+    "src": "docs/reference/yseq.md",
+    "route": "reference/yseq",
+    "label": "Text column SQL functions"
+  },
+  {
+    "src": "docs/reference/shared.md",
+    "route": "reference/shared",
+    "label": "Identity settings"
+  },
+  {
+    "src": "docs/reference/errors.md",
+    "route": "reference/errors",
+    "label": "Errors"
+  },
+  {
+    "src": "docs/reference/limits.md",
+    "route": "reference/limits",
+    "label": "Limits"
+  },
+  {
+    "src": "CHANGELOG.md",
+    "route": "changelog",
+    "label": "Changelog"
+  },
+  {
+    "src": "test/README.md",
+    "route": "contributing/test-suite",
+    "label": "Tests"
+  },
+  {
+    "src": "STYLE.md",
+    "route": "contributing/style-guide",
+    "label": "Writing conventions"
+  },
+  {
+    "src": "docs/README.md",
+    "route": "guide",
+    "label": "Documentation map"
+  },
+  {
+    "src": "docs/guides/collaborative-text.md",
+    "route": "guides/collaborative-text",
+    "label": "Build with collaborative text"
+  },
+  {
+    "src": "docs/reference/ydoc.md",
+    "route": "reference/ydoc",
+    "label": "Table-backed documents: archived"
+  },
+  {
+    "src": "docs/reference/client.md",
+    "route": "reference/client",
+    "label": "JavaScript client: archived"
+  }
 ];
-
-const item = (route) => ({ label: pages.find((p) => p.route === route).label, slug: route });
 
 export const sidebar = [
   {
-    label: 'Start here',
-    items: [item('overview'), item('install'), item('get-started/quickstart'), item('guide')],
+    "label": "Start here",
+    "items": [
+      {
+        "label": "What pg_crdt does",
+        "slug": "overview"
+      },
+      {
+        "label": "Install",
+        "slug": "install"
+      }
+    ]
   },
   {
-    label: 'Guides',
-    items: [
-      item('guides/replicas-and-identity'),
-      item('guides/safe-updates'),
-      item('guides/security'),
-      item('guides/storage-and-performance'),
-      item('guides/collaborative-text'),
+    "label": "Counters",
+    "items": [
+      {
+        "label": "Your first counter",
+        "slug": "get-started/quickstart"
+      },
+      {
+        "label": "Sync counts from another device",
+        "slug": "guides/sync-counts"
+      },
+      {
+        "label": "Identify writers and devices",
+        "slug": "guides/replicas-and-identity"
+      },
+      {
+        "label": "Accept client updates",
+        "slug": "guides/security"
+      },
+      {
+        "label": "Store and query large counters",
+        "slug": "guides/storage-and-performance"
+      }
+    ]
+  },
+  {
+    "label": "Collaborative text",
+    "items": [
+      {
+        "label": "Your first shared document",
+        "slug": "get-started/text"
+      },
+      {
+        "label": "Save changes from a form",
+        "slug": "text/forms"
+      },
+      {
+        "label": "Control document access",
+        "slug": "text/access"
+      },
+      {
+        "label": "Connect a live editor",
+        "slug": "text/live-editor"
+      },
+      {
+        "label": "Search documents",
+        "slug": "text/search"
+      },
+      {
+        "label": "Limits and performance",
+        "slug": "text/limits"
+      }
+    ]
+  },
+  {
+    "label": "Operate and troubleshoot",
+    "items": [
+      {
+        "label": "Back up and restore",
+        "slug": "operations/backups"
+      },
+      {
+        "label": "Maintain storage",
+        "slug": "operations/maintenance"
+      },
+      {
+        "label": "Safe updates and retries",
+        "slug": "guides/safe-updates"
+      },
+      {
+        "label": "Troubleshooting",
+        "slug": "operations/troubleshooting"
+      },
+      {
+        "label": "Uninstall",
+        "slug": "operations/uninstall"
+      }
+    ]
+  },
+  {
+    "label": "How it works",
+    "items": [
+      {
+        "label": "How counters merge",
+        "slug": "types/pn-counter"
+      },
+      {
+        "label": "How text merges",
+        "slug": "types/collaborative-text"
+      }
     ],
+    "collapsed": true
   },
   {
-    label: 'Types',
-    items: [item('types/pn-counter'), item('types/collaborative-text')],
-  },
-  {
-    label: 'Reference',
-    items: [
-      item('reference/shared'),
-      item('reference/pn'),
-      item('reference/yseq'),
-      item('reference/ydoc'),
-      item('reference/client'),
-      item('reference/errors'),
-      item('reference/limits'),
+    "label": "Reference",
+    "items": [
+      {
+        "label": "Counter SQL functions",
+        "slug": "reference/pn"
+      },
+      {
+        "label": "Text column SQL functions",
+        "slug": "reference/yseq"
+      },
+      {
+        "label": "Identity settings",
+        "slug": "reference/shared"
+      },
+      {
+        "label": "Errors",
+        "slug": "reference/errors"
+      },
+      {
+        "label": "Limits",
+        "slug": "reference/limits"
+      }
     ],
+    "collapsed": true
   },
   {
-    label: 'Project',
-    items: [item('changelog')],
-  },
-  {
-    label: 'Contributing',
-    collapsed: true,
-    items: [item('contributing/test-suite'), item('contributing/style-guide')],
-  },
+    "label": "Project",
+    "items": [
+      {
+        "label": "Changelog",
+        "slug": "changelog"
+      },
+      {
+        "label": "Tests",
+        "slug": "contributing/test-suite"
+      },
+      {
+        "label": "Writing conventions",
+        "slug": "contributing/style-guide"
+      }
+    ],
+    "collapsed": true
+  }
 ];

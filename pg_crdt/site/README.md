@@ -24,7 +24,7 @@ The production URL is `https://crdt.postgres.tools`, set in one constant, `DEFAU
 
 ## Code tabs
 
-pg_crdt has no client library, so a task that an application does is shown twice: `tab="JavaScript"` (plain node-postgres) and `tab="SQL"`. In the source, two adjacent fenced blocks (only blank lines between them) with a `tab="..."` meta are one group. GitHub and the Markdown exports show every block in source order. On the site, `scripts/code-tabs.mjs` turns each group into `<Tabs syncKey="lang">`, so the reader's choice carries across pages, and the page is written as `.mdx` instead of `.md`. The converter requires at least two blocks per group, a plain language label, JavaScript first and SQL last.
+Counter examples use a database driver directly. The active text column has no bundled client; the former table-backed client is research only. Application examples that use a driver are shown twice: `tab="JavaScript"` (plain node-postgres) and `tab="SQL"`. In the source, two adjacent fenced blocks (only blank lines between them) with a `tab="..."` meta are one group. GitHub and the Markdown exports show every block in source order. On the site, `scripts/code-tabs.mjs` turns each group into `<Tabs syncKey="lang">`, so the reader's choice carries across pages, and the page is written as `.mdx` instead of `.md`. The converter requires at least two blocks per group, a plain language label, JavaScript first and SQL last.
 
 ## Generated files
 
@@ -49,6 +49,6 @@ Sync rewrites relative links between pages to site routes; links to code and oth
 - the Markdown exports keep their code, with the tab labels, and their links resolve;
 - every rendered tab group has at least two tabs, JavaScript first, and matches the source;
 - every sidebar route exists;
-- every public function in `../pg_crdt--0.0.1.sql` has one reference entry (a `### \`name\`` heading in `docs/reference/shared.md`, `pn.md`, `yseq.md` or `ydoc.md`), and every SQLSTATE the file raises is in `docs/reference/errors.md`.
+- every public function in `../pg_crdt--0.0.1.sql` has one reference entry (a `### \`name\`` heading in `docs/reference/shared.md`, `pn.md` or `yseq.md`), and every SQLSTATE the file raises is in `docs/reference/errors.md`.
 
 The SQL examples are not run by the build. Run the quickstart and the guides against a throwaway cluster after you change them: `pg_crdt/test/lib/cluster.sh` starts one.

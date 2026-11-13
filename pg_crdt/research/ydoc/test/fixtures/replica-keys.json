@@ -1,0 +1,27 @@
+{
+  "_comment": "Replica keys shared by the JS reference (experiments/text-ref/test.mjs) and the SQL specs (test/spec/64_text_keys.sql). A key is an id without ':' or <id>:<device> with a non-empty device (which may contain ':'), at most 256 bytes. A key is a string, or {prefix, repeat, times} for a long one: prefix + repeat * times.",
+  "cases": [
+    { "key": "a", "ok": true, "why": "one character" },
+    { "key": "alice", "ok": true, "why": "plain id" },
+    { "key": "alice:phone", "ok": true, "why": "id and device" },
+    { "key": "alice:phone:2", "ok": true, "why": "the device may contain ':'" },
+    { "key": "alice::x", "ok": true, "why": "the device may start with ':'" },
+    { "key": "alice: ", "ok": true, "why": "a device of one space is not empty" },
+    { "key": "a b", "ok": true, "why": "spaces in the id" },
+    { "key": "a\nb:c\nd", "ok": true, "why": "newlines are ordinary characters" },
+    { "key": "é:é", "ok": true, "why": "non-ASCII id and device" },
+    { "key": "😀", "ok": true, "why": "non-BMP id" },
+    { "key": "😀:📱", "ok": true, "why": "non-BMP id and device" },
+    { "key": { "prefix": "", "repeat": "x", "times": 256 }, "ok": true, "why": "256 bytes is the limit" },
+    { "key": { "prefix": "", "repeat": "é", "times": 128 }, "ok": true, "why": "128 two-byte characters are 256 bytes" },
+    { "key": { "prefix": "alice:", "repeat": "d", "times": 250 }, "ok": true, "why": "a device key of 256 bytes in all" },
+    { "key": "", "ok": false, "why": "empty" },
+    { "key": ":", "ok": false, "why": "empty id and device" },
+    { "key": ":phone", "ok": false, "why": "empty id" },
+    { "key": "alice:", "ok": false, "why": "empty device" },
+    { "key": ":alice:phone", "ok": false, "why": "empty id before a device" },
+    { "key": { "prefix": "", "repeat": "x", "times": 257 }, "ok": false, "why": "257 bytes" },
+    { "key": { "prefix": "", "repeat": "é", "times": 129 }, "ok": false, "why": "129 two-byte characters are 258 bytes" },
+    { "key": { "prefix": "alice:", "repeat": "d", "times": 251 }, "ok": false, "why": "a device key of 257 bytes in all" }
+  ]
+}
