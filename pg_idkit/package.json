@@ -1,0 +1,12 @@
+{
+  "name": "pg-idkit-workspace",
+  "private": true,
+  "scripts": {
+    "docs:install": "npm --prefix site ci",
+    "docs:sync": "npm --prefix site run sync",
+    "docs:dev": "npm --prefix site run dev",
+    "docs:build": "npm --prefix site run build",
+    "docs:preview": "npm --prefix site run preview",
+    "check": "npm run docs:build"
+  }
+}

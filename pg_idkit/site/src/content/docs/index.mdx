@@ -1,0 +1,31 @@
+---
+title: pg_idkit
+description: UUID and KSUID generators and timestamp utilities for Postgres.
+template: splash
+hero:
+  tagline: Generate UUIDs and KSUIDs inside Postgres, with SQL functions and column defaults.
+  actions:
+    - text: Generate your first ID
+      link: ./get-started/quickstart/
+      icon: right-arrow
+    - text: Install
+      link: ./install/
+      variant: minimal
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+`pg_idkit` provides four ID generators and a UUIDv7 timestamp extractor in SQL and PL/pgSQL, without pgcrypto or compiled code. These docs cover version 0.0.4.
+
+<CardGrid>
+  <LinkCard title="Choose an ID" description="Compare UUIDv6, UUIDv7 and two KSUID formats." href="./get-started/choose-an-id/" />
+  <LinkCard title="Use primary keys" description="Defaults, constraints, collation and pagination." href="./guides/primary-keys/" />
+  <LinkCard title="UUID generators" description="Signatures, examples and guarantees." href="./reference/uuid/" />
+  <LinkCard title="KSUID generators" description="Base62 text IDs with seconds or microseconds fields." href="./reference/ksuid/" />
+  <LinkCard title="Read timestamps" description="Decode UUIDv7 time and understand timezone handling." href="./guides/timestamps/" />
+  <LinkCard title="Errors and limits" description="Randomness, collisions, ordering and time precision." href="./errors-and-limits/" />
+</CardGrid>
+
+IDs use Postgres `random()` and are not secrets. Keep a primary key for uniqueness and a separate timestamp for application dates.
+
+Browse the [documentation map](./guide/) or the [plain Markdown index](./llms.txt).
