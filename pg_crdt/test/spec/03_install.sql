@@ -1,30 +1,4 @@
--- Goal: the one file installs as a plain script and with CREATE EXTENSION
--- (pg_tle, or the control file in the extension directory), as a
--- non-superuser that owns the database, with no superuser-only features and
--- no C. The schema guard refuses a crdt schema that another role controls.
--- Dropping the extension is blocked (2BP01) while a column uses crdt.pn or
--- crdt.yseq, and CASCADE drops that column, with a generated column on
--- yseq_value (the README warns about this). The ydoc_ tables are
--- extension members: drop extension drops them (and every document), it is
--- blocked while an app table references crdt.ydoc_docs, and CASCADE drops
--- only the foreign key. With CREATE EXTENSION, the ydoc_ tables and
--- sequences are marked for pg_dump (pg_extension_config_dump), so a dump
--- carries the documents and the restored sequences continue after them; the
--- plain install skips the marking.
---
--- Mirrors pg_permissions/test/spec/03_tle_install.sql: the runner's database
--- already has the file installed as superuser, so this spec builds scratch
--- databases owned by the non-superuser `crdt_owner`, installs there with SET
--- SESSION AUTHORIZATION, and copies what it observes into psql variables
--- (\gset). Variables survive \connect; the assertions run after reconnecting
--- to the original database, where the tap state lives. Installs that are
--- meant to fail run in a child psql (backticks) so their errors do not count
--- as errors of this file.
---
--- Needs :impl_path, which test/run.sh passes. The pg_tle branch runs only when
--- the server preloads pg_tle, the control-file branch only when pg_crdt is in
--- the extension directory (test/docker.sh installs both); otherwise they
--- pass with SKIP assertions.
+-- Goal: non-superuser install, schema guards and column dependencies.
 \set ON_ERROR_STOP off
 
 select current_database() as orig_db \gset
@@ -50,22 +24,14 @@ select exists (select 1 from pg_available_extensions where name = 'pg_crdt') as 
 \set ctl_schema ''
 \set ctl_reloc ''
 \set ctl_smoke ''
-\set ydoc_smoke ''
 \set yseq_smoke ''
 \set tle_yseq_restrict ''
 \set tle_yseq_cascade ''
 \set ctl_yseq_restrict ''
 \set ctl_yseq_cascade ''
+\set column_dump ''
+\set column_after_dump ''
 \set default_acl_left ''
-\set tle_config ''
-\set tle_ydoc_smoke ''
-\set tle_ydoc_gone ''
-\set ctl_config ''
-\set ctl_fk_restrict ''
-\set ctl_fk_cascade ''
-\set ctl_plain_drop ''
-\set dump_value ''
-\set dump_next ''
 
 -- Leftovers from an earlier run
 drop database if exists pgcrdt_install_plain with (force);
@@ -109,10 +75,6 @@ update counters set s = crdt.pn_increment(s, 'a', 5) where id = 1;
 update counters set s = crdt.pn_merge(s, crdt.pn_decrement(crdt.pn_empty(), 'b', 2)) where id = 1;
 select (crdt.pn_value(s) = 3 and crdt.pn_value((select crdt.pn_merge_agg(s) from counters)) = 3)::text as smoke
 from counters where id = 1 \gset
-select crdt.ydoc_create() as yd \gset
-select crdt.ydoc_insert(:'yd', 0, 'hello', 'a') \g /dev/null
-select crdt.ydoc_set(:'yd', 'hello, world', 'b') \g /dev/null
-select (crdt.ydoc_value(:'yd') = 'hello, world')::text as ydoc_smoke \gset
 create table notes (
     id int primary key,
     body crdt.yseq not null default crdt.yseq_new(),
@@ -168,10 +130,6 @@ grant create on schema crdt to crdt_other;
       and ((d.classid = 'pg_proc'::regclass and d.objid in (select oid from pg_proc where pronamespace = 'crdt'::regnamespace))
         or (d.classid = 'pg_type'::regclass and d.objid = 'crdt.pn'::regtype)
         or (d.classid = 'pg_class'::regclass and d.objid in (select oid from pg_class where relnamespace = 'crdt'::regnamespace))) \gset
-    select coalesce(cardinality(extconfig), 0)::text as tle_config from pg_extension where extname = :'tle_name' \gset
-    select crdt.ydoc_create() as yd \gset
-    select crdt.ydoc_insert(:'yd', 0, 'tle', 'a') \g /dev/null
-    select (crdt.ydoc_value(:'yd') = 'tle')::text as tle_ydoc_smoke \gset
     create table counters (id int primary key, s crdt.pn not null default crdt.pn_empty());
     insert into counters values (1);
     update counters set s = crdt.pn_increment(s, 'a', 2) where id = 1;
@@ -209,7 +167,6 @@ grant create on schema crdt to crdt_other;
             and (select string_agg(attname, ',' order by attnum) from pg_attribute
                  where attrelid = 'notes'::regclass and attnum > 0 and not attisdropped) = 'id'
             and to_regtype('crdt.yseq') is null)::text as tle_yseq_cascade \gset
-    select (not exists (select 1 from pg_class where relnamespace = 'crdt'::regnamespace))::text as tle_ydoc_gone \gset
 \endif
 
 -- 4. The control file in the extension directory (only if it is installed there)
@@ -222,66 +179,8 @@ grant create on schema crdt to crdt_other;
     select extnamespace::regnamespace::text as ctl_schema, extrelocatable::text as ctl_reloc
     from pg_extension where extname = 'pg_crdt' \gset
     select (crdt.pn_value(crdt.pn_merge(crdt.pn_increment(null, 'a', 4), crdt.pn_decrement(null, 'b', 1))) = 3)::text as ctl_smoke \gset
-    -- Marked for pg_dump: the nine ydoc_ tables and the four sequences.
-    select (select string_agg(c::regclass::text, ',' order by c::regclass::text) from unnest(extconfig) c) as ctl_config
-    from pg_extension where extname = 'pg_crdt' \gset
-
-    -- pg_dump and restore (as the superuser): the documents come back, and
-    -- the restored sequences continue after them (a new document gets a new
-    -- internal id; new rows integrate after the restored ones), and the public
-    -- ids come back as they were (a client-chosen one and a generated one).
-    create table posts (id int primary key, body_doc text not null references crdt.ydoc_docs (uid));
-    insert into posts values (1, crdt.ydoc_create('post:1:body')), (2, crdt.ydoc_create());
-    select body_doc as uid2 from posts where id = 2 \gset
-    select crdt.ydoc_set(body_doc, 'first post', 'a') from posts where id = 1 \g /dev/null
-    select crdt.ydoc_set(body_doc, 'second', 'a') from posts where id = 2 \g /dev/null
-    reset session authorization;
-    \connect postgres
-    create database pgcrdt_install_restore;
-    \set dump_out `pg_dump --no-owner -d pgcrdt_install_ctl | psql -X -q -v ON_ERROR_STOP=1 -d pgcrdt_install_restore 2>&1`
-    \connect pgcrdt_install_restore
-    select string_agg(crdt.ydoc_value(body_doc), ' | ' order by id) as dump_value from posts \gset
-    select crdt.ydoc_create() as nd \gset
-    select crdt.ydoc_insert(body_doc, 0, '>', 'z') from posts where id = 1 \g /dev/null
-    select ((select d.id from crdt.ydoc_docs d where d.uid = :'nd') > (select max(d.id) from crdt.ydoc_docs d join posts p on p.body_doc = d.uid)
-            and crdt.ydoc_ops_since((select body_doc from posts where id = 1)) -> 'i' -> -1 ->> 4 = '>')::text as dump_next \gset
-    select (string_agg(body_doc, ' | ' order by id) = 'post:1:body | ' || :'uid2')::text as dump_uid from posts \gset
-    do $$
-    begin
-        perform crdt.ydoc_create('post:1:body');
-        perform set_config('crdt_test.dump_dup', 'created', false);
-    exception when unique_violation then
-        perform set_config('crdt_test.dump_dup', 'unique_violation', false);
-    end;
-    $$;
-    select current_setting('crdt_test.dump_dup', true) as dump_dup \gset
-    \connect pgcrdt_install_ctl
-    set session authorization crdt_owner;
-
-    -- restrict: blocked by the foreign key; cascade: drops the foreign key
-    -- and the tables (with the documents), keeps posts.
-    do $$
-    begin
-        drop extension pg_crdt;
-        perform set_config('crdt_test.ctl_fk_restrict', 'dropped', false);
-    exception when dependent_objects_still_exist then
-        perform set_config('crdt_test.ctl_fk_restrict', 'blocked', false);
-    end;
-    $$;
-    select current_setting('crdt_test.ctl_fk_restrict', true) as ctl_fk_restrict \gset
-    drop extension pg_crdt cascade;
-    select (to_regclass('posts') is not null
-            and not exists (select 1 from pg_constraint where conrelid = 'posts'::regclass and contype = 'f')
-            and to_regclass('crdt.ydoc_docs') is null and to_regclass('crdt.ydoc_ins') is null
-            and not exists (select 1 from pg_class where relnamespace = 'crdt'::regnamespace))::text as ctl_fk_cascade \gset
-    -- Without dependents, a plain drop extension drops the tables and their data.
-    create extension pg_crdt;
-    select crdt.ydoc_create() as yd \gset
-    drop extension pg_crdt;
-    select (to_regclass('crdt.ydoc_docs') is null and to_regclass('crdt.ydoc_items') is null)::text as ctl_plain_drop \gset
     -- A crdt.yseq column (with a generated column on yseq_value) blocks drop
     -- extension with 2BP01; CASCADE drops both columns and keeps the table.
-    create extension pg_crdt;
     create table notes (
         id int primary key,
         body crdt.yseq not null default crdt.yseq_new(),
@@ -289,6 +188,20 @@ grant create on schema crdt to crdt_other;
     );
     insert into notes (id) values (1);
     update notes set body = crdt.yseq_insert(body, 0, 'kept?', 'a') where id = 1;
+    -- A dump keeps the full column state, its document id, and generated text.
+    select md5(body::text) as before_dump from notes where id = 1 \gset
+    reset session authorization;
+    \connect postgres
+    create database pgcrdt_install_restore;
+    \set dump_out `pg_dump --no-owner -d pgcrdt_install_ctl | psql -X -q -v ON_ERROR_STOP=1 -d pgcrdt_install_restore 2>&1`
+    \connect pgcrdt_install_restore
+    select (md5(body::text) = :'before_dump' and body_text = 'kept?'
+            and crdt.yseq_is_valid(body))::text as column_dump from notes where id = 1 \gset
+    update notes set body = crdt.yseq_insert(body, 5, '!', 'b') where id = 1;
+    select (body_text = 'kept?!')::text as column_after_dump from notes where id = 1 \gset
+    \connect pgcrdt_install_ctl
+    set session authorization crdt_owner;
+
     do $$
     begin
         drop extension pg_crdt;
@@ -309,7 +222,7 @@ grant create on schema crdt to crdt_other;
 -- Back to the spec database as the superuser for the assertions.
 \connect :"orig_db"
 
-select tap.plan(25);
+select tap.plan(17);
 
 select tap.is(:'own_super'::text, 'off', 'the install session is not a superuser');
 select tap.is(:'schema_owner'::text, 'crdt_owner', 'schema crdt is owned by the installing non-superuser');
@@ -318,7 +231,6 @@ select tap.ok(:'funcs'::text ~ '^[1-9]' and :'unowned'::text = '0',
               || :'funcs'::text || ', not owned: ' || :'unowned'::text || ')');
 select tap.is(:'c_funcs'::text, '0', 'no function is written in C');
 select tap.is(:'smoke'::text, 'true', 'smoke: a crdt.pn column, increment, merge and the aggregate work after a non-superuser install');
-select tap.is(:'ydoc_smoke'::text, 'true', 'smoke: ydoc_create, ydoc_insert, ydoc_set and ydoc_value work after a non-superuser install (pg_extension_config_dump skipped)');
 select tap.is(:'yseq_smoke'::text, 'true', 'smoke: a crdt.yseq column with a generated column on yseq_value, yseq_insert and yseq_set work after a non-superuser install');
 select tap.is(:'default_acl_left'::text, '0', 'the installer''s default privileges are stripped from every crdt table, sequence and function');
 select tap.ok(:'guard_owner_out'::text like '%schema crdt is owned by role crdt_other%',
@@ -334,9 +246,6 @@ select tap.ok(:'guard_create_out'::text like '%another role has CREATE on schema
     select tap.ok(:'tle_drop_restrict'::text = 'blocked' and :'tle_drop_cascade'::text = 'true',
                   'drop extension is blocked by a crdt.pn column, and drop extension ... cascade drops the column (restrict: '
                   || :'tle_drop_restrict'::text || ', cascade: ' || :'tle_drop_cascade'::text || ')');
-    select tap.ok(:'tle_config'::text = '13' and :'tle_ydoc_smoke'::text = 'true' and :'tle_ydoc_gone'::text = 'true',
-                  'under pg_tle: ydoc_ works, 13 tables and sequences are marked for pg_dump, and drop extension removes them (marked: '
-                  || :'tle_config'::text || ')');
     select tap.ok(:'tle_yseq_restrict'::text = 'blocked' and :'tle_yseq_cascade'::text = 'true',
                   'under pg_tle: drop extension is blocked by a crdt.yseq column, and cascade drops it and its generated column (restrict: '
                   || :'tle_yseq_restrict'::text || ', cascade: ' || :'tle_yseq_cascade'::text || ')');
@@ -345,38 +254,22 @@ select tap.ok(:'guard_create_out'::text like '%another role has CREATE on schema
     select tap.pass('SKIP pg_tle not available: install_extension');
     select tap.pass('SKIP pg_tle not available: smoke');
     select tap.pass('SKIP pg_tle not available: drop extension restrict and cascade');
-    select tap.pass('SKIP pg_tle not available: ydoc_ tables');
     select tap.pass('SKIP pg_tle not available: drop extension with a crdt.yseq column');
 \endif
 
 \if :ctl_avail
     select tap.ok(:'ctl_schema'::text = 'crdt' and :'ctl_reloc'::text = 'false' and :'ctl_smoke'::text = 'true',
                   'create extension pg_crdt from the control file works as a non-superuser, in schema crdt, not relocatable');
-    select tap.is(:'ctl_config'::text,
-                  'crdt.ydoc_blocks,crdt.ydoc_deps,crdt.ydoc_docs,crdt.ydoc_docs_id_seq,crdt.ydoc_ins,crdt.ydoc_items,crdt.ydoc_pending,crdt.ydoc_pending_deletes,crdt.ydoc_pending_ops,crdt.ydoc_pending_ops_id_seq,crdt.ydoc_rejected,crdt.ydoc_rejected_id_seq,crdt.ydoc_replicas',
-                  'the nine ydoc_ tables and four sequences are marked for pg_dump');
-    select tap.is(:'dump_value'::text, 'first post | second', 'pg_dump and restore: the documents come back');
-    select tap.is(:'dump_uid'::text, 'true', 'pg_dump and restore: public document ids (client-chosen and generated) come back unchanged');
-    select tap.is(:'dump_dup'::text, 'unique_violation', 'after a restore, creating a restored id raises 23505 (the unique index on uid is back)');
-    select tap.ok(:'dump_next'::text = 'true', 'after a restore, a new document gets a new id and a new insert integrates after the restored rows (sequences dumped)'
-                  || case when :'dump_next'::text <> 'true' then ' -- restore output: ' || :'dump_out'::text else '' end);
-    select tap.is(:'ctl_fk_restrict'::text, 'blocked', 'drop extension is blocked by an app table''s foreign key to crdt.ydoc_docs');
-    select tap.is(:'ctl_fk_cascade'::text, 'true', 'drop extension ... cascade drops the foreign key, the ydoc_ tables and sequences, and keeps the app table');
-    select tap.is(:'ctl_plain_drop'::text, 'true', 'without dependents, drop extension drops the ydoc_ tables (and every document)');
+    select tap.is(:'column_dump'::text, 'true', 'pg_dump restores the full text-column state, document id and generated text');
+    select tap.is(:'column_after_dump'::text, 'true', 'a restored text column accepts edits and refreshes generated text');
     select tap.ok(:'ctl_yseq_restrict'::text = '2BP01' and :'ctl_yseq_cascade'::text = 'true',
                   'drop extension fails with 2BP01 while a crdt.yseq column exists; cascade drops it and its generated column, and keeps the table and rows (restrict: '
                   || :'ctl_yseq_restrict'::text || ', cascade: ' || :'ctl_yseq_cascade'::text || ')');
 \else
     \echo '# pg_crdt is not in this server''s extension directory; the control-file path was NOT tested'
     select tap.pass('SKIP control file not installed: create extension pg_crdt');
-    select tap.pass('SKIP control file not installed: tables and sequences marked for pg_dump');
-    select tap.pass('SKIP control file not installed: pg_dump and restore of documents');
-    select tap.pass('SKIP control file not installed: document ids after a restore');
-    select tap.pass('SKIP control file not installed: unique ids after a restore');
-    select tap.pass('SKIP control file not installed: sequences continue after a restore');
-    select tap.pass('SKIP control file not installed: drop extension blocked by a foreign key');
-    select tap.pass('SKIP control file not installed: drop extension cascade');
-    select tap.pass('SKIP control file not installed: drop extension drops the tables');
+    select tap.pass('SKIP control file not installed: text-column dump and restore');
+    select tap.pass('SKIP control file not installed: editing after restore');
     select tap.pass('SKIP control file not installed: drop extension with a crdt.yseq column');
 \endif
 

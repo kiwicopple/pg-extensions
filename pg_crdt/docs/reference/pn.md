@@ -1,6 +1,8 @@
 # PN-Counter functions
 
-Every function of the PN-Counter, in schema `crdt`. The type is the domain `crdt.pn` over `jsonb`: see [PN-Counter](../types/pn-counter.md) for its state and behavior, [Shared](shared.md) for naming, privileges and replica ids, and [Errors](errors.md) for every SQLSTATE.
+Use the `pn_` functions to create, update, read and merge counters stored as `crdt.pn`. All functions are in the `crdt` schema.
+
+For the state format and merge rules, see [PN-Counter](../types/pn-counter.md). For naming, privileges and replica ids, see [Shared](shared.md). The [Errors](errors.md) page lists every SQLSTATE.
 
 Unless an entry says otherwise, a function is `IMMUTABLE PARALLEL SAFE`, is not `STRICT`, is not `security definer`, and has `EXECUTE` granted to `public`.
 
@@ -217,7 +219,7 @@ crdt.pn_apply_delta(
 5. Every key of the delta is a well-formed entry key.
 6. Every key of the delta belongs to `replica`.
 
-Then it returns `pn_merge(coalesce(state, pn_empty()), delta)`. Entries of the delta that are lower than the stored ones are ignored, so a retry or a replayed older delta succeeds and changes nothing. The same holds for a writer that restarts from 0: its new totals are swallowed until they pass the old ones. See [A replica that lost its state](../guides/replicas-and-identity.md#a-replica-that-lost-its-state).
+Then it returns `pn_merge(coalesce(state, pn_empty()), delta)`. Entries of the delta that are lower than the stored ones are ignored, so a retry or a replayed older delta succeeds and changes nothing. The same holds for a writer that restarts from 0: its new totals have no effect until they exceed the stored totals. See [A replica that lost its state](../guides/replicas-and-identity.md#a-replica-that-lost-its-state).
 
 Because the arguments are `crdt.pn`, a `delta` that is not an envelope fails with `23514` before the function runs.
 

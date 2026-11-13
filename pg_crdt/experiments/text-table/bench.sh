@@ -8,8 +8,8 @@
 #   ONLY=trace,keys experiments/text-table/bench.sh   # some sections only:
 #       sizes pos render cache conc merge keys compact replica trace
 #
-# ydoc_ was promoted into the extension (pg_crdt--0.0.1.sql, section "ydoc_");
-# this loads the extension file. variants/*.sql are ydoc_-only builds: they
+# ydoc_ is preserved in the research snapshot (section "ydoc_");
+# this loads that combined snapshot. variants/*.sql are ydoc_-only builds: they
 # load after the extension file with its ydoc_ section cut out.
 #
 # Throwaway cluster from pg_crdt/test/lib/cluster.sh (temp dir, Unix socket),
@@ -22,7 +22,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 EXT_DIR=$(cd "$HERE/../.." && pwd)
 . "$EXT_DIR/test/lib/cluster.sh"
 
-IMPL="$EXT_DIR/pg_crdt--0.0.1.sql"
+IMPL="$EXT_DIR/research/ydoc/pg_crdt--0.0.1.sql"
 QUICK=0
 while [ $# -gt 0 ]; do
     case "$1" in

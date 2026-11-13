@@ -1,6 +1,8 @@
 # Collaborative text column functions
 
-Every function of the collaborative text column type, `crdt.yseq`, in schema `crdt`. A `crdt.yseq` value is a whole document in one `jsonb` value: a column of your own table, written with `update ... set body = crdt.yseq_insert(body, ...)`, like a [PN-Counter](pn.md) column. See [Collaborative text](../types/collaborative-text.md) for the model, the op format, the limits and how it compares with the table-backed [`ydoc_`](ydoc.md), [Shared](shared.md) for naming and replica ids, and [Errors](errors.md) for every SQLSTATE. To build an application with them, follow [Collaborative text for a blog post](../guides/collaborative-text.md).
+Use the `yseq_` functions to edit a document stored in a `crdt.yseq` column. The whole document is one `jsonb` value in your table. Update it in a single statement, such as `update ... set body = crdt.yseq_insert(body, ...)`, as you would a [PN-Counter](pn.md).
+
+[Collaborative text](../types/collaborative-text.md) explains the edit format and merge behavior. For naming and replica ids, see [Shared](shared.md); for SQLSTATE codes, see [Errors](errors.md). For a complete application, follow [Collaborative text for a blog post](../guides/collaborative-text.md).
 
 > **Experimental.** `yseq_` is part of the extension and tested like the rest of it, but every edit rewrites the whole value, so its cost grows with the document, and tombstones are never removed. Read [the limits](#limits) before you put large or heavily edited documents in a column.
 
@@ -49,16 +51,7 @@ select '{"t": "pn"}'::crdt.yseq;
 
 ## Functions
 
-The examples on this page continue from each other. Run them in order, as the database owner, in a test database. They use this table:
-
-```sql
-create table notes (
-  id int primary key,
-  body crdt.yseq not null default crdt.yseq_new(),
-  body_text text generated always as (crdt.yseq_value(body)) stored
-);
-insert into notes (id) values (1), (2);
-```
+Each function example below includes its own state and can run independently in a UTF8 database with pg_crdt installed. No table setup is required.
 
 ### `yseq_empty`
 
@@ -69,6 +62,11 @@ crdt.yseq_empty() returns crdt.yseq
 The empty document, without a document id. Two empty states from `yseq_empty()` are the same value, so they can be merged with each other and with any state: prefer [`yseq_new`](#yseq_new) for a column default.
 
 **Labels.** `IMMUTABLE PARALLEL SAFE`, `LANGUAGE sql`. **Privileges.** `EXECUTE` to `public`. **Errors.** None.
+
+```sql
+select crdt.yseq_value(crdt.yseq_empty());
+-- empty text
+```
 
 ### `yseq_new`
 
@@ -93,7 +91,15 @@ crdt.yseq_value(state crdt.yseq) returns text
 
 The text: the visible characters in order. `''` for an empty document, null for null. The state stores the visible text as it is, in chunks, so this is a concatenation and does not read the history.
 
-**Labels.** `IMMUTABLE PARALLEL SAFE STRICT`, `LANGUAGE sql`. Because it is `IMMUTABLE`, it can back a stored generated column, an expression index or a full-text index, as `body_text` above does. Postgres 18 virtual generated columns cannot call user-defined functions yet: use `stored`. **Privileges.** `EXECUTE` to `public`. **Errors.** None of its own.
+**Labels.** `IMMUTABLE PARALLEL SAFE STRICT`, `LANGUAGE sql`. Because it is `IMMUTABLE`, it can back a stored generated column, an expression index or a full-text index. Postgres 18 virtual generated columns cannot call user-defined functions yet: use `stored`. **Privileges.** `EXECUTE` to `public`. **Errors.** None of its own.
+
+```sql
+with base as (
+  select crdt.yseq_set(crdt.yseq_new(), 'Hello', 'alice') as s
+)
+select crdt.yseq_value(s) from base;
+-- Hello
+```
 
 ### `yseq_length`
 
@@ -105,6 +111,14 @@ The length of the text in code points. Null for null.
 
 **Labels.** `IMMUTABLE PARALLEL SAFE STRICT`, `LANGUAGE sql`. **Privileges.** `EXECUTE` to `public`. **Errors.** None of its own.
 
+```sql
+with base as (
+  select crdt.yseq_set(crdt.yseq_new(), 'Hello', 'alice') as s
+)
+select crdt.yseq_length(s) from base;
+-- 5
+```
+
 ### `yseq_version`
 
 ```text
@@ -114,6 +128,14 @@ crdt.yseq_version(state crdt.yseq) returns jsonb
 The version vector `{key: count}`: for each entry key, the number of characters of that key the state has integrated, deleted ones included. Ops that wait for their dependencies are not counted. `{}` for an empty document, null for null. Pass it to another copy's [`yseq_ops_since`](#yseq_ops_since) to get what this copy lacks.
 
 **Labels.** `IMMUTABLE PARALLEL SAFE STRICT`, `LANGUAGE sql`. **Privileges.** `EXECUTE` to `public`. **Errors.** None of its own.
+
+```sql
+with base as (
+  select crdt.yseq_set(crdt.yseq_new(), 'Hello', 'alice') as s
+)
+select crdt.yseq_version(s) from base;
+-- {"alice": 5}
+```
 
 ### `yseq_insert`
 
@@ -139,24 +161,12 @@ Inserts `content` before position `pos` (0 to the length of the text) as the ent
 | `22003` | `replica` has used up its sequence numbers (2,147,483,647 characters). Use a new device key. |
 
 ```sql
-update notes
-set body = crdt.yseq_insert(body, 0, 'Hello', replica => 'alice')
-where id = 1;
-update notes
-set body = crdt.yseq_insert(body, 5, ' world', replica => 'alice')
-where id = 1;
-select crdt.yseq_value(body),
-       crdt.yseq_length(body),
-       crdt.yseq_version(body)
-from notes
-where id = 1;
---  yseq_value  | yseq_length | yseq_version
--- -------------+-------------+---------------
---  Hello world |          11 | {"alice": 11}
-select crdt.yseq_insert(body, 20, 'x', replica => 'alice')
-from notes
-where id = 1;
--- ERROR:  crdt.yseq: range at position 20 of length 0 is outside the text (length 11)
+with base as (
+  select crdt.yseq_set(crdt.yseq_new(), 'Hello', 'alice') as s
+)
+select crdt.yseq_value(crdt.yseq_insert(s, 5, '!', 'bob'))
+from base;
+-- Hello!
 ```
 
 ### `yseq_delete`
@@ -182,15 +192,12 @@ Deletes `len` characters from position `pos` and returns the new state. `len` 0 
 | `22023` | The range is outside the text, or `len` is negative; `replica` is not an entry key. |
 
 ```sql
-update notes
-set body = crdt.yseq_delete(body, 0, 1, replica => 'bob')
-where id = 1;
-select crdt.yseq_value(body), crdt.yseq_version(body)
-from notes
-where id = 1;
---  yseq_value | yseq_version
--- ------------+---------------
---  ello world | {"alice": 11}
+with base as (
+  select crdt.yseq_set(crdt.yseq_new(), 'Hello', 'alice') as s
+)
+select crdt.yseq_value(crdt.yseq_delete(s, 0, 1, 'bob'))
+from base;
+-- ello
 ```
 
 ### `yseq_set`
@@ -209,7 +216,7 @@ Replaces the text with `content`: it keeps the common prefix and suffix (in code
 - **Without `base`**, the diff is against the current text, so the result is exactly `content`. A form that was opened before another save reverts that save, in the range between its first and last change.
 - **With `base`**, the state the form was opened with (the column value read together with the text it shows), the diff is against the text of `base`, and the result is merged into the current state. Saves of different places from the same base all survive. A form may save several times from one base: the characters `replica` added since the base count as part of it, so a second save does not insert the first one's text again.
 
-The base is a whole state, not a small version token as in [`ydoc_set`](ydoc.md#ydoc_set), because the state does not keep the text of deleted characters: a form sends back the value it read. Two cases remain wrong and are misuse: a base from another document that has no document id, and a writer that deleted text in an earlier save and types it again in a later save from the same base (the earlier delete stays).
+The base is a whole state because the state does not keep the text of deleted characters: a form sends back the value it read. Two cases remain wrong and are misuse: a base from another document that has no document id, and a writer that deleted text in an earlier save and types it again in a later save from the same base (the earlier delete stays).
 
 **Privileges.** `EXECUTE` to `public`.
 
@@ -221,32 +228,17 @@ The base is a whole state, not a small version token as in [`ydoc_set`](ydoc.md#
 | `22023` | `base` has another document id than `state`, or has characters that `state` lacks (it is not a version of this document); `replica` is not an entry key. |
 | `22003` | `replica` has used up its sequence numbers. |
 
-This example keeps the state before two saves as a base, with psql's `\gset`. Carol saves without a base, then dave saves from the older base: both changes stay.
-
 ```sql
-update notes
-set body = crdt.yseq_insert(body, 0, 'J', replica => 'alice:phone')
-where id = 1;
-select body as base from notes where id = 1 \gset
-update notes
-set body = crdt.yseq_set(body, 'Jello, world', replica => 'carol')
-where id = 1;
-update notes
-set body = crdt.yseq_set(
-  body,
-  'Jello world!',
-  replica => 'dave',
-  base => :'base'
+with base as (
+  select crdt.yseq_set(crdt.yseq_new(), 'Hello', 'alice') as s
 )
-where id = 1;
-select body_text from notes where id = 1;
---    body_text
--- ---------------
---  Jello, world!
-select crdt.yseq_set(n1.body, 'x', replica => 'carol', base => n2.body)
-from notes n1, notes n2
-where n1.id = 1 and n2.id = 2;
--- ERROR:  crdt.yseq_set: the base belongs to another document (id ... against ...)
+select crdt.yseq_value(crdt.yseq_set(
+  crdt.yseq_insert(s, 5, '!', 'bob'),
+  'Hello world',
+  'carol',
+  base => s
+)) from base;
+-- Both inserts survive; their order follows the CRDT ordering rule.
 ```
 
 ### `yseq_diff`
@@ -257,25 +249,20 @@ crdt.yseq_diff(old crdt.yseq, new crdt.yseq) returns jsonb
 
 The op that takes `old` to `new`, a later version of the same document: `{"v": ..., "i": [...], "d": [...]}` with the inserts `new` has beyond the version of `old`, only the deletes `old` lacks, and `v`, the smallest version vector that [`yseq_apply`](#yseq_apply) accepts for it. For a local edit, `yseq_diff(s, crdt.yseq_insert(s, ...))` is exactly the op the edit made, so this is how you get the op of an edit to send it on. A null `old` counts as empty.
 
-To edit and return the op in one statement, lock the row first:
+When editing a stored column and returning its operation, lock the row and compute the old and new states in one statement. The example below demonstrates the operation on an in-memory state:
 
-```sql
-with old as (
-  select body from notes where id = 1 for update
-)
-update notes n
-set body = crdt.yseq_insert(old.body, 13, '?', replica => 'erin')
-from old
-where n.id = 1
-returning crdt.yseq_diff(old.body, n.body) as op;
---                                          op
--- --------------------------------------------------------------------------------------
---  {"d": [], "i": [["erin", 1, ["dave", 1], null, "?"]], "v": {"dave": 1, "alice": 11}}
-```
-
-On Postgres 18, `returning crdt.yseq_diff(old.body, new.body)` does the same without the `with` clause.
+On Postgres 18, an update can use `returning crdt.yseq_diff(old.body, new.body)` to compute the operation from its old and new row values.
 
 **Privileges.** `EXECUTE` to `public`. **Errors.** `XX000`: a state is corrupt (runs whose origins are missing); it means a bug or a hand-made state.
+
+```sql
+with base as (
+  select crdt.yseq_set(crdt.yseq_new(), 'Hello', 'alice') as s
+)
+select crdt.yseq_diff(s, crdt.yseq_insert(s, 5, '!', 'bob'))
+from base;
+-- The op includes bob's insert and the version before it.
+```
 
 ### `yseq_ops_since`
 
@@ -287,7 +274,7 @@ The ops that a copy at version `vv` lacks, as one op without `v`: `{"i": [...], 
 
 The state does not keep the text of deleted characters, so an insert of a character that is deleted since is sent as U+FFFD, one per code point. The delete set in the same result hides it. Peers that merge the result end with the same text.
 
-Give the result to a client's own implementation of the algorithm, such as the [JavaScript client](client.md)'s engine. It has no `v`, so [`yseq_apply`](#yseq_apply) refuses it. Between servers, merge states with [`yseq_merge`](#yseq_merge).
+Give the result to a client's own implementation of the algorithm, as described in [Connect a live editor](../text/live-editor.md). It has no `v`, so [`yseq_apply`](#yseq_apply) refuses it. Between servers, merge states with [`yseq_merge`](#yseq_merge).
 
 **Privileges.** `EXECUTE` to `public`.
 
@@ -299,10 +286,11 @@ Give the result to a client's own implementation of the algorithm, such as the [
 | `XX000` | The state is corrupt (runs whose origins are missing). |
 
 ```sql
-select crdt.yseq_ops_since(body, '{"alice": 11, "alice:phone": 1}')
-from notes
-where id = 1;
--- {"d": [["alice", 1, 1]], "i": [["carol", 1, ["alice", 5], ["alice", 6], ","], ["dave", 1, ["alice", 11], null, "!"], ["erin", 1, ["dave", 1], null, "?"]]}
+with base as (
+  select crdt.yseq_set(crdt.yseq_new(), 'Hello', 'alice') as s
+)
+select crdt.yseq_ops_since(s, '{"alice": 5}') from base;
+-- {"d": [], "i": []}
 ```
 
 ### `yseq_merge`
@@ -327,15 +315,14 @@ The cost is proportional to both documents: it reads every run of `b` and rewrit
 | `23514` | An argument fails the domain's check. |
 
 ```sql
+with base as (
+  select crdt.yseq_set(crdt.yseq_new(), 'Hello', 'alice') as s
+)
 select crdt.yseq_value(crdt.yseq_merge(
-  crdt.yseq_insert(null, 0, 'ab', replica => 'x'),
-  crdt.yseq_insert(crdt.yseq_insert(null, 0, 'ab', replica => 'x'), 2, 'c', replica => 'y')
-));
--- abc
-select crdt.yseq_merge(n1.body, n2.body)
-from notes n1, notes n2
-where n1.id = 1 and n2.id = 2;
--- ERROR:  crdt.yseq_merge: the states belong to different documents (ids ... and ...)
+  crdt.yseq_insert(s, 5, '!', 'bob'),
+  crdt.yseq_insert(s, 0, '> ', 'carol')
+)) from base;
+-- > Hello!
 ```
 
 ### `yseq_merge_agg`
@@ -349,13 +336,16 @@ An aggregate: the [`yseq_merge`](#yseq_merge) of every state in the group, in an
 **Privileges.** `EXECUTE` to `public`. **Errors.** As `yseq_merge`.
 
 ```sql
-select crdt.yseq_value(crdt.yseq_merge_agg(s))
-from (values
-  (crdt.yseq_insert(null, 0, 'a', replica => 'p')),
-  (crdt.yseq_insert(null, 0, 'b', replica => 'q')),
-  (null)
-) v(s);
--- ab
+with base as (
+  select crdt.yseq_set(crdt.yseq_new(), 'Hello', 'alice') as s
+)
+, copies as (
+  select s from base
+  union all
+  select crdt.yseq_insert(s, 5, '!', 'bob') from base
+)
+select crdt.yseq_value(crdt.yseq_merge_agg(s)) from copies;
+-- Hello!
 ```
 
 ### `yseq_apply`
@@ -393,52 +383,16 @@ Applies ops from a writer you do not trust, whose identity is `replica`, and ret
 | `54000` | The writer would have more than 32 entry keys in the state, or more waiting than the quota. |
 
 ```sql
-update notes
-set body = crdt.yseq_apply(
-  body,
-  '{
-    "v": {"alice": 11, "dave": 1, "erin": 1},
-    "i": [["frank", 1, ["erin", 1], null, "!"]],
-    "d": []
-  }',
-  replica => 'frank'
+with base as (
+  select crdt.yseq_set(crdt.yseq_new(), 'Hello', 'alice') as s
 )
-where id = 1;
-select body_text from notes where id = 1;
---     body_text
--- -----------------
---  Jello, world!?!
-select crdt.yseq_apply(
-  body,
-  '{"v": {}, "i": [["gina", 1, null, null, "?"]], "d": []}',
-  replica => 'frank'
-)
-from notes
-where id = 1;
--- ERROR:  crdt.yseq_apply: replica 'frank' cannot insert characters of replica 'gina'
-select crdt.yseq_apply(
-  body,
-  '{"v": {}, "i": [["frank", 2, null, null, "?"]], "d": []}',
-  replica => 'frank'
-)
-from notes
-where id = 1;
--- ERROR:  crdt.yseq_apply: op rejected (V2: a run does not start at v[replica] + 1)
-select crdt.yseq_apply(
-  body,
-  '{
-    "v": {"erin": 1, "frank": 1},
-    "i": [["frank", 2, ["frank", 1], null, "?"]],
-    "d": []
-  }',
-  replica => 'frank'
-)
-from notes
-where id = 1;
--- ERROR:  crdt.yseq_apply: op rejected (V3: v is not causally closed)
+select crdt.yseq_value(crdt.yseq_apply(
+  s,
+  crdt.yseq_diff(s, crdt.yseq_insert(s, 5, '!', 'bob:phone')),
+  replica => 'bob'
+)) from base;
+-- Hello!
 ```
-
-The last op's `v` claims erin's character but not the characters it depends on (`dave` 1, `alice` 11): a writer cannot have seen one without the others.
 
 ### `yseq_is_valid`
 
@@ -451,11 +405,13 @@ The full validator: the envelope as the domain checks it, every chunk (text leng
 **Privileges.** `EXECUTE` to `public`. **Errors.** None: an invalid value gives `false`.
 
 ```sql
-select crdt.yseq_is_valid(body) from notes where id = 1;
+with base as (
+  select crdt.yseq_set(crdt.yseq_new(), 'Hello', 'alice') as s
+)
+select crdt.yseq_is_valid(s) from base;
 -- t
-select crdt.yseq_is_valid('{"t": "pn"}');
--- f
 ```
+
 
 ## Limits
 
@@ -468,10 +424,10 @@ select crdt.yseq_is_valid('{"t": "pn"}');
 | Positions, lengths, and characters per entry key | `integer` (2,147,483,647) | `22003` or `22023` |
 | Database encoding | UTF8 | Functions that send deleted characters fail. |
 
-Cost and size are the real limits:
+For practical guidance on workload sizing and mitigation limits, read [Text-column limits and performance](../text/limits.md). The main constraints are:
 
 - **Every edit rewrites the whole value.** A one-character edit writes a new copy of the state, TOAST included. In the benchmarks the WAL of one keystroke was about 3.4 kB at 1 kB of text, 7.1 kB at 5 kB, 18.5 kB at 20 kB and 78.7 kB at 100 kB, and a state crosses the 2 kB TOAST threshold at under 1 kB of text.
-- **TOAST churn at keystroke rate.** Every edit leaves a dead copy of the value, which only `VACUUM` reclaims; under default autovacuum a table of documents edited per keystroke settles at many times its live size, and at 100 kB documents autovacuum could not keep up. Use `compression lz4` on the column, and tune autovacuum for that table or use [`ydoc_`](ydoc.md) when documents are large and edited per keystroke.
+- **TOAST churn at keystroke rate.** Every edit leaves a dead copy of the value, which only `VACUUM` reclaims; under default autovacuum a table of documents edited per keystroke settles at many times its live size, and at 100 kB documents autovacuum could not keep up. Use `compression lz4` on the column, and tune autovacuum for that table. If those costs remain too high, choose a different design; the extension has no table-backed option.
 - **No tombstone collection.** Deleted characters stay in the state as runs (without their text), so the state grows with the edit history, not only with the text.
 - **No equivocation detection.** A run that repeats ids already present is skipped without comparing its text, so two writers that share one entry key lose text silently. Give each editor and device its own key, and merge only states from servers you trust.
 - **Merge, apply and ops_since are O(document).** [`yseq_merge`](#yseq_merge), [`yseq_apply`](#yseq_apply) and [`yseq_ops_since`](#yseq_ops_since) read every run of the state on each call.

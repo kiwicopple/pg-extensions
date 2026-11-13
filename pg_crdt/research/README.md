@@ -1,5 +1,7 @@
 # pg_crdt: Research
 
+The active extension now contains only counters and text columns. See the [scope decision](scope.md) and [table-backed document archive](ydoc/README.md). The records below describe the research at the time they were written.
+
 Research record for pg_crdt, a Postgres extension for CRDTs, written in PL/pgSQL and installable via pg_tle.
 
 - [`prompt.md`](./prompt.md): the starting brief.

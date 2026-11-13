@@ -76,7 +76,7 @@ assert.ok(fs.existsSync(path.join(dist, 'llms.txt')), 'Missing agent index');
 const sql = fs.readFileSync(path.join(root, 'pg_crdt--0.0.1.sql'), 'utf8');
 const functions = [...new Set([...sql.matchAll(/^create (?:function|aggregate) crdt\.([a-z][a-z0-9_]*)\(/gm)].map((m) => m[1]))];
 assert.ok(functions.length >= 9, 'Found too few functions in the extension file');
-const reference = ['shared', 'pn', 'yseq', 'ydoc']
+const reference = ['shared', 'pn', 'yseq']
   .map((n) => fs.readFileSync(path.join(root, 'docs', 'reference', `${n}.md`), 'utf8'))
   .join('\n');
 const entries = [...reference.matchAll(/^### `([a-z0-9_]+)`/gm)].map((m) => m[1]);

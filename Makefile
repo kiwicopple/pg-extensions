@@ -19,7 +19,7 @@ help:
 	@echo "make docs.pg_validate  			# build the pg_validate documentation site (pg_validate/site/dist)"
 	@echo "make test.pg_crdt  			# run the pg_crdt test suite on a local throwaway Postgres"
 	@echo "make test.pg_crdt.docker  		# run the pg_crdt test suite on Postgres 16, 17 and 18 with pg_tle (Docker)"
-	@echo "make test.pg_crdt.client  		# run the pg_crdt JavaScript client tests (unit, convergence, Postgres)"
+	@echo "make test.pg_crdt.client  		# run the archived pg_crdt document and client research tests"
 	@echo "make bench.pg_crdt  			# benchmark the pg_crdt PN-Counter (merge latency, WAL per write)"
 	@echo "make docs.pg_crdt  			# build the pg_crdt documentation site (pg_crdt/site/dist)"
 	@echo "make docs.pg_crdt.dev  			# run the pg_crdt documentation site locally with hot reload"
@@ -99,7 +99,7 @@ test.pg_crdt:
 	cd $(REPO_DIR)/pg_crdt && ./test/run.sh
 
 test.pg_crdt.client:
-	cd $(REPO_DIR)/pg_crdt && npm run test:client
+	cd $(REPO_DIR)/pg_crdt && npm run test:research
 
 test.pg_crdt.docker:
 	cd $(REPO_DIR)/pg_crdt && ./test/docker.sh

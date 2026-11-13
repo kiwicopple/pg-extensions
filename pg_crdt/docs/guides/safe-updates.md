@@ -1,8 +1,10 @@
 # Update safely
 
-A merge keeps every writer's changes only if it runs in the same statement that writes the result. This page shows the pattern, why it is safe, the pattern that loses updates, and what to do at the stricter isolation levels.
+Merge an incoming state in the same SQL statement that updates the row. This lets Postgres lock the row and merge against its current value, so concurrent writers do not overwrite each other's changes.
 
-The examples use this table. It is the one from the [quickstart](../get-started/quickstart.md):
+The examples below cover updates, creating a missing row, and retrying a transaction after a serialization error.
+
+Run these examples as the table owner in a test database. Create the table below, or reuse `posts` from the [quickstart](../get-started/quickstart.md):
 
 ```sql
 create table posts (
@@ -120,9 +122,9 @@ where id = 1;
 
 ## Isolation levels and retries
 
-Under READ COMMITTED a merge never fails because of another writer. Under **REPEATABLE READ** and **SERIALIZABLE** it can: if the row changed and committed after your transaction's snapshot, the `update` fails with SQLSTATE `40001` (`could not serialize access due to concurrent update`) and Postgres rolls the transaction back. Run the whole transaction again.
+Under READ COMMITTED, a concurrent update to the same row waits for the row lock. Under REPEATABLE READ and SERIALIZABLE, it can instead fail: if the row changed and committed after your transaction's snapshot, the `update` fails with SQLSTATE `40001` (`could not serialize access due to concurrent update`) and Postgres rolls the transaction back. Run the whole transaction again.
 
-Retrying is safe even when you do not know whether an earlier attempt committed, for example after a lost connection. A merge is idempotent, so applying the same state or delta twice changes nothing.
+You can safely merge the same state or delta again, even after a lost connection leaves you unsure whether it committed. This property is called idempotence. It applies to the merge itself; consider any other work in the transaction before retrying it.
 
 ```js
 async function withRetry(client, work, attempts = 5) {

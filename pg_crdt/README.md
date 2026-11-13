@@ -1,85 +1,35 @@
 # pg_crdt
 
-CRDTs (conflict-free replicated data types) for Postgres, written in SQL and PL/pgSQL only. A CRDT is a value that several writers can change independently and merge later, in any order, any number of times, and still agree on the result.
+Counters and collaborative plain text in Postgres columns. Writers can change independent copies, then merge their updates without counting repeated deliveries twice.
 
-Version 0.0.1 has two types:
+The active extension provides `crdt.pn` counters and experimental `crdt.yseq` text columns. It is written in SQL and PL/pgSQL, supports Postgres 16, 17 and 18, and works with any driver or API layer. Your application owns the tables and permissions.
 
-- the **PN-Counter**: a counter that can go up and down, where every writer (replica) keeps its own running totals. Use it for likes, votes, stock levels or quotas that are updated from several devices, regions or offline clients;
-- **collaborative text**: a plain-text document that several people edit at once, from forms or live editors. It comes as a column type, `crdt.yseq` (`yseq_`, **experimental**: every edit rewrites the whole value, so large documents are a known limitation), and as documents stored in the extension's tables and referenced from yours by a text id (`ydoc_`), whose cost per edit does not grow with the document. See [Collaborative text for a blog post](docs/guides/collaborative-text.md).
+## Start here
 
-pg_crdt is plain Postgres. It works with any client, driver or API layer, needs no superuser and no C, and assumes no identity provider or platform roles. It runs on Postgres 16, 17 and 18.
+1. [Install the extension](docs/install.md).
+2. Try [your first counter](docs/get-started/quickstart.md) or [your first shared document](docs/get-started/text.md).
+3. Follow the [documentation map](docs/README.md) for application integration, operations and reference.
 
-- Source: https://github.com/kiwicopple/pg-extensions/tree/main/pg_crdt
+## Know the limits
 
-## A counter in 30 seconds
+A counter cannot enforce a minimum or maximum while writers are disconnected. Its state grows with writer count.
 
-```sql
-create table posts (
-  id bigint primary key,
-  likes crdt.pn not null default crdt.pn_empty()
-);
-insert into posts (id) values (1);
+Every text edit rewrites the whole CRDT value. WAL amplification, TOAST churn and retained deletion metadata make large or frequently edited documents expensive. Merge and sync scan the document, form saves carry the full base, and no packaged text-column client is provided. Read [Text-column limits and performance](docs/text/limits.md) before choosing this approach.
 
--- each writer counts under its own replica id
-update posts set likes = crdt.pn_increment(likes, 'alice') where id = 1;
-update posts set likes = crdt.pn_increment(likes, 'bob', 2) where id = 1;
-update posts set likes = crdt.pn_decrement(likes, 'alice') where id = 1;
+Table-backed documents (`ydoc_`) and their client remain [separate research](research/ydoc/README.md). We keep them separate to keep the active extension focused on column values. See the [decision and existing-installation guidance](research/scope.md). There is no automatic migration or upgrade script.
 
-select crdt.pn_value(likes) from posts where id = 1;   -- 2
-select likes from posts where id = 1;
--- {"n": {"alice": 1}, "p": {"bob": 2, "alice": 1}, "t": "pn", "v": 1}
+## Development
+
+Run from this directory:
+
+```sh
+./test/run.sh
+./test/docker.sh
+npm run docs:install
+npm run docs:build
+npm run test:research
 ```
 
-From an application, merge a state or delta that arrives from a client in one statement. The row lock makes this safe, and merging twice changes nothing:
+The research tests are separate from the active extension tests. See the [test guide](test/README.md) and [changelog](CHANGELOG.md).
 
-```sql
-update posts
-set likes = crdt.pn_merge(likes, $1)
-where id = $2;
-```
-
-Never read the state, merge it in the client and write the result back: another writer's update in between is lost. See [Update safely](docs/guides/safe-updates.md). Clients you do not trust get a wrapper around `pn_apply_delta`, not `update` access: see [Accept writes from untrusted clients](docs/guides/security.md).
-
-## Install
-
-pg_crdt is one SQL file, `pg_crdt--0.0.1.sql`. It creates the schema `crdt`. The database owner can install it:
-
-```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
-  -f pg_crdt--0.0.1.sql
-```
-
-[Install](docs/install.md) also covers pg_tle (RDS, Aurora, Supabase), the extension directory with `create extension`, and the schema guard.
-
-> **Warning: dropping the extension drops your data.** `crdt.pn` and `crdt.yseq` are types that belong to the extension. `drop extension pg_crdt cascade` **drops every column that uses them**, with its data. The text documents are in the extension's tables: `drop extension pg_crdt` **drops every document**. Read [Uninstall](docs/install.md#uninstall) first.
-
-## Documentation
-
-Start with the [documentation map](docs/README.md), or the [quickstart](docs/get-started/quickstart.md).
-
-| Task | Guide |
-| --- | --- |
-| Decide whether you need a CRDT, and see which types exist and which are planned | [Overview](docs/overview.md) |
-| Count in a few minutes | [Quickstart](docs/get-started/quickstart.md) |
-| Name writers, use device suffixes, recover a lost device | [Replicas and identity](docs/guides/replicas-and-identity.md) |
-| Write without losing updates | [Update safely](docs/guides/safe-updates.md) |
-| Accept deltas from untrusted clients | [Security](docs/guides/security.md) |
-| Index the value, keep counters as deltas, WAL and merge benchmarks | [Storage and performance](docs/guides/storage-and-performance.md) |
-| The state, merge and the `crdt.pn` domain | [PN-Counter](docs/types/pn-counter.md) |
-| Edit a blog post with several people, in a column or in tables: form saves, live ops, search, compaction | [Collaborative text for a blog post](docs/guides/collaborative-text.md) |
-| Choose a text shape; how text merges, and what it cannot do | [Collaborative text](docs/types/collaborative-text.md) |
-| Connect a live editor from JavaScript (`client/`) | [JavaScript client](docs/reference/client.md) |
-| Look up a function, an error or a limit | [Shared](docs/reference/shared.md), [PN-Counter functions](docs/reference/pn.md), [Collaborative text column functions](docs/reference/yseq.md), [Collaborative text functions](docs/reference/ydoc.md), [Errors](docs/reference/errors.md), [Limits](docs/reference/limits.md) |
-
-The design and the decisions behind it are in [`research/architecture.md`](research/architecture.md) and, for text, [`research/text.md`](research/text.md). Benchmarks: [`research/benchmarks/pn-counter.md`](research/benchmarks/pn-counter.md), [`research/benchmarks/text.md`](research/benchmarks/text.md), [`research/benchmarks/vacuum-wal.md`](research/benchmarks/vacuum-wal.md). What changed: the [changelog](CHANGELOG.md).
-
-## Tests
-
-```bash
-./test/run.sh            # throwaway Postgres; pg_tle and the control-file install SKIP
-./test/docker.sh         # Postgres 16, 17, 18 with pg_tle and the control file
-npm run test:client      # the JavaScript client: unit, convergence and Postgres tests
-make test.pg_crdt        # from the repository root
-```
-
-See [`test/README.md`](test/README.md).
+Source: [kiwicopple/pg-extensions](https://github.com/kiwicopple/pg-extensions/tree/main/pg_crdt).

@@ -62,12 +62,30 @@
       "src": "journal.md",
       "route": "journal",
       "label": "Build journal"
+    },
+    {
+      "src": "scope.md",
+      "route": "scope",
+      "label": "Scope: column-only extension"
+    },
+    {
+      "src": "ydoc/README.md",
+      "route": "ydoc",
+      "label": "Table-backed document archive"
     }
   ],
   "sidebar": [
     {
       "label": "Overview",
       "slug": ""
+    },
+    {
+      "label": "Scope: column-only extension",
+      "slug": "scope"
+    },
+    {
+      "label": "Table-backed document archive",
+      "slug": "ydoc"
     },
     {
       "label": "Research prompt",

@@ -1,14 +1,14 @@
 # Accept writes from untrusted clients
 
-Use this guide when clients send their own counts: a browser, a phone, or a service that you do not run. You give them a function that applies their delta and refuses to record anything under another writer's name. They get no `update` on the column.
+When a browser, phone or external service sends its own counts, check that it changes only its own entries. Give clients a wrapper function that applies their delta with `pn_apply_delta`, and keep direct `update` access to the counter column private.
 
 The examples work with any role setup, and any API layer or driver. Roles named `app_writer`, `alice` and `bob` are examples: grant to your own.
 
 ## Why `update` access is not enough
 
-Row-level security decides which rows a writer may change. It cannot see inside a `crdt.pn` value. A writer that can update the column can send a state that raises another replica's entry, say `{"p": {"bob": 1000000}}`, and max-merge keeps the larger total forever. Nothing in the database can tell a forged entry from a real one afterwards.
+Row-level security controls access to rows. A row access policy alone does not check who owns each entry inside a `crdt.pn` value. A writer that can update the column can send a state that raises another replica's entry, say `{"p": {"bob": 1000000}}`, and max-merge keeps the larger total forever. Nothing in the database can tell a forged entry from a real one afterwards.
 
-So:
+Set up access as follows:
 
 1. Writers get **no `update` on the state column**.
 2. They call a `security definer` function of your application. It applies their delta with `crdt.pn_apply_delta`, passing the identity your application trusts.

@@ -1,0 +1,53 @@
+# Limits
+
+Check these limits before choosing how to store your data. This page covers version 0.0.1, including numeric bounds, storage growth and features that are not available yet.
+
+Performance figures come from single runs on a laptop. They show how costs change with the workload, not what your application will achieve. See the reports for the [PN-Counter](../../../benchmarks/pn-counter.md), [text](../../../benchmarks/text.md) and [vacuum, bloat and WAL](../../../benchmarks/vacuum-wal.md) for the measurements and test conditions.
+
+## Numbers
+
+| Limit | Value | What happens past it |
+| --- | --- | --- |
+| A count (an entry of `p` or `n`) | 0 to 9,223,372,036,854,775,807, a whole number | `pn_increment` and `pn_decrement` raise `22003`. `pn_apply_delta` rejects the delta with `22023`. |
+| The value, `sum(p) - sum(n)` | The `bigint` range | `pn_value` raises `22003`. |
+| An amount for `pn_increment` or `pn_decrement` | 0 to 9,223,372,036,854,775,807 | A negative amount raises `22023`. |
+| An entry key | A replica id, or `<replica id>:<device>`: non-empty, the replica id without `:` | `22023` from `pn_increment`, `pn_decrement` and `pn_apply_delta`. `pn_merge` accepts any key. |
+| A collaborative text document id | `text`, non-empty, at most 256 bytes, no control characters | `22023` from `ydoc_create`. An id that exists raises `23505`. |
+| Format version | `v = 1` | A `crdt.pn` or `crdt.yseq` state with another `v` fails the domain's check with `23514`. |
+| Database encoding for `yseq_` | UTF8 | In another encoding, `yseq_ops_since`, `yseq_diff` and `yseq_merge` fail (`54000`) on a state with deleted characters. |
+| Postgres versions | 16, 17, 18 | Not tested on others. |
+
+Collaborative text has its own limits (key length, quotas of the untrusted path; for `ydoc_` the document id and row size): see [the column functions](yseq.md#limits) and [the table-backed functions](ydoc.md#limits).
+
+## Behavior
+
+- **Two types.** The PN-Counter and collaborative text are built; collaborative text has an experimental column form (`yseq_`) and a table-backed form (`ydoc_`). Add-wins sets, last-writer-wins registers and maps are planned: see the [overview](../overview.md#the-types).
+- **The state grows with the number of replicas.** An entry is added for every replica id that writes, and entries are never removed. In the benchmarks a state with 10 replicas was 496 bytes, 100 replicas 1.3 kB, 1,000 replicas 12 kB and 10,000 replicas 120 kB (TOAST-compressed at about 9 bytes per entry from 1,000 replicas up).
+- **Cost grows with the state.** Merging a one-entry delta into a state took about 11 microseconds at 10 replicas and about 1.2 ms at 10,000. Merging two 10,000-replica states took about 14 ms. `pn_is_valid` took about 4 ms at 10,000 replicas, which is why the domain checks the envelope only.
+- **So does the WAL of a state column.** Up to about 100 replicas (1 kB) the state stays in the row, and an update logs only the bytes that changed: 128 bytes of WAL per write at 10 replicas, less than inserting a delta row (about 350 bytes). Above about 2 kB the state is TOASTed, and every write rewrites and logs all of it: about 10 kB per write at 1,000 replicas and 92 kB at 10,000. For counters with many writers, insert deltas into a table and read with `pn_merge_agg`. See [Storage and performance](../guides/storage-and-performance.md).
+- **Compaction of a delta table is not built.** A table of deltas grows until you fold it into a snapshot yourself. [Storage and performance](../guides/storage-and-performance.md#compact-a-delta-table-by-hand) shows how.
+- **Change feeds carry the whole state.** Logical decoding sends the full new value of a changed column, and some feeds cap payloads (Supabase Realtime, for example, drops column values over 64 bytes from change payloads above 1 MB). Treat a change event as "this row changed" and fetch the row.
+- **No guaranteed minimum or maximum.** A counter cannot be kept above zero across disconnected writers. A `check` on `pn_value` rejects a merge that breaks it, and does not reconcile it.
+- **No reset, no removal of a writer.** Totals only grow. See [PN-Counter](../types/pn-counter.md#what-a-counter-cannot-do).
+- **No merge operator.** There is no `||` for merging: on `jsonb` it means concatenation. Use `pn_merge`.
+- **A lost state is silent.** A writer that restarts from 0 under its old key is ignored until it passes its old total. `pn_apply_delta` cannot detect it. See [Replicas and identity](../guides/replicas-and-identity.md#a-replica-that-lost-its-state).
+- **The default identity is only as strong as the settings it reads.** See [Trust model](../guides/replicas-and-identity.md#trust-model).
+- **No counter deltas by version vector and no upgrade path** in 0.0.1. Collaborative text retains records of deleted characters; its sync functions and compaction limits are described below. See [Versioning](shared.md#versioning).
+- **Postgres 18 virtual generated columns** cannot call user-defined functions yet. Use `stored`.
+- **The schema is fixed.** The extension is not relocatable: it always installs into `crdt`.
+- **Dropping the extension drops columns** that use `crdt.pn` or `crdt.yseq` (with `cascade`), and every `ydoc_` document. See [Install](../install.md#uninstall).
+
+### Collaborative text
+
+- **The column (`yseq_`) is experimental, and its cost grows with the document.** Every edit rewrites the whole value: in the benchmarks a keystroke wrote about 3.4 kB of WAL at 1 kB of text, 7.1 kB at 5 kB, 18.5 kB at 20 kB and 78.7 kB at 100 kB, and each edit leaves a dead TOAST copy that only `VACUUM` reclaims, so a table edited at keystroke rate bloats to many times its live size. `yseq_merge`, `yseq_apply` and `yseq_ops_since` read the whole state on every call. Large documents are a known limitation: use `ydoc_` for them. See [Limits of the column](../types/collaborative-text.md#limits-of-the-column).
+- **The column never forgets.** Deleted characters stay in a `crdt.yseq` state as runs (without their text); there is no tombstone collection.
+- **No equivocation detection in the column.** `yseq_apply` and `yseq_merge` skip a run whose ids are already present without comparing its text, so two writers sharing one entry key lose text silently.
+- **A three-way save of the column sends the whole state** as its base, and the `yseq_` edits return the state, not the op (use `yseq_diff`).
+- **Plain text only.** No rich text, cursors, presence or undo, and the ops are not the Yjs wire format. Outside JavaScript, a live editor needs its own implementation of the algorithm; in JavaScript, use the [JavaScript client](client.md). See [What it cannot do](../types/collaborative-text.md#what-it-cannot-do).
+- **Deleted text is kept.** Tombstones keep their characters for peers that have not seen them. `ydoc_compact` merges tombstone rows but does not remove them, and there is no garbage collection.
+- **Storage of `ydoc_`.** In the benchmarks a 5 kB post took about 24 kB across the tables, 3.8 times the `yseq_` column. `ydoc_value` reads every row of the document (about 0.4 ms at 10,000 characters, 3.6 ms at 100,000 on the benchmark machine).
+- **No index on `ydoc_` text.** `ydoc_value` is `STABLE`, so it cannot be in a generated column or an expression index. Search a cached text column instead.
+- **Compaction is a call you make.** Nothing compacts documents by itself. Schedule `ydoc_compact`.
+- **`ydoc_ops_since` and `yseq_ops_since` send every delete**, not only the new ones, because deletes carry no clock.
+- **One writer per entry key.** Two writers that use the same key make ops that other `ydoc_` copies refuse (`22023`), and lose text in a `yseq_` column. Give each editor and device its own key.
+- **One client library, for text in JavaScript.** The [JavaScript client](client.md) syncs `ydoc_` documents through a transport you write; for a `yseq_` column your application calls `yseq_apply` and `yseq_ops_since` itself. The PN-Counter needs none: the examples use plain node-postgres, and any driver works, because the state is `jsonb`. See also the client's [limits](client.md#limits).

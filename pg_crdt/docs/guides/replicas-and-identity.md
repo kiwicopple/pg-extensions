@@ -1,6 +1,6 @@
 # Replicas and identity
 
-Every change to a counter is recorded under the name of the writer that made it. This page explains what that name is, the one rule about it that you must keep, how to recover from breaking it, and how the extension finds out who a writer is when a client sends its own counts.
+Give each independent writer a stable name so the counter can track its contributions. This guide explains how to choose those names, recover a device that has lost its local count, and check which entries a client is allowed to change.
 
 ## Replica ids and entry keys
 
@@ -39,7 +39,7 @@ An entry key must have **one writer at a time**. If two writers share a key, bot
 
 ## A replica that lost its state
 
-A writer that sends totals must start from its own entries on the server. If a device loses its local state (a reinstall, cleared storage) and starts counting from 0 under the same key, its new totals stay below the old one. Merge ignores them until they pass it, so its next increments are **silently swallowed**. Two writers that share a key cause the same thing.
+A writer that sends totals must start from its own entries on the server. If a device loses its local state (a reinstall, cleared storage) and starts counting from 0 under the same key, its new totals stay below the old one. Merge ignores them until they pass it, so its next increments do not change the counter, and no error is raised. Two writers that share a key cause the same thing.
 
 Here the server has `alice:phone` at 5. The phone starts over, counts 2 likes and sends its totals:
 
@@ -67,7 +67,7 @@ select crdt.pn_value(likes) from posts where id = 1;
 
 The value is 5, not 7: the 2 new likes vanished without an error. `pn_apply_delta` cannot detect this either. A lower total looks exactly like a retry or a replayed older delta, which must succeed.
 
-Before it sends totals again, a writer has two ways out:
+Before the device sends more totals, choose one of these recovery methods:
 
 - **Read its own entries back from the server and continue from them.** The phone asks for its totals, then sends the server's number plus what it has counted since.
 - **Use a fresh device id**, such as `alice:phone-2`. The old entry stays, and the new one starts at 0.

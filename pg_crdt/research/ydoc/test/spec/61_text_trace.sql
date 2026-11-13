@@ -7,7 +7,7 @@
 -- in 2,598 batched ops (100 patches each) gives the trace's final text. The
 -- reference's ops also pass the untrusted path's causal rules.
 -- The trace files are generated (gitignored); without them this file SKIPs.
-\set trace_dir :ext_dir/experiments/text-ref/traces
+\set trace_dir :ext_dir/../../experiments/text-ref/traces
 select (pg_stat_file(:'trace_dir' || '/automerge-paper.batch100.jsonl', true)).size is not null as has_trace \gset
 
 \if :has_trace

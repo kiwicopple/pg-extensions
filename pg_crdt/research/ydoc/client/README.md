@@ -1,6 +1,8 @@
 # pg-crdt-client
 
-A JavaScript client for pg_crdt collaborative text (`ydoc_`): a local replica of one document, edits at UTF-16 positions, change events for an editor, an op queue and a sync loop through `crdt.ydoc_apply` and `crdt.ydoc_ops_since`, over a transport you write. Plain ESM with JSDoc types, no dependencies, no build step; Node.js 20+ and browsers.
+Use `pg-crdt-client` to connect a JavaScript editor to a pg_crdt document stored in the extension's tables (`ydoc_`). It keeps a local copy, queues edits for sync, and reports remote changes to your editor. You provide the transport that calls `crdt.ydoc_apply` and `crdt.ydoc_ops_since` on your server.
+
+The client uses JavaScript string positions (UTF-16) and handles conversion for Postgres. It runs in Node.js 20+ and browsers, uses ESM with JSDoc types, and needs no dependencies or build step.
 
 ```js
 import { openYdoc } from './src/index.js'

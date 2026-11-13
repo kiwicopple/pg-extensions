@@ -1,74 +1,48 @@
-# Overview
+# What pg_crdt does
 
-`pg_crdt` adds conflict-free replicated data types (CRDTs) to Postgres. A CRDT is a value that several writers can change independently and merge later, in any order and any number of times, and still agree on the result. The extension is SQL and PL/pgSQL only: it needs no C, no other extension and no superuser, and it works with any client, driver or API layer. It assumes no identity provider and no platform roles.
+pg_crdt stores counters and collaborative plain text in Postgres columns. Several writers can change their own copies independently and combine them later. Copies that receive the same updates reach the same result, even when delivery is delayed, repeated or out of order.
 
-Version 0.0.1 has two types: the [PN-Counter](types/pn-counter.md), a counter that can go up and down, where every writer keeps its own running totals, and [collaborative text](types/collaborative-text.md), a plain-text document that several people edit at once, kept either in a column of your table (`yseq_`, experimental) or in the extension's tables (`ydoc_`). The other types in [the roadmap](#the-types) are planned, not built.
+These values are conflict-free replicated data types, or CRDTs. The extension is SQL and PL/pgSQL and works with any Postgres client or API layer. It does not provide authentication, networking or automatic replication between devices.
 
-## What a CRDT gives you
+## Choose your starting point
 
-Most data has one writer at a time: a row lock decides who goes first, and the second writer sees the first one's result. That model breaks when writers cannot talk to each other when they write: a phone that is offline, a second region that accepts writes while the link between regions is down, a background job that counts events in batches. If each of them overwrites the same number, the last writer wins and the others are lost.
-
-A CRDT changes the question. Each writer records only what it did, in a shape that has a merge function with three properties:
-
-- **Commutative.** Merging `a` with `b` gives the same state as merging `b` with `a`. Order does not matter.
-- **Associative.** Merging three states in any grouping gives the same result.
-- **Idempotent.** Merging a state with itself, or applying the same update twice, changes nothing. A retry is harmless.
-
-Any set of writers that has seen the same updates then holds the same state, however the updates were delayed, reordered or repeated. The extension's test suite checks all three properties on 1,000 random cases each, and checks convergence under shuffled, duplicated and stale delivery.
-
-For a counter the shape is simple. Each writer keeps the total it has ever added and the total it has ever subtracted. The value is the sum of all additions minus the sum of all subtractions. Merging takes the larger total for every writer. See [PN-Counter](types/pn-counter.md).
-
-For text, every character gets an id and remembers its neighbours when it was typed. Merging adds the characters a copy lacks, places each by its neighbours and ids, and marks deleted ones, so every copy ends up with the same text. See [Collaborative text](types/collaborative-text.md).
-
-## When to use pg_crdt
-
-Use it when writers can change the same value without coordinating, and you want the database to keep every change:
-
-- likes, votes, view counts, stock levels, quotas, or any counter that several devices, regions or services update (see [When not to use it](#when-not-to-use-it) for limits that must always hold);
-- a count that an offline-capable client changes locally and syncs later;
-- a count that many server processes update, where you want deltas you can insert without taking a row lock (see [Storage and performance](guides/storage-and-performance.md));
-- a document that several people edit at once, from forms or live editors, online or offline: a blog post, notes, a description (see [Collaborative text for a blog post](guides/collaborative-text.md)).
-
-Start with the [quickstart](get-started/quickstart.md).
+| You need | Start with |
+| --- | --- |
+| A count updated by independent devices or services | [Your first counter](get-started/quickstart.md) |
+| A short plain-text document with independent edits | [Your first shared document](get-started/text.md) |
+| A live editor | First read [the integration requirements](text/live-editor.md) and [column limitations](text/limits.md) |
 
 ## When not to use it
 
-- **A value with a rule that must always hold.** A merge always succeeds and never refuses a change, so it cannot keep a counter at or above zero while writers are disconnected. You can add a `check` on the value, but then a merge that breaks it is rejected, not reconciled. Inventory that must never go negative needs coordination, which a CRDT exists to avoid.
-- **One writer at a time anyway.** If a single service updates a row under a lock, an ordinary `bigint` column is simpler and cheaper.
-- **A very large number of distinct writers.** The state keeps an entry for every writer that ever counted, and entries are never removed. Counters with thousands of writers are better kept as inserted deltas. See [Limits](reference/limits.md).
-- **Rich text.** Collaborative text is plain text. See [What it cannot do](types/collaborative-text.md#what-it-cannot-do).
-- **Large, heavily edited documents in a column.** The `yseq_` column rewrites the whole value on every edit, so its WAL and TOAST churn grow with the document. Use the table-backed `ydoc_` for those. See [Choose a shape](types/collaborative-text.md#choose-a-shape).
-- **Anything that is not a counter or text, yet.** Sets, registers and maps are planned.
+Use an ordinary column when one service already coordinates every write. A CRDT adds state and processing that you may not need.
+
+Counters cannot enforce a minimum or maximum across disconnected writers. A database constraint can reject a merge that breaks a rule, but it cannot reconcile it. Strict inventory or balance rules need coordination.
+
+Text columns are experimental. They rewrite the whole state on every edit, retain deletion metadata indefinitely and scan the document during merge and sync. Large documents or sustained keystroke-rate editing may exceed your latency, storage or WAL budget. There is no packaged live-editor client, rich text, cursor sharing or undo.
 
 ## How it fits in Postgres
 
-- A counter is a `jsonb` value with a versioned envelope, wrapped in the domain `crdt.pn`. It reads and writes as JSON in psql, drivers and REST APIs, and works with ordinary columns, indexes and generated columns.
-- A text document is either a `jsonb` value in your table, wrapped in the domain `crdt.yseq` (experimental: every edit rewrites it), or it lives in tables of the extension, one row per run of characters, so an edit writes a few rows instead of rewriting the document, and your table holds its id.
-- All functions are in one schema, `crdt`, with a name prefix for each type (`pn_`, `yseq_`, `ydoc_`). The verbs are shared where they fit: `pn_value`, `yseq_value` and `ydoc_value`; `pn_merge`, `yseq_merge` and `ydoc_merge`; `pn_apply_delta`, `yseq_apply` and `ydoc_apply` for writers you do not trust.
-- You write a merge as one SQL statement, `update ... set s = crdt.pn_merge(s, $1)`. The row lock then makes it safe. See [Update safely](guides/safe-updates.md).
-- Row-level security cannot see inside a CRDT value, so clients you do not trust get a wrapper function around `pn_apply_delta` (or `yseq_apply`, `ydoc_apply`) instead of direct `UPDATE`. See [Accept writes from untrusted clients](guides/security.md).
+A `crdt.pn` or `crdt.yseq` column stores JSON with a validated outer structure. Your application owns the rows, grants, row policies, indexes and backups. All extension functions are in `crdt`; always qualify their names.
+
+Local edits and merges must run in the same statement that updates the column. For untrusted client input, expose authorized wrapper functions using `pn_apply_delta` or `yseq_apply`. Calling a merge function alone does not establish a writer's identity or right to change a row.
 
 ## The types
 
-| Prefix | Type | Status |
-| --- | --- | --- |
-| `pn_` | PN-Counter: a counter that goes up and down. | **Built** (0.0.1). |
-| `awset_` | Add-wins set: add and remove elements; a concurrent add beats a remove. | Planned. |
-| `lww_` | Last-writer-wins register: one value, the latest write wins. | Planned. |
-| `lwwmap_` | Map of keys to last-writer-wins values. | Planned. |
-| `yseq_` | Collaborative text in a column: a plain-text document (YjsMod order) as one `jsonb` value, the domain `crdt.yseq`. | **Built, experimental** (0.0.1). |
-| `ydoc_` | Collaborative text in tables: the same algorithm, in the extension's tables. | **Built** (0.0.1). |
-
-The PN-Counter and collaborative text exist today, and no date is set for the others. Every value type will follow the same conventions as `pn_`: a domain over `jsonb`, an IMMUTABLE `_value`, a `_merge`, and a `_merge_agg` aggregate where it applies. The reasoning, and the alternatives that were considered, are in the [architecture record](../research/architecture.md) and, for text, the [text design](../research/text.md) and [benchmarks](../research/benchmarks/text.md). The column form of text, `yseq_`, follows the value-type conventions; it is marked experimental because its cost grows with the document.
-
-## Where to go next
-
-| You want to | Read |
+| Type | Status |
 | --- | --- |
-| Install the extension | [Install](install.md) |
-| Count something in a few minutes | [Quickstart](get-started/quickstart.md) |
-| Name your writers | [Replicas and identity](guides/replicas-and-identity.md) |
-| Write without losing updates | [Update safely](guides/safe-updates.md) |
-| Let clients send their own counts | [Accept writes from untrusted clients](guides/security.md) |
-| Choose between a state column and deltas | [Storage and performance](guides/storage-and-performance.md) |
-| Let several people edit a blog post | [Collaborative text for a blog post](guides/collaborative-text.md) |
+| `crdt.pn` | Counter that records additions and subtractions per writer |
+| `crdt.yseq` | Experimental plain-text column using YjsMod ordering |
+| Table-backed documents (`ydoc_`) | Preserved separately in research; not installed |
+| Sets, registers and maps | Planned; not implemented |
+
+We keep the active extension focused on column values so its responsibilities stay simple. Table-backed documents have their own storage, grants, maintenance and client lifecycle and remain [separate research](../research/scope.md). This choice does not remove the limitations of column storage.
+
+## What a CRDT gives you
+
+Merge order and grouping do not affect the final result, and applying the same update twice does not duplicate it. These properties are called commutativity, associativity and idempotence. They apply to merging recorded changes; repeating a new local increment or insert can still create an additional change.
+
+Read [How counters merge](types/pn-counter.md) or [How text merges](types/collaborative-text.md) when you need the details.
+
+## Next
+
+[Install pg_crdt](install.md), then choose the counter or text quickstart above.
