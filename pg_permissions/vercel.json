@@ -40,5 +40,6 @@
       "destination": "https://kiwicopple.github.io/pg-extensions/pg_permissions/:path*/",
       "permanent": true
     }
-  ]
+  ],
+  "ignoreCommand": "if [ -n \"$VERCEL_GIT_PREVIOUS_SHA\" ] && git diff --quiet \"$VERCEL_GIT_PREVIOUS_SHA\" HEAD -- .; then echo \"No project changes; skipping build\"; exit 0; else echo \"Project changed or comparison unavailable; building\"; exit 1; fi"
 }
