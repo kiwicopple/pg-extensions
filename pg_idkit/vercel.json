@@ -1,0 +1,8 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "npm --prefix site ci",
+  "buildCommand": "npm run docs:build",
+  "outputDirectory": "site/dist",
+  "ignoreCommand": "if [ -n \"$VERCEL_GIT_PREVIOUS_SHA\" ] && git diff --quiet \"$VERCEL_GIT_PREVIOUS_SHA\" HEAD -- .; then echo \"No project changes; skipping build\"; exit 0; else echo \"Project changed or comparison unavailable; building\"; exit 1; fi"
+}

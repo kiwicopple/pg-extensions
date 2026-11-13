@@ -1,47 +1,30 @@
-# `pg_idkit`
+# pg_idkit
 
-Useful ID generators and utilities. A pure PL/pgSQL port of the popular [Rust version](https://github.com/VADOSWARE/pg_idkit).
+UUID and KSUID generators and timestamp utilities for Postgres, written in SQL and PL/pgSQL. No pgcrypto or compiled extension is required. This is a PL/pgSQL port inspired by the [Rust pg_idkit project](https://github.com/VADOSWARE/pg_idkit).
 
-The goal is to have no additional extension requirements (eg: no pgcrypto) to maintain portability.
+## Get started
 
-- Source: https://github.com/kiwicopple/pg-extensions/tree/main/pg_idkit
-- Docs: https://github.com/kiwicopple/pg-extensions/tree/main/pg_idkit
-- DbDev: https://database.dev/kiwicopple/pg_idkit
+Read the [overview](docs/overview.md), [install](docs/install.md), then follow the [quickstart](docs/get-started/quickstart.md). The [documentation map](docs/README.md) lists every guide and reference page.
 
-## Usage
+```sql
+-- After installing into the extensions schema:
+select extensions.gen_random_uuid_v7();
+```
 
-Function signatures follows a similar pattern to the built-in
+Version 0.0.4 exposes four generators and one timestamp extractor. IDs use Postgres `random()` and are not secrets. Keep a primary key or unique constraint, and use an explicit creation timestamp when exact time matters. See [errors and limits](docs/errors-and-limits.md).
 
-- `gen_random_uuid_v6()` - generate a random UUID v6
-- `gen_random_uuid_v7()` - generate a random UUID v7
-- `gen_random_ksuid_second()` - generate a random KSUID with second-level precision
-- `gen_random_ksuid_microsecond()` - generate a random KSUID with microsecond-level precision
-- `timestamp_from_uuid_v7(uuidv7, timezone?)` - extract a timestamp from a UUIDv7. Optionally provide timezone (like 'America/New_York')
+## Documentation site
 
-## Installation
+The documentation site is configured for [id.postgres.tools](https://id.postgres.tools). It follows the same Astro + Starlight pattern as the other extensions. From this directory:
 
 ```bash
-dbdev install kiwicopple-pg_idkit --connection <CONNECTION_STRING>
+npm run docs:install
+npm run docs:dev
+npm run docs:build
 ```
 
-or
-
-```sql
-select * from dbdev('kiwicopple-pg_idkit')
-```
-
-then:
-
-```sql
-create extension pg_idkit;
-```
-
-or to install in a separate schema (recommended):
-
-```sql
-create extension pg_idkit with schema extensions;
-```
+See [site maintenance](site/README.md) for navigation, exports and build checks.
 
 ## Credits
 
-- [`fabiolimace`](https://github.com/fabiolimace). Most of the work of this repo can be attributed to Fabio's gists on GitHub.
+Most of the generator implementation comes from Fabio Lima's work, credited in the [SQL source](pg_idkit--0.0.4.sql). The original package listing is [kiwicopple/pg_idkit on database.dev](https://database.dev/kiwicopple/pg_idkit).
