@@ -34,3 +34,7 @@ Sync rewrites relative links between pages to site routes; links to code and oth
 ## Validation
 
 `npm run build` checks rendered links and fragments (`scripts/check-links.mjs`), and that the Markdown exports keep their code, every sidebar route exists, and every built-in validator has a reference entry with "Guarantees" and "Does not guarantee" sections (`scripts/check-content.mjs`). The SQL examples are checked by the test suite (`test/spec/90_usage_quickstart.sql`, `91_usage_registry.sql`).
+
+## Shared theme
+
+Colors, typography, and base styles are maintained in [docs-theme](../../docs-theme/README.md). Edit that shared stylesheet to update all documentation sites.

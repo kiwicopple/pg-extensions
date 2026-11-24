@@ -1,5 +1,6 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
+import expressiveCode from '../../docs-theme/expressive-code.mjs';
 import { sidebar } from './navigation.mjs';
 import starlight from '@astrojs/starlight';
 import starlightLinksValidator from 'starlight-links-validator';
@@ -14,6 +15,7 @@ export default defineConfig({
 	markdown: { processor: satteri({ mdastPlugins: [baseLinks({ base: process.env.DOCS_BASE })] }) },
 	integrations: [
 		starlight({
+			expressiveCode,
 			title: 'pg_permissions',
 			description:
 				'pg_permissions: an authorization store and check engine for Postgres with RBAC, OpenFGA and Cedar, plus optional RLS enforcement.',
