@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
 import { empty, merge, value, validDelta, deltaFromCopies } from './counter.mjs';
 import { createSession, readSession, handleCounter } from './server.mjs';
+import { readCounterResponse } from './response.mjs';
 
 const env = { CRDT_DEMO_DATABASE_URL: 'postgres://unused-in-test', CRDT_DEMO_SECRET: 'test-only-signing-secret-32-characters-long' };
 const request = (token, delta, options = {}) => new Request('https://example.test/api/counter', {
@@ -48,12 +49,35 @@ test('preview is explicit, partial configuration and database errors never simul
   const get = () => new Request('https://example.test/api/counter');
   assert.deepEqual(await (await handleCounter(get(), { env: {} })).json(), { mode: 'preview' });
   assert.equal((await handleCounter(get(), { env: { CRDT_DEMO_SECRET: env.CRDT_DEMO_SECRET } })).status, 503);
-  const failure = await handleCounter(get(), { env, db: { query() { throw new Error('private database details'); } } });
+  const failure = await handleCounter(request(createSession(env.CRDT_DEMO_SECRET), empty()), { env, db: { query() { throw new Error('private database details'); } } });
   assert.equal(failure.status, 503);
   assert.ok(!(await failure.text()).includes('private database details'));
   const unsupported = await handleCounter(new Request('https://example.test/api/counter', { method: 'DELETE' }));
   assert.equal(unsupported.status, 405);
   assert.equal(unsupported.headers.get('allow'), 'GET, POST');
+});
+
+test('page loads and resets create sessions without any database queries', async () => {
+  const db = { query() { assert.fail('A page load reached Postgres'); } };
+  const tokens = new Set();
+  for (let i = 0; i < 50; i++) {
+    const response = await handleCounter(new Request('https://example.test/api/counter'), { env, db });
+    assert.equal(response.status, 200);
+    const session = await response.json();
+    assert.equal(session.mode, 'postgres');
+    assert.ok(readSession(session.token, env.CRDT_DEMO_SECRET));
+    tokens.add(session.token);
+  }
+  assert.equal(tokens.size, 50);
+});
+
+test('the client explains firewall limits even when the response is not JSON', async () => {
+  for (const body of ['<html>Too Many Requests</html>', 'Too Many Requests', '{"error":"rate limited"}']) {
+    await assert.rejects(readCounterResponse(new Response(body, { status: 429 })), /Wait a minute.*local edits are safe/);
+  }
+  await assert.rejects(readCounterResponse(Response.json({ error: 'Postgres is unavailable.' }, { status: 503 })), /Postgres is unavailable/);
+  const result = { state: empty(), value: '0' };
+  assert.deepEqual(await readCounterResponse(Response.json(result)), result);
 });
 
 test('bad sessions and payloads are rejected before querying Postgres', async () => {

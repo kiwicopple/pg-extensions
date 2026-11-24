@@ -6,6 +6,8 @@ Each page load or **Start over** creates a separate visitor session. This is a t
 
 Without server configuration, the UI explicitly says **Browser preview** and merges in JavaScript. With configuration, it says **Live Postgres** and every sync runs the actual `crdt.pn_apply_delta` function. A database failure shows an error and preserves local edits; it never switches to simulated success.
 
+Page loads, **Start over**, and local edits never query Postgres. Only **Sync both devices** and **Replay last sync** access the database. The **Live Postgres** badge indicates the configured backend; connectivity is verified on the first sync.
+
 ## Provision Postgres
 
 Use a dedicated Postgres **16, 17, or 18** database with UTF-8 encoding. No extension allowlist, custom server binary, pg_tle, or superuser is required: the extension is SQL and PL/pgSQL.
@@ -77,6 +79,15 @@ Astro’s dev middleware runs the same API handler as Vercel. Restart the dev se
 
 The API accepts only two fixed replica keys, whole totals from 0 to 10,000, and bodies up to 2 KiB. Signed session tokens bind requests to a server-issued counter ID. The parameterized upsert merges into the stored value atomically, including concurrent first writes. All API responses use `Cache-Control: no-store`; database errors and credentials are never sent to the browser.
 
-This is an anonymous public demo. Tokens isolate sessions but do not limit how many sessions someone creates. Configure a Vercel Firewall rate limit for `/api/counter` before exposing it to heavy traffic. Monitor database storage; for idle deployments, expired rows can also be removed by an operator with `delete from crdt_demo.counters where expires_at < now()`.
+This is an anonymous public demo. Tokens isolate sessions but do not limit how many sessions someone creates. Enable this [Vercel Firewall rate limit](https://vercel.com/docs/vercel-firewall/vercel-waf/rate-limiting) before public launch; it rejects excess traffic before it reaches the function or Postgres, without another database or service:
+
+1. In the Vercel project, open **Firewall → Configure → New Rule**.
+2. Name it **CRDT counter demo**. Match **Request Path → Equals → `/api/counter`** for all methods.
+3. Choose **Rate Limit**, **Fixed Window**, **60 seconds**, **30 requests**, counting by **IP address** alone.
+4. Choose **Too Many Requests (429)**, then **Save Rule → Review Changes → Publish**. The **Log** action does not block requests.
+
+The rule is a Vercel project setting and is **not enabled by deploying this repository**. It is shared across function instances within each Vercel region; counters are regional, and different IPs have separate allowances. It limits abuse from one source, not total worldwide traffic. A firewall `429` displays a wait message and preserves local edits; the client never automatically retries. If the demo needs to be paused, add a firewall deny rule for `/api/counter`; the static docs remain accessible.
+
+Monitor database storage; for idle deployments, expired rows can also be removed by an operator with `delete from crdt_demo.counters where expires_at < now()`.
 
 Run `npm run test:demo` for browser-model and API tests, including the real extension SQL and runtime-role grants in an embedded Postgres engine (PGlite). These tests do not verify a hosted server’s TLS or network connectivity. Run `npm run docs:build` for the documentation build and link/content checks.

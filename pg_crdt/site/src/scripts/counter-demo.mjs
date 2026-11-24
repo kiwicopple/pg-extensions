@@ -1,4 +1,5 @@
 import { REPLICAS, MAX_TOTAL, empty, merge, value, deltaFromCopies } from '../../../demo/counter.mjs';
+import { readCounterResponse } from '../../../demo/response.mjs';
 
 class CounterDemo extends HTMLElement {
   connectedCallback() {
@@ -32,9 +33,7 @@ class CounterDemo extends HTMLElement {
     // A plain static preview has no API. A failed configured backend never
     // silently falls back to browser merges.
     if (response.status === 404 && !options) return { mode: 'preview' };
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error ?? 'The demo request failed. Try again.');
-    return body;
+    return readCounterResponse(response);
   }
 
   async start() {
@@ -48,9 +47,9 @@ class CounterDemo extends HTMLElement {
       this.stored = empty();
       this.lastDelta = null;
       this.message('Try +3 on Alice’s laptop and −1 on Bob’s phone, then sync.');
-    } catch {
+    } catch (error) {
       if (this.mode === 'loading') this.mode = 'unavailable';
-      this.message('The demo could not connect. Use Start over to try again.', true);
+      this.message(error.message || 'The demo could not connect. Use Start over to try again.', true);
     } finally {
       this.busy = false;
       this.render();

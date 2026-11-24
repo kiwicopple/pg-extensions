@@ -88,7 +88,8 @@ export async function handleCounter(request, { env = process.env, db } = {}) {
   }
   try {
     if (request.method === 'GET') {
-      await (db ?? database(env)).query('select id from crdt_demo.counters limit 1');
+      // Opening the docs or starting over must not open a database connection.
+      // Connectivity is checked by the first explicit sync instead.
       return json({ mode: 'postgres', token: createSession(env.CRDT_DEMO_SECRET) });
     }
     const session = readSession(request.headers.get('authorization')?.replace(/^Bearer /, ''), env.CRDT_DEMO_SECRET);
