@@ -8,7 +8,7 @@ Use lowercase SQL, schema-qualified calls under `extensions`, and named argument
 
 ## Reference
 
-Give each exported function a signature, implementation behavior, **Guarantees:**, **Does not guarantee:** and a short example. Check claims against `pg_idkit--0.0.4.sql`. Distinguish reserved bit widths from entropy and intended timestamp precision from observed implementation behavior.
+Give each exported function a signature, implementation behavior, **Guarantees:**, **Does not guarantee:** and a short example. Check claims against `pg_idkit--0.0.5.sql`. Distinguish reserved bit widths from entropy and intended timestamp precision from observed implementation behavior.
 
 ## Scope
 

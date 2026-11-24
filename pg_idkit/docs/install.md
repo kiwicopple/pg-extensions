@@ -2,7 +2,7 @@
 
 Install the extension files on a server you control, or load the SQL directly into a development database. Both methods below use a schema named `extensions`. Choose one method per database.
 
-The implementation uses built-in SQL and PL/pgSQL functions and has no additional extension dependency. This repository does not yet provide a Postgres version test matrix for `pg_idkit`.
+ULID generation requires Postgres 13 or later for the built-in `gen_random_uuid()`. The implementation uses SQL and PL/pgSQL and has no additional extension dependency. See the [test suite](https://github.com/kiwicopple/pg-extensions/tree/main/pg_idkit/test) for validation commands.
 
 ## Install as an extension
 
@@ -17,7 +17,7 @@ As a database role with permission to create schemas and extensions:
 
 ```sql
 create schema if not exists extensions;
-create extension pg_idkit with schema extensions version '0.0.4';
+create extension pg_idkit with schema extensions version '0.0.5';
 ```
 
 The control file sets `superuser = false` and does not fix a schema. Installation still requires the appropriate database and schema privileges. Examples elsewhere assume you chose `extensions`; substitute your schema if needed.
@@ -30,14 +30,14 @@ For a local experiment without server filesystem access, run this from `pg_idkit
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
   -c 'create schema if not exists extensions' \
   -c 'set search_path = extensions, pg_catalog' \
-  -f pg_idkit--0.0.4.sql
+  -f pg_idkit--0.0.5.sql
 ```
 
 This creates functions, without a `pg_extension` entry. `alter extension` and `drop extension` do not manage these functions. Use an empty development database to avoid replacing existing functions with the same names.
 
 ## Managed databases
 
-The original README points to the [database.dev package](https://database.dev/kiwicopple/pg_idkit). Package availability and installation tooling are separate from the checked-in SQL. Check the version offered by your provider; these docs describe 0.0.4. If the provider has already made the extension available, use the `create extension` step above.
+The original README points to the [database.dev package](https://database.dev/kiwicopple/pg_idkit). Package availability and installation tooling are separate from the checked-in SQL. Check the version offered by your provider; these docs describe 0.0.5. If the provider has already made the extension available, use the `create extension` step above.
 
 ## Verify
 
@@ -53,7 +53,7 @@ select e.extversion, n.nspname
 from pg_extension as e
 join pg_namespace as n on n.oid = e.extnamespace
 where e.extname = 'pg_idkit';
--- 0.0.4 | extensions
+-- 0.0.5 | extensions
 ```
 
 ## Upgrade and removal
@@ -61,9 +61,9 @@ where e.extname = 'pg_idkit';
 After installing the version and upgrade SQL files on the server, the extension owner can upgrade an existing extension:
 
 ```sql
-alter extension pg_idkit update to '0.0.4';
+alter extension pg_idkit update to '0.0.5';
 ```
 
-The repository contains upgrade steps from 0.0.1 through 0.0.4. Confirm the version with the query above.
+The repository contains upgrade steps from 0.0.1 through 0.0.5. Confirm the version with the query above.
 
 To remove an extension installation, first remove dependent column defaults deliberately, then run `drop extension pg_idkit;`. Avoid `cascade`: it can remove those defaults for you. Existing ID values are ordinary `uuid` or `text` data and do not require the extension to read them.

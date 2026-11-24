@@ -1,6 +1,6 @@
 # pg_idkit
 
-UUID and KSUID generators and timestamp utilities for Postgres, written in SQL and PL/pgSQL. No pgcrypto or compiled extension is required. This is a PL/pgSQL port inspired by the [Rust pg_idkit project](https://github.com/VADOSWARE/pg_idkit).
+UUID, KSUID, and ULID generators and timestamp utilities for Postgres, written in SQL and PL/pgSQL. No pgcrypto or compiled extension is required. This is a PL/pgSQL port inspired by the [Rust pg_idkit project](https://github.com/VADOSWARE/pg_idkit).
 
 ## Get started
 
@@ -11,7 +11,11 @@ Read the [overview](docs/overview.md), [install](docs/install.md), then follow t
 select extensions.gen_random_uuid_v7();
 ```
 
-Version 0.0.4 exposes four generators and one timestamp extractor. IDs use Postgres `random()` and are not secrets. Keep a primary key or unique constraint, and use an explicit creation timestamp when exact time matters. See [errors and limits](docs/errors-and-limits.md).
+Version 0.0.5 exposes five generators and one timestamp extractor. UUID and KSUID generators use Postgres `random()`; ULIDs use strong randomness from the built-in UUIDv4 generator. IDs are not secrets. Keep a primary key or unique constraint, and use an explicit creation timestamp when exact time matters. See [errors and limits](docs/errors-and-limits.md).
+
+## Tests
+
+Run `npm test` from this directory with Docker running. The independent [test suite](test/README.md) runs pgTAP checks on Postgres 16, 17, and 18, covering direct SQL, native extensions, TLE, and upgrades.
 
 ## Documentation site
 
@@ -27,4 +31,4 @@ See [site maintenance](site/README.md) for navigation, exports and build checks.
 
 ## Credits
 
-Most of the generator implementation comes from Fabio Lima's work, credited in the [SQL source](pg_idkit--0.0.4.sql). The original package listing is [kiwicopple/pg_idkit on database.dev](https://database.dev/kiwicopple/pg_idkit).
+Most of the generator implementation comes from Fabio Lima's work, credited in the [SQL source](pg_idkit--0.0.5.sql). The original package listing is [kiwicopple/pg_idkit on database.dev](https://database.dev/kiwicopple/pg_idkit).

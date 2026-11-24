@@ -43,9 +43,12 @@ checkNavigation(sidebar);
 assert.ok(fs.existsSync(path.join(dist, 'llms.txt')), 'Missing agent index');
 
 // 3. Every SQL function has a reference entry describing its limits.
-const sql = fs.readFileSync(path.join(root, 'pg_idkit--0.0.4.sql'), 'utf8');
+const control = fs.readFileSync(path.join(root, 'pg_idkit.control'), 'utf8');
+const version = control.match(/^default_version\s*=\s*'([^']+)'/m)?.[1];
+assert.ok(version, 'Missing default_version in pg_idkit.control');
+const sql = fs.readFileSync(path.join(root, `pg_idkit--${version}.sql`), 'utf8');
 const names = [...sql.matchAll(/create or replace function ([a-z0-9_]+)/g)].map((m) => m[1]);
-const reference = ['uuid', 'ksuid', 'timestamps']
+const reference = ['uuid', 'ksuid', 'ulid', 'timestamps']
   .map((name) => fs.readFileSync(path.join(root, 'docs/reference', name + '.md'), 'utf8')).join('\n');
 for (const name of names) {
   const section = reference.split('### `' + name + '`')[1]?.split('### ')[0];
