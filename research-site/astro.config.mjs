@@ -1,5 +1,6 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
+import expressiveCode from '../docs-theme/expressive-code.mjs';
 import starlight from '@astrojs/starlight';
 import starlightLinksValidator from 'starlight-links-validator';
 import { satteri } from '@astrojs/markdown-satteri';
@@ -14,6 +15,7 @@ export default defineConfig({
 	markdown: { processor: satteri({ mdastPlugins: [baseLinks({ base: BASE })] }) },
 	integrations: [
 		starlight({
+			expressiveCode,
 			title: 'pg-extensions research',
 			description:
 				'Design records, benchmark reports, reviews and build journals for the Postgres extensions in kiwicopple/pg-extensions.',

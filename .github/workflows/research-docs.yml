@@ -8,6 +8,7 @@ on:
     paths:
       - '*/research/**'
       - 'research-site/**'
+      - 'docs-theme/**'
       - '.github/workflows/research-docs.yml'
       # inputs of the pg_permissions chart pages and user-site links (pg_crdt: user-site links only)
       - 'pg_permissions/bench/baselines/data/**'

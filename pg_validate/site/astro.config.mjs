@@ -1,5 +1,6 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
+import expressiveCode from '../../docs-theme/expressive-code.mjs';
 import { sidebar } from './navigation.mjs';
 import starlight from '@astrojs/starlight';
 import starlightLinksValidator from 'starlight-links-validator';
@@ -14,6 +15,7 @@ export default defineConfig({
 	base: process.env.DOCS_BASE,
 	integrations: [
 		starlight({
+			expressiveCode,
 			title: 'pg_validate',
 			description:
 				'pg_validate: boolean validators for common string formats in Postgres, for CHECK constraints, with a registry of named formats.',

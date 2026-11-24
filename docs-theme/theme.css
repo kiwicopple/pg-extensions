@@ -1,0 +1,135 @@
+/* Shared by every documentation site. Keep brand decisions here. */
+@font-face {
+	font-family: 'Inter';
+	src: url('./fonts/InterVariable.woff2') format('woff2');
+	font-style: normal;
+	font-weight: 100 900;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: 'Source Code Pro';
+	src: url('./fonts/SourceCodeProVariable.woff2') format('woff2');
+	font-style: normal;
+	font-weight: 200 900;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: 'Manrope';
+	src: url('./fonts/ManropeVariable.ttf') format('truetype');
+	font-style: normal;
+	font-weight: 200 800;
+	font-display: swap;
+}
+
+:root {
+	--docs-font-heading: 'Manrope', 'Inter', ui-sans-serif, system-ui, sans-serif;
+	--sl-font: 'Inter', ui-sans-serif, system-ui, sans-serif;
+	--sl-font-mono: 'Source Code Pro', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+	--sl-content-width: 50rem;
+	/* Resolved Supabase Docs tokens, verified 2026-11-24. See README. */
+	--docs-bg: oklch(0.19 0.0025 157.5);
+	--docs-surface: oklch(0.215 0.0025 157.5);
+	--docs-foreground: oklch(0.95 0.00275 157.5);
+	--docs-muted: oklch(0.798 0.00275 157.5);
+	--docs-subtle: oklch(0.684 0.00275 157.5);
+	--docs-border: oklch(0.95 0.001485 157.5 / 0.075125);
+	--docs-primary: oklch(0.76 0.15 157.5);
+	--docs-primary-solid: oklch(0.43627 0.11 157.5);
+	--docs-primary-solid-text: oklch(0.95 0.00275 157.5);
+	--docs-selection: oklch(0.95 0.00275 157.5 / 0.0493421);
+	--docs-brand: #3ecf8e;
+	--docs-code-bg: var(--docs-surface);
+	--docs-code-header-bg: var(--docs-surface);
+	--sl-color-accent-low: var(--docs-selection);
+	--sl-color-accent: var(--docs-primary);
+	--sl-color-accent-high: var(--docs-primary);
+	--sl-color-text-accent: var(--docs-primary);
+	--sl-color-bg-accent: var(--docs-primary-solid);
+	--sl-color-text-invert: var(--docs-primary-solid-text);
+	--sl-color-white: var(--docs-foreground);
+	--sl-color-gray-1: var(--docs-foreground);
+	--sl-color-gray-2: var(--docs-muted);
+	--sl-color-gray-3: var(--docs-subtle);
+	--sl-color-gray-4: #505050;
+	--sl-color-gray-5: #343434;
+	--sl-color-gray-6: var(--docs-surface);
+	--sl-color-black: var(--docs-bg);
+	--sl-color-bg: var(--docs-bg);
+	--sl-color-text: var(--docs-muted);
+	--sl-color-bg-nav: var(--docs-bg);
+	--sl-color-bg-sidebar: var(--docs-bg);
+	--sl-color-bg-inline-code: var(--docs-selection);
+	--sl-color-hairline-light: var(--docs-border);
+	--sl-color-hairline: var(--docs-border);
+	--sl-text-h1: 2.125rem;
+	--sl-text-h2: 1.375rem;
+	--sl-text-h3: 1.125rem;
+}
+
+:root[data-theme='light'] {
+	--docs-bg: oklch(0.995 0 337.5);
+	--docs-surface: oklch(1 0 337.5);
+	--docs-foreground: oklch(0.1 0 337.5);
+	--docs-muted: oklch(0.394455 0 337.5);
+	--docs-subtle: oklch(0.52065 0 337.5);
+	--docs-border: oklch(0.1 0 337.5 / 0.0812725);
+	--docs-primary: oklch(0.525 0.12 157.5);
+	--docs-primary-solid: var(--docs-primary);
+	--docs-primary-solid-text: oklch(0.99 0.00275 157.5);
+	--docs-selection: oklch(0.1 0 337.5 / 0.0402235);
+	--sl-color-gray-4: #8f8f8f;
+	--sl-color-gray-5: #e2e2e2;
+	--sl-color-gray-7: var(--docs-bg);
+}
+
+body { font-weight: 450; }
+:root[data-theme='light'] body { font-weight: 500; }
+.sl-markdown-content { font-size: 0.9375rem; line-height: 1.8666667; }
+/* Supabase uses neutral prose links and green active navigation. */
+.sl-markdown-content a:not(.sl-link-button) { color: var(--docs-muted); }
+.sl-markdown-content a:not(.sl-link-button):hover { color: var(--docs-foreground); }
+.sidebar-content a[aria-current='page'] {
+	color: var(--docs-primary);
+	background: var(--docs-selection);
+	font-weight: 500;
+}
+.sl-link-button.primary {
+	background: var(--docs-primary-solid);
+	color: var(--docs-primary-solid-text);
+	border-color: var(--docs-border);
+	border-radius: 0.375rem;
+}
+.sl-markdown-content :not(pre) > code {
+	border: 1px solid var(--docs-border);
+	border-radius: 0.25rem;
+	color: var(--docs-foreground);
+}
+
+h1, h2, h3, h4, h5, h6 {
+	font-family: var(--docs-font-heading);
+}
+
+h1, h2, h3, h4, h5, h6, .site-title {
+	font-weight: 600;
+	letter-spacing: -0.025em;
+}
+
+.site-title {
+	color: var(--sl-color-white);
+}
+
+.sl-markdown-content a {
+	text-underline-offset: 0.2em;
+}
+
+.sl-markdown-content table {
+	font-size: var(--sl-text-sm);
+	display: block;
+	overflow-x: auto;
+}
+
+.sl-markdown-content table code {
+	word-break: break-word;
+}

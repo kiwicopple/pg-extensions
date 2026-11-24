@@ -89,3 +89,7 @@ Pages read every run file with `import.meta.glob` (`lib/bench.ts`). Shape of a r
 
 Build-time SVG from Astro components in `components/viz` (no client-side chart library). The only client JS is a small script for the tooltip and the scale/shape tabs; without it every value is still in the SVG labels, the `Table view` under each chart and, for tabs, all panels are shown. Colors follow the dataviz skill: one fixed color per engine (A blue, B orange, C aqua, categorical slots 1 to 3, validated for color-blind separation in light and dark), thin marks, a legend plus direct labels, light/dark via Starlight's theme attribute (`styles/viz.css`).
 
+
+## Shared theme
+
+Colors, typography, and base styles are maintained in [docs-theme](../docs-theme/README.md). Edit that shared stylesheet to update all documentation sites.

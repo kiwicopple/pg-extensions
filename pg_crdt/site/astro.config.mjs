@@ -1,5 +1,6 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
+import expressiveCode from '../../docs-theme/expressive-code.mjs';
 import { sidebar } from './navigation.mjs';
 import starlight from '@astrojs/starlight';
 import starlightLinksValidator from 'starlight-links-validator';
@@ -18,6 +19,7 @@ export default defineConfig({
 	base: process.env.DOCS_BASE,
 	integrations: [
 		starlight({
+			expressiveCode,
 			title: 'pg_crdt',
 			description:
 				'pg_crdt: counters and experimental collaborative text in Postgres columns, written in SQL and PL/pgSQL.',

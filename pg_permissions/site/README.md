@@ -88,3 +88,7 @@ When moving a section, check its prerequisite data and the order of model or pol
 ## Link checking
 
 `starlight-links-validator` checks absolute links and anchors. Synced pages use relative links, which that plugin skips, so `npm run build` finishes with `scripts/check-links.mjs`, which resolves every internal href and `#anchor` in `dist/` and fails the build on a broken one.
+
+## Shared theme
+
+Colors, typography, and base styles are maintained in [docs-theme](../../docs-theme/README.md). Edit that shared stylesheet to update all documentation sites.

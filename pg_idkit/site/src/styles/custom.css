@@ -1,12 +1,2 @@
-/* Light touch on the Starlight theme. */
-:root {
-	--sl-content-width: 50rem;
-}
-.sl-markdown-content table {
-	font-size: var(--sl-text-sm);
-	display: block;
-	overflow-x: auto; /* wide tables (scorecard, comparison) scroll instead of squeezing */
-}
-.sl-markdown-content table code {
-	word-break: break-word;
-}
+/* Shared branding; keep only site-specific overrides below. */
+@import '../../../../docs-theme/theme.css';
