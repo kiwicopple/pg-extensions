@@ -32,7 +32,7 @@ Do not cast the wall-clock result directly to `timestamptz` unless the session t
 
 ## Precision and trust
 
-Version 0.0.4 divides the encoded millisecond field by 1000 with integer division, discarding milliseconds. It does not decode the generator's extra sub-millisecond bits. The generators also round some timestamp components, so the extracted value is not an exact record of when a row was created.
+Version 0.0.5 divides the encoded millisecond field by 1000 with integer division, discarding milliseconds. It does not decode the generator's extra sub-millisecond bits. The UUID generators also round some timestamp components, so the extracted value is not an exact record of when a row was created.
 
 The function does not check the UUID version or variant. A UUIDv4 can produce a plausible-looking but meaningless date. IDs supplied by a client can encode arbitrary times. Store a separate timestamp for audit records, retention rules or user-facing creation dates.
 

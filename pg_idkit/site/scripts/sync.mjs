@@ -320,8 +320,8 @@ function syncPlainMarkdown() {
 	const site = (process.env.DOCS_SITE ?? 'https://id.postgres.tools').replace(/\/$/, '');
 	const index = [
 		'# pg_idkit', '',
-		'> UUID and KSUID generators and timestamp utilities for Postgres.', '',
-		'Documents version 0.0.4, including randomness, ordering and timestamp precision limits.', '',
+		'> UUID, KSUID, and ULID generators and timestamp utilities for Postgres.', '',
+		'Documents version 0.0.5, including randomness, ordering and timestamp precision limits.', '',
 		'## Guides and reference', '',
 	];
 	const groups = { current: [], plans: [], contributing: [] };

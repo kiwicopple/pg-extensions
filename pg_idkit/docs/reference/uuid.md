@@ -29,7 +29,7 @@ Builds a UUID with Unix milliseconds in its leading field. The implementation pl
 
 **Guarantees:** returns a UUID with version 7 and the variant bits set by the implementation. It can be used directly as a `uuid` column default.
 
-**Does not guarantee:** unique values, cryptographic unpredictability, strict time ordering or an exact creation timestamp. The additional time bits are implementation-specific; do not assume another library will interpret them the same way. Epoch seconds, milliseconds and microseconds are rounded during assignment in 0.0.4.
+**Does not guarantee:** unique values, cryptographic unpredictability, strict time ordering or an exact creation timestamp. The additional time bits are implementation-specific; do not assume another library will interpret them the same way. Epoch seconds, milliseconds and microseconds are rounded during assignment in 0.0.5.
 
 ```sql
 select extensions.gen_random_uuid_v7();

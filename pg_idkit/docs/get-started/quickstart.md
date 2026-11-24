@@ -1,6 +1,6 @@
 # Quickstart
 
-Create a table that assigns a UUIDv7 to each new row. First [install](../install.md) version 0.0.4 into `extensions`. Run these statements as a role that can create a table and call the extension functions.
+Create a table that assigns a UUIDv7 to each new row. First [install](../install.md) version 0.0.5 into `extensions`. Run these statements as a role that can create a table and call the extension functions.
 
 ## Create a table
 
@@ -37,6 +37,6 @@ from notes;
 -- A timestamp without time zone, expressed in UTC.
 ```
 
-The extracted time has whole-second precision in 0.0.4 and can differ from `created_at`. See [read timestamps](../guides/timestamps.md).
+The extracted time has whole-second precision in 0.0.5 and can differ from `created_at`. See [read timestamps](../guides/timestamps.md).
 
 Next, [choose an ID](choose-an-id.md) or learn about [primary keys and pagination](../guides/primary-keys.md).

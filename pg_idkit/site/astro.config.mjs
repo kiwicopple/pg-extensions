@@ -18,7 +18,7 @@ export default defineConfig({
 			expressiveCode,
 			title: 'pg_idkit',
 			description:
-				'pg_idkit: UUID and KSUID generators and timestamp utilities for Postgres.',
+				'pg_idkit: UUID, KSUID, and ULID generators and timestamp utilities for Postgres.',
 			logo: { src: './src/assets/logo.svg', alt: '' },
 			favicon: '/favicon.svg',
 			social: [{ icon: 'github', label: 'GitHub', href: `${repo}/tree/${ref}/pg_idkit` }],

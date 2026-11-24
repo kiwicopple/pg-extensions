@@ -7,6 +7,9 @@
     "docs:dev": "npm --prefix site run dev",
     "docs:build": "npm --prefix site run build",
     "docs:preview": "npm --prefix site run preview",
-    "check": "npm run docs:build"
+    "check": "npm run docs:build",
+    "test": "bash test/docker.sh",
+    "test:local": "bash test/run.sh",
+    "test:harness": "bash test/docker.sh 18 -- --self-test"
   }
 }

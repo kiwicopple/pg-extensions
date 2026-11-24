@@ -41,6 +41,11 @@ export const pages = [
     "label": "KSUID generators"
   },
   {
+    "src": "docs/reference/ulid.md",
+    "route": "reference/ulid",
+    "label": "ULID generator"
+  },
+  {
     "src": "docs/reference/timestamps.md",
     "route": "reference/timestamps",
     "label": "Timestamp extraction"
@@ -65,6 +70,6 @@ const item = (route) => ({ label: pages.find((p) => p.route === route).label, sl
 export const sidebar = [
   { label: "Start here", items: [item("overview"), item("install"), item("get-started/quickstart"), item("get-started/choose-an-id"), item("guide")] },
   { label: "Guides", items: [item("guides/primary-keys"), item("guides/timestamps")] },
-  { label: "Reference", items: [item("reference/uuid"), item("reference/ksuid"), item("reference/timestamps"), item("errors-and-limits")] },
+  { label: "Reference", items: [item("reference/uuid"), item("reference/ksuid"), item("reference/ulid"), item("reference/timestamps"), item("errors-and-limits")] },
   { label: "Contributing", items: [item("contributing/style-guide")] }
 ];
