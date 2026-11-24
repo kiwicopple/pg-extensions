@@ -52,3 +52,7 @@ Sync rewrites relative links between pages to site routes; links to code and oth
 - every public function in `../pg_crdt--0.0.1.sql` has one reference entry (a `### \`name\`` heading in `docs/reference/shared.md`, `pn.md` or `yseq.md`), and every SQLSTATE the file raises is in `docs/reference/errors.md`.
 
 The SQL examples are not run by the build. Run the quickstart and the guides against a throwaway cluster after you change them: `pg_crdt/test/lib/cluster.sh` starts one.
+
+## Shared theme
+
+Colors, typography, and base styles are maintained in [docs-theme](../../docs-theme/README.md). Edit that shared stylesheet to update all documentation sites.

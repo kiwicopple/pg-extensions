@@ -14,3 +14,7 @@ npm run docs:preview
 The sync step generates site pages, plain Markdown exports and `public/llms.txt`. Generated output is ignored by Git. The build checks internal links and fragments, sidebar routes, unchanged SQL code in exports, and reference coverage for all five functions in 0.0.4. It does not execute SQL examples.
 
 `DOCS_REPO_URL` and `DOCS_REPO_REF` customize source links; defaults are `kiwicopple/pg-extensions` and `main`. The production origin defaults to `https://id.postgres.tools` for canonical URLs, sitemaps and the Markdown index. `DOCS_SITE` overrides that origin and `DOCS_BASE` supports a subpath. For Vercel, choose `pg_idkit` as the root directory; `../vercel.json` supplies the build settings. Building locally does not publish the site.
+
+## Shared theme
+
+Colors, typography, and base styles are maintained in [docs-theme](../../docs-theme/README.md). Edit that shared stylesheet to update all documentation sites.
