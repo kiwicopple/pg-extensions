@@ -111,13 +111,16 @@ bench.pg_crdt:
 PG_CRDT_SITE := $(REPO_DIR)/pg_crdt/site
 
 .PHONY: docs.pg_crdt docs.pg_crdt.dev
-$(PG_CRDT_SITE)/node_modules: $(PG_CRDT_SITE)/package-lock.json
-	npm --prefix pg_crdt run docs:install
+$(REPO_DIR)/pg_crdt/node_modules: $(REPO_DIR)/pg_crdt/package-lock.json
+	npm --prefix pg_crdt ci
 
-docs.pg_crdt: $(PG_CRDT_SITE)/node_modules
+$(PG_CRDT_SITE)/node_modules: $(PG_CRDT_SITE)/package-lock.json
+	npm --prefix pg_crdt/site ci
+
+docs.pg_crdt: $(REPO_DIR)/pg_crdt/node_modules $(PG_CRDT_SITE)/node_modules
 	npm --prefix pg_crdt run docs:build
 
-docs.pg_crdt.dev: $(PG_CRDT_SITE)/node_modules
+docs.pg_crdt.dev: $(REPO_DIR)/pg_crdt/node_modules $(PG_CRDT_SITE)/node_modules
 	npm --prefix pg_crdt run docs:dev
 
 # Research docs site for every <extension>/research/ directory (GitHub Pages). See research-site/README.md.

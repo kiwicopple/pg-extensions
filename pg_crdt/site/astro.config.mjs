@@ -4,6 +4,7 @@ import expressiveCode from '../../docs-theme/expressive-code.mjs';
 import { sidebar } from './navigation.mjs';
 import starlight from '@astrojs/starlight';
 import starlightLinksValidator from 'starlight-links-validator';
+import { demoApi } from './scripts/demo-api.mjs';
 
 const repo = process.env.DOCS_REPO_URL ?? 'https://github.com/kiwicopple/pg-extensions';
 const ref = process.env.DOCS_REPO_REF ?? 'main';
@@ -17,6 +18,7 @@ const DEFAULT_SITE = 'https://crdt.postgres.tools';
 export default defineConfig({
 	site: process.env.DOCS_SITE ?? DEFAULT_SITE,
 	base: process.env.DOCS_BASE,
+	vite: { plugins: [demoApi()] },
 	integrations: [
 		starlight({
 			expressiveCode,
