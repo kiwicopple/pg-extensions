@@ -6,7 +6,7 @@ hero:
   tagline: Combine independent counter updates and text edits in your own Postgres tables.
   actions:
     - text: Try a counter
-      link: ./get-started/quickstart/
+      link: './#counter-demo'
       icon: right-arrow
     - text: Try shared text
       link: ./get-started/text/
@@ -14,8 +14,11 @@ hero:
 ---
 
 import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+import CounterDemo from '../../components/CounterDemo.astro';
 
 `pg_crdt` provides counters and experimental plain-text columns that merge independent changes. It runs on Postgres 16, 17 and 18, uses SQL and PL/pgSQL, and works with any database driver. Start by [installing the extension](./install/).
+
+<CounterDemo />
 
 <CardGrid>
   <LinkCard title="Counters" description="Create a counter, sync device totals, and accept client updates safely." href="./get-started/quickstart/" />

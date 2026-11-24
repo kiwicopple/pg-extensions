@@ -6,7 +6,7 @@ Research records (`../research`: the architecture, prior art, benchmarks, the bu
 
 ```bash
 # from pg_crdt/ (the scripts are in package.json there):
-npm run docs:install            # npm ci in site/
+npm run docs:install            # install the API and site dependencies
 npm run docs:dev                # local development server (syncs first)
 npm run docs:build              # sync, build into site/dist, and validate
 npm run docs:preview            # serve the built site
@@ -41,6 +41,10 @@ Every generated page has a marker and an edit link to its canonical source. The 
 Vercel builds the site from source with the Root Directory `pg_crdt` and the settings in `../vercel.json`. The built site and the generated pages are never committed.
 
 Sync rewrites relative links between pages to site routes; links to code and other files point to GitHub. Set `DOCS_REPO_URL` and `DOCS_REPO_REF` for source and edit links (defaults: `kiwicopple/pg-extensions`, `main`), `DOCS_SITE` for the deployment origin, `DOCS_BASE` when hosting below a path, and `DOCS_RESEARCH_URL` for the origin of the research site.
+
+## Homepage counter demo
+
+The hand-written homepage includes a two-device counter demo. It runs a clearly labeled browser preview until Postgres is configured, then syncs through the Vercel function at `/api/counter`. See [demo setup](../demo/README.md) for database provisioning, installation, server-only environment variables, and validation. Run `npm run docs:install` from `pg_crdt/` to install both the site and API dependencies; local `docs:dev` includes the API middleware.
 
 ## Validation
 
