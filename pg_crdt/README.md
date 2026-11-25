@@ -6,6 +6,16 @@ The active extension provides `crdt.pn` counters and experimental `crdt.yseq` te
 
 ## Start here
 
+Copy the [SQL file into your SQL editor](docs/install.md#paste-into-a-sql-editor), or install from your terminal with `curl` and `psql`. Replace the connection string:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kiwicopple/pg-extensions/main/install.sh -o install-pg-extension.sh &&
+sh install-pg-extension.sh pg_crdt \
+  --database 'postgresql://postgres@localhost:5432/postgres'
+```
+
+[Installation options](docs/install.md) cover specific versions, owner roles, saved SQL for migrations, and extension management. The terminal installer downloads and installs the latest default version directly in your database.
+
 1. [Install the extension](docs/install.md).
 2. Try [your first counter](docs/get-started/quickstart.md) or [your first shared document](docs/get-started/text.md).
 3. Follow the [documentation map](docs/README.md) for application integration, operations and reference.

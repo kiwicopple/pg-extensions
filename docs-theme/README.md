@@ -9,6 +9,10 @@ To update all docs, edit `theme.css` and rebuild all sites. No generated
 Markdown or individual pages need changes. New Starlight sites should import
 this file from their `customCss` stylesheet too.
 
+All five sites set `pagination: false` in their Starlight configuration to remove
+the previous/next navigation boxes at the bottom of pages. Use the same setting
+for new sites; no page-level frontmatter or CSS override is needed.
+
 The palette uses resolved semantic tokens measured from the live
 [Supabase Docs](https://supabase.com/docs/guides/database/tables) on 2026-11-24,
 including its OKLCH surfaces, foregrounds, translucent borders, primary accents,

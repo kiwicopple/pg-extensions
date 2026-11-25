@@ -16,6 +16,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			expressiveCode,
+			pagination: false,
 			title: 'pg_validate',
 			description:
 				'pg_validate: boolean validators for common string formats in Postgres, for CHECK constraints, with a registry of named formats.',

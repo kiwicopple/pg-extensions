@@ -4,7 +4,17 @@ UUID, KSUID, and ULID generators and timestamp utilities for Postgres, written i
 
 ## Get started
 
-Read the [overview](docs/overview.md), [install](docs/install.md), then follow the [quickstart](docs/get-started/quickstart.md). The [documentation map](docs/README.md) lists every guide and reference page.
+Copy the [SQL file into your SQL editor](docs/install.md#paste-into-a-sql-editor), or install from your terminal with `curl` and `psql`. Replace the connection string:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kiwicopple/pg-extensions/main/install.sh -o install-pg-extension.sh &&
+sh install-pg-extension.sh pg_idkit \
+  --database 'postgresql://postgres@localhost:5432/postgres'
+```
+
+[Installation options](docs/install.md) cover specific versions, owner roles, saved SQL for migrations, and extension management. The terminal installer downloads and installs the latest default version directly in your database.
+
+Then follow the [quickstart](docs/get-started/quickstart.md).
 
 ```sql
 -- After installing into the extensions schema:

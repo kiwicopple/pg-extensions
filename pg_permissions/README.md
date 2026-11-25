@@ -23,12 +23,15 @@ The extension is pure SQL. It needs no other extension and no C code. It runs on
 
 ## Quick start
 
-Run the SQL file once in a fresh database, from this directory:
+Copy the [SQL file into your SQL editor](docs/install.md#paste-into-a-sql-editor), or install from your terminal with `curl` and `psql`. Replace the connection string:
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 \
-  -f pg_permissions--0.1.0.sql
+curl -fsSL https://raw.githubusercontent.com/kiwicopple/pg-extensions/main/install.sh -o install-pg-extension.sh &&
+sh install-pg-extension.sh pg_permissions \
+  --database 'postgresql://postgres@localhost:5432/postgres'
 ```
+
+[Installation options](docs/install.md) cover specific versions, owner roles, saved SQL for migrations, and extension management. The terminal installer downloads and installs the latest default version directly in your database.
 
 Then follow [Check permissions](docs/get-started/quickstart.md). It assigns Alice a role in one organization and checks that Alice is allowed while Bob is denied. It needs no application table or RLS policy. An optional section adds enforcement on table queries.
 
