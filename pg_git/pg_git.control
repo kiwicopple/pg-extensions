@@ -1,0 +1,6 @@
+# pg_git extension
+comment = 'Git-like version control for PostgreSQL tables'
+default_version = '0.0.1'
+superuser = false
+schema = pg_git
+relocatable = false
