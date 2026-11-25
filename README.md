@@ -1,6 +1,18 @@
 # Postgres Extensions
 
-A few Trusted Language Extensions for database.dev.
+SQL and PL/pgSQL packages you can run directly in your Postgres database.
+
+## Install
+
+Start with [copy-and-paste installation](INSTALL.md): paste a SQL file into your database's SQL editor, or download and run the terminal installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kiwicopple/pg-extensions/main/install.sh -o install-pg-extension.sh &&
+sh install-pg-extension.sh pg_crdt \
+  --database 'postgresql://postgres@localhost:5432/postgres'
+```
+
+Replace the connection string and choose `pg_crdt`, `pg_idkit`, `pg_permissions` or `pg_validate`. The installer supports the latest default version, `--version` for a specific version, `--role` for an owner role, and `--output` to save SQL for an editor or migration. No server filesystem access is needed.
 
 ## Developers
 

@@ -30,18 +30,15 @@ The extension is pure SQL and PL/pgSQL. It needs no other extension, no C code a
 
 ## Quick start
 
-With the files on the server:
-
-```sql
-create extension pg_validate;
-```
-
-Or run the SQL file once in a database:
+Copy the [SQL file into your SQL editor](docs/install.md#paste-into-a-sql-editor), or install from your terminal with `curl` and `psql`. Replace the connection string:
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
-  -f pg_validate--0.0.1.sql
+curl -fsSL https://raw.githubusercontent.com/kiwicopple/pg-extensions/main/install.sh -o install-pg-extension.sh &&
+sh install-pg-extension.sh pg_validate \
+  --database 'postgresql://postgres@localhost:5432/postgres'
 ```
+
+[Installation options](docs/install.md) cover specific versions, owner roles, saved SQL for migrations, and extension management. The terminal installer downloads and installs the latest default version directly in your database.
 
 Then follow [Validate a table](docs/get-started/quickstart.md). [Install](docs/install.md) covers pg_tle, non-superuser installs and Docker. The extension always lives in the schema `validate`; call its functions as `validate.name(...)`.
 

@@ -1,66 +1,132 @@
 # Install
 
-Install the extension once in each Postgres database that will store permissions. It creates the `permissions` schema for RBAC, OpenFGA and Cedar. Then [connect your application](integrations/javascript.md) to assign permissions and check access.
+Run one SQL file in your database to start using `pg_permissions`. You can paste it into a SQL editor or use the terminal installer below. No server files, compiler, Docker or pg_tle setup is needed.
+
+You need Postgres 16, 17 or 18 and a database role allowed to create a schema and its objects. The installing role owns the objects. Use one installation method per database, and start with a fresh installation.
+
+Already storing permissions? Follow [Upgrade an existing installation](#upgrade-an-existing-installation) instead of running a fresh-install file.
 
 <span id="install-with-databasedev"></span>
 
-## Choose a method
+## Paste into a SQL editor
 
-| Method | Use it when |
-| --- | --- |
-| [Direct install](#install-directly) | You have psql or a SQL editor and the extension file. |
-| [pg_tle](#pg_tle) | You want to register the SQL file as an extension through pg_tle. |
-| [Docker](#docker) | You want a local database for trying the extension. |
+1. Open the [SQL file for 0.1.0](https://raw.githubusercontent.com/kiwicopple/pg-extensions/main/pg_permissions/pg_permissions--0.1.0.sql) and copy its entire contents.
+2. Open your database's SQL editor, connected as the installing role.
+3. Paste the file between `begin;` and `commit;` as shown below, then run the whole script together. Replace the comment with the file contents.
 
-Use one installation method per database. Each creates the `permissions` schema with its tables and functions.
+```sql
+begin;
+-- Paste the complete pg_permissions--0.1.0.sql file here.
 
-## Requirements
+commit;
+```
 
-- Postgres 16, 17 or 18.
-- A direct install requires only Postgres. Registering the package with pg_tle also requires the pg_tle extension.
-- No C code and no superuser rights. The extension is pure SQL.
+This creates the `permissions` schema and its objects in one transaction. An error rolls the installation back. If your editor leaves the transaction open after an error, run `rollback;` before trying again.
 
-The extension is one file, [`pg_permissions--0.1.0.sql`](../pg_permissions--0.1.0.sql), and a control file, [`pg_permissions.control`](../pg_permissions.control). The control file is for the pg_tle path and for tools that read it. A plain install uses only the SQL file.
+## Install from your terminal
+
+With `curl` and the Postgres client (`psql`) installed, copy this block and replace the connection string with your database's connection string:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kiwicopple/pg-extensions/main/install.sh -o install-pg-extension.sh &&
+sh install-pg-extension.sh pg_permissions \
+  --database 'postgresql://postgres@localhost:5432/postgres'
+```
+
+The username in the connection string is your login role. Omit the password to let `psql` prompt for it, or use `.pgpass`. You can also pass `--database "$DATABASE_URL"` if you already keep your connection string in that variable.
+
+The installer downloads the latest default version declared in `pg_permissions.control` on `main`, then runs the full SQL in one transaction. It stops on errors and refuses an existing installation. It does not upgrade or remove objects.
+
+### Choose a version or owner role
+
+Add `--version 0.1.0` to install a specific SQL file. Add `--role app_owner` only when you want an existing role to own the objects; your login must be allowed to `SET ROLE` to it, and that role needs installation privileges:
+
+```bash
+sh install-pg-extension.sh pg_permissions \
+  --database "$DATABASE_URL" \
+  --version 0.1.0 \
+  --role app_owner
+```
+
+To save ready-to-run SQL for an editor or migration without connecting to Postgres:
+
+```bash
+sh install-pg-extension.sh pg_permissions \
+  --version 0.1.0 \
+  --output pg_permissions-install.sql
+```
+
+The saved file already includes the transaction and schema setup. Run the entire file. For reproducible downloads, also pass `--ref` with a full Git commit SHA; a version selects a filename, while a commit pins its contents. See [installer options](https://github.com/kiwicopple/pg-extensions/blob/main/INSTALL.md).
+
+## Check the install
+
+Use a [server client](integrations/javascript.md#entry-points) or psql on a connection with no subject or JWT. These calls check that the extension is reachable and that an anonymous request has no permissions.
+
+```js tab="JavaScript"
+const { data: type, error } = await permissions.currentSubjectType()
+if (error) throw error
+const { data: canRead, error: checkError } = await permissions.rbac.hasPermission({
+  permission: 'documents.read',
+})
+if (checkError) throw checkError
+console.log(type, canRead) // 'user', false
+```
+
+```sql tab="SQL"
+select permissions.current_subject_type();
+-- user
+select permissions.rbac_has_permission(
+  permission => 'documents.read'
+);
+-- false
+```
+
+To list the RBAC functions, use this psql command:
+
+```text
+\df permissions.rbac_*
+```
+
+If the first query fails with `schema "permissions" does not exist`, the file did not run in this database. Check the connection string and the first installation error before trying again.
 
 ## Install directly
 
-Download the SQL file linked above, or run these commands from the `pg_permissions/` directory of the repository.
-
-### Plain psql
-
-Run the file once in each database:
+If you already have the repository, run this from `pg_permissions/`:
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 \
+psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -1 \
   -f pg_permissions--0.1.0.sql
 ```
 
-The file creates the schema `permissions` with its tables and functions. The role that you connect as owns all of them.
-
-Install in one transaction. The `-1` option keeps new functions private until the script has applied their final privileges, and rolls everything back if installation fails. In a SQL editor, wrap the file in `begin;` and `commit;`. `CREATE EXTENSION` through pg_tle already runs atomically.
-
-Run the fresh-install script only on an empty installation. For an existing database, see [Upgrade an existing installation](#upgrade-an-existing-installation).
-
-To install again, drop the schema first with `drop schema permissions cascade;`. Do this only in a database that has no data that you need. You will lose all permission data, including roles, models, tuples, Cedar policies, templates and entities, as well as dependent objects such as RLS policies.
-
-On Supabase, paste the file into the SQL editor. You can also run it with `psql` as the `postgres` role. The roles `anon`, `authenticated` and `service_role` already exist on Supabase. Plain Postgres does not have them. The install does not need them. Create the role that your requests use to run.
+The `-1` option installs in one transaction: new functions stay private until the script applies their final privileges, and errors roll everything back. The file creates the `permissions` schema with tables and functions for RBAC, OpenFGA and Cedar. A direct install creates ordinary database objects; `alter extension` does not manage them.
 
 ### Install as a non-superuser
 
-The role that installs the extension does not need superuser rights. It needs `CREATE` on the database, because the file creates the schema `permissions`. It does not need to own the database.
+The installing role needs `CREATE` on the database, but does not need to own the database or be a superuser. It owns all objects created by the file and is the admin in these docs. Use its login connection, or the terminal installer's `--role` option if your login can assume that role. The installer does not create or grant roles.
 
-The role owns everything that the file creates. This role is the admin in these docs. For example, create the role and a database for it, then install as that role:
+Application roles are separate from the owner role. Follow [Connect your application](integrations/javascript.md) for the runtime setup.
 
-```bash
-psql -U postgres \
-  -c "create role app_owner nosuperuser createdb nologin" \
-  -c "create database app owner app_owner"
-psql -U postgres -d app -v ON_ERROR_STOP=1 -1 \
-  -c "set session authorization app_owner" \
-  -f pg_permissions--0.1.0.sql
-```
+<span id="upgrade-from-001"></span>
 
-The second command is a fragment. It needs the role and the database from the first command, and your own connection options. The test suite checks this install on each supported Postgres version. A non-superuser that owns the database installs the file. Each object belongs to that role. No function is written in C.
+## Upgrade an existing installation
+
+Follow the [version-specific upgrade instructions](../CHANGELOG.md#upgrade-from-001) for a database that already contains permission data. Use the upgrade script for its installed version and review the security notes before upgrading.
+
+## Back up and restore
+
+A plain `psql` install creates ordinary objects. `pg_dump` dumps the schema `permissions` with its data, as it does for any other schema.
+
+An install through `create extension` (pg_tle) is different. No table of the extension is marked with `pg_extension_config_dump`, so `pg_dump` writes `create extension` and no table data. A restore then gives empty tables. You lose all roles, assignments, models, tuples, Cedar policies and entities. The loss is safe: with no data, each check returns false or an empty result, so nobody gets access. Your application stops working until you load the data again.
+
+To keep the data of such an install, use a physical backup. You can also export the tables of the schema `permissions` with `copy`, and load them after the restore. Test a restore before you rely on it.
+
+## Next steps
+
+[Check permissions](get-started/quickstart.md) for two users, then [use the checks in your backend](integrations/checks.md). [Choose a permission model](get-started/choose-a-model.md) for your access rules. The quickstart also includes optional RLS enforcement on a table.
+
+## Advanced: pg_tle and Docker
+
+Use pg_tle when you need a `pg_extension` entry, or Docker when you need a local test database. The commands below assume a repository checkout and run from `pg_permissions/`.
 
 ### pg_tle
 
@@ -100,52 +166,3 @@ psql -h localhost -p 54317 -U postgres -v ON_ERROR_STOP=1 -1 \
 ```
 
 For the JavaScript quickstart, set `DATABASE_URL=postgresql://postgres@localhost:54317/postgres`. These containers use `trust` authentication on the loopback interface and are intended for local tests.
-
-## Check the install
-
-Use a [server client](integrations/javascript.md#entry-points) or psql on a connection with no subject or JWT. These calls check that the extension is reachable and that an anonymous request has no permissions.
-
-```js tab="JavaScript"
-const { data: type, error } = await permissions.currentSubjectType()
-if (error) throw error
-const { data: canRead, error: checkError } = await permissions.rbac.hasPermission({
-  permission: 'documents.read',
-})
-if (checkError) throw checkError
-console.log(type, canRead) // 'user', false
-```
-
-```sql tab="SQL"
-select permissions.current_subject_type();
--- user
-select permissions.rbac_has_permission(
-  permission => 'documents.read'
-);
--- false
-```
-
-To list the RBAC functions, use this psql command:
-
-```text
-\df permissions.rbac_*
-```
-
-If the first query fails with `schema "permissions" does not exist`, the file did not run in this database. Run it again with `-v ON_ERROR_STOP=1` and read the first error.
-
-<span id="upgrade-from-001"></span>
-
-## Upgrade an existing installation
-
-Follow the [version-specific upgrade instructions](../CHANGELOG.md#upgrade-from-001) for a database that already contains permission data. Use the upgrade script for its installed version and review the security notes before upgrading.
-
-## Back up and restore
-
-A plain `psql` install creates ordinary objects. `pg_dump` dumps the schema `permissions` with its data, as it does for any other schema.
-
-An install through `create extension` (pg_tle) is different. No table of the extension is marked with `pg_extension_config_dump`, so `pg_dump` writes `create extension` and no table data. A restore then gives empty tables. You lose all roles, assignments, models, tuples, Cedar policies and entities. The loss is safe: with no data, each check returns false or an empty result, so nobody gets access. Your application stops working until you load the data again.
-
-To keep the data of such an install, use a physical backup. You can also export the tables of the schema `permissions` with `copy`, and load them after the restore. Test a restore before you rely on it.
-
-## Next steps
-
-[Check permissions](get-started/quickstart.md) for two users, then [use the checks in your backend](integrations/checks.md). [Choose a permission model](get-started/choose-a-model.md) for your access rules. The quickstart also includes optional RLS enforcement on a table.
