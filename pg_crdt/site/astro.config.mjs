@@ -22,6 +22,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			expressiveCode,
+			pagination: false,
 			title: 'pg_crdt',
 			description:
 				'pg_crdt: counters and experimental collaborative text in Postgres columns, written in SQL and PL/pgSQL.',

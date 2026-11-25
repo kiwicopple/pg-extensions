@@ -16,6 +16,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			expressiveCode,
+			pagination: false,
 			title: 'pg-extensions research',
 			description:
 				'Design records, benchmark reports, reviews and build journals for the Postgres extensions in kiwicopple/pg-extensions.',

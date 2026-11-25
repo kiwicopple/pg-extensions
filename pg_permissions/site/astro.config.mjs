@@ -16,6 +16,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			expressiveCode,
+			pagination: false,
 			title: 'pg_permissions',
 			description:
 				'pg_permissions: an authorization store and check engine for Postgres with RBAC, OpenFGA and Cedar, plus optional RLS enforcement.',

@@ -16,6 +16,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			expressiveCode,
+			pagination: false,
 			title: 'pg_idkit',
 			description:
 				'pg_idkit: UUID, KSUID, and ULID generators and timestamp utilities for Postgres.',
