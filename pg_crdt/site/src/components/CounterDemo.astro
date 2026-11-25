@@ -1,12 +1,7 @@
 <counter-demo class="counter-demo" aria-label="Interactive PN-counter demo">
   <div class="demo-heading">
-    <div>
-      <p class="eyebrow">TRY IT YOURSELF</p>
-      <h2 id="counter-demo">Two copies. One counter.</h2>
-    </div>
     <span class="mode" data-mode>Connecting…</span>
   </div>
-  <p class="intro">Make a few changes on each device while they’re disconnected. Then sync them and watch every copy agree.</p>
 
   <div class="replicas">
     {['alice', 'bob'].map((name) => (
@@ -34,20 +29,17 @@
     <div class="actions">
       <button class="primary" type="button" data-sync disabled>Sync both devices</button>
       <button type="button" data-replay disabled>Replay last sync</button>
+      <button type="button" data-reset disabled>Start over</button>
     </div>
   </div>
   <p class="message" role="status" aria-live="polite" data-message>Connecting to the demo…</p>
-  <div class="demo-footer">
-    <p data-note>Each visitor gets a separate counter. Refreshing starts over.</p>
-    <button type="button" class="reset" data-reset disabled>Start over</button>
-  </div>
+  <noscript>Enable JavaScript to try the counter, or follow the counter quickstart below.</noscript>
   <details>
     <summary>See the counter state</summary>
     <p>Each device sends its running totals of additions (<code>p</code>) and subtractions (<code>n</code>). A merge keeps the larger total for each device, so a repeated delivery changes nothing.</p>
     <pre aria-label="Last merged CRDT state"><code data-json>{JSON.stringify({ t: 'pn', v: 1, p: {}, n: {} }, null, 2)}</code></pre>
     <p>In live mode, the server merges with <code>crdt.pn_apply_delta</code> in one atomic Postgres upsert.</p>
   </details>
-  <noscript>Enable JavaScript to try the counter, or follow the counter quickstart below.</noscript>
 </counter-demo>
 
 <script>
@@ -55,15 +47,14 @@
 </script>
 
 <style>
-  .counter-demo { display: block; border: 1px solid var(--sl-color-gray-5); border-radius: .75rem; padding: 1.5rem; margin-block: 2rem; font-size: 1rem; line-height: 1.6; }
+  .counter-demo { display: block; border: 1px solid var(--sl-color-gray-5); border-radius: .75rem; --demo-pad: 1.5rem; padding: var(--demo-pad); overflow: hidden; margin-block: 2rem 3.5rem; font-size: 1rem; line-height: 1.6; }
   .counter-demo :is(p, h2, h3, pre, section, div, details, button) { margin: 0; }
-  .demo-heading, .card-heading, .merge-row, .demo-footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-  .eyebrow { font-size: .75rem; letter-spacing: .09em; font-weight: 600; color: var(--sl-color-text-accent); }
+  .demo-heading, .card-heading, .merge-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+  .demo-heading { justify-content: flex-end; }
   h2 { font-size: 1.5rem; color: var(--sl-color-white); }
   h3 { font-size: 1rem; color: var(--sl-color-white); }
   .mode { font-size: .8125rem; border: 1px solid var(--sl-color-gray-5); border-radius: 2rem; padding: .25rem .65rem; white-space: nowrap; }
   .mode[data-live='true'] { color: var(--sl-color-text-accent); }
-  .counter-demo .intro { margin-top: .75rem; max-width: 42rem; }
   .counter-demo .replicas { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-block: 1.5rem; }
   .replica { background: var(--sl-color-gray-6); border: 1px solid var(--sl-color-gray-5); border-radius: .5rem; padding: 1.25rem; }
   .replica-state { font-size: .75rem; color: var(--sl-color-gray-3); }
@@ -76,24 +67,28 @@
   .stepper button { width: 2.75rem; height: 2.75rem; padding: 0; font-size: 1.5rem; }
   .counter-demo .totals { margin-top: .75rem; text-align: center; font-size: .8125rem; color: var(--sl-color-gray-3); }
   .totals span { font-family: var(--sl-font-mono); }
-  .merge-row { padding-block: .25rem 1.25rem; border-bottom: 1px solid var(--sl-color-gray-5); }
+  .merge-row { padding-block: .25rem 0; }
   .stored { display: flex; align-items: center; gap: 1rem; font-size: .875rem; }
   .stored output { font: 600 2rem/1.2 var(--docs-font-heading); color: var(--sl-color-text-accent); font-variant-numeric: tabular-nums; }
   .actions { display: flex; flex-wrap: wrap; gap: .5rem; }
   .primary { background: var(--sl-color-bg-accent); color: var(--sl-color-text-invert); border-color: transparent; }
-  .counter-demo .message { min-height: 3.2em; margin-top: 1rem; font-size: .875rem; }
+  .counter-demo .message { margin-top: 1rem; font-size: .875rem; }
+  .counter-demo .message:empty { display: none; }
   .message[data-error='true'] { color: var(--sl-color-orange-high, var(--sl-color-white)); }
-  .demo-footer { font-size: .8125rem; color: var(--sl-color-gray-3); }
-  .reset { flex-shrink: 0; border-color: transparent; background: transparent; padding: .25rem 0; text-decoration: underline; text-underline-offset: .2em; }
-  .counter-demo details { border-top: 1px solid var(--sl-color-gray-5); margin-top: 1rem; padding-top: 1rem; font-size: .875rem; }
-  summary { cursor: pointer; color: var(--sl-color-white); }
+  .counter-demo details { border: 0; border-top: 1px solid var(--sl-color-gray-5); border-radius: 0; background: none; padding: 0; margin: 1.5rem calc(var(--demo-pad) * -1) calc(var(--demo-pad) * -1); font-size: .875rem; }
+  summary { cursor: pointer; color: var(--sl-color-white); padding: .75rem var(--demo-pad); }
+  summary:hover { color: var(--sl-color-text-accent); }
+  .counter-demo details > :not(summary) { margin-inline: var(--demo-pad); }
+  .counter-demo details > :last-child { margin-bottom: var(--demo-pad); }
   .counter-demo details p { margin-top: .75rem; }
-  .counter-demo pre { margin-top: 1rem; padding: 1rem; background: var(--sl-color-gray-6); border-radius: .375rem; font-size: .8125rem; overflow-x: auto; }
+  .counter-demo details :is(summary, p, pre, code) { border-inline: 0; box-shadow: none; }
+  .counter-demo pre { margin-top: 1rem; padding: 0; background: none; border: 0; font-size: .8125rem; overflow-x: auto; }
   pre code { border: 0; background: none; padding: 0; }
   @media (max-width: 42rem) {
-    .counter-demo { padding: 1rem; }
-    .demo-heading, .merge-row { align-items: flex-start; flex-direction: column; }
+    .counter-demo { --demo-pad: 1rem; }
+    .merge-row { align-items: flex-start; flex-direction: column; }
     .counter-demo .replicas { grid-template-columns: 1fr; }
-    .demo-footer { align-items: flex-start; }
+    .actions { flex-direction: column; align-self: stretch; }
+    .actions button { width: 100%; }
   }
 </style>

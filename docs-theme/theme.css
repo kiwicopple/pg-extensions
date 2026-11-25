@@ -63,6 +63,7 @@
 	--sl-color-bg-inline-code: var(--docs-selection);
 	--sl-color-hairline-light: var(--docs-border);
 	--sl-color-hairline: var(--docs-border);
+	--sl-color-hairline-shade: var(--docs-border);
 	--sl-text-h1: 2.125rem;
 	--sl-text-h2: 1.375rem;
 	--sl-text-h3: 1.125rem;

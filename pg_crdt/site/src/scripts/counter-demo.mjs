@@ -46,7 +46,7 @@ class CounterDemo extends HTMLElement {
       this.copies = Object.fromEntries(REPLICAS.map((key) => [key, empty()]));
       this.stored = empty();
       this.lastDelta = null;
-      this.message('Try +3 on Alice’s laptop and −1 on Bob’s phone, then sync.');
+      this.message('');
     } catch (error) {
       if (this.mode === 'loading') this.mode = 'unavailable';
       this.message(error.message || 'The demo could not connect. Use Start over to try again.', true);
@@ -101,9 +101,6 @@ class CounterDemo extends HTMLElement {
     badge.textContent = { loading: 'Connecting…', unavailable: 'Connection unavailable', preview: 'Browser preview', postgres: 'Live Postgres' }[this.mode];
     badge.dataset.live = String(this.mode === 'postgres');
     this.find('[data-stored-label]').textContent = this.mode === 'postgres' ? 'Stored in Postgres' : 'Last merged value';
-    this.find('[data-note]').textContent = this.mode === 'preview'
-      ? 'Browser-only preview. Connect Postgres to run merges in the database.'
-      : 'Your own demo session. Refreshing starts over; sessions expire after 24 hours.';
     for (const key of REPLICAS) {
       const name = key.split(':')[1];
       const state = this.copies[key];
