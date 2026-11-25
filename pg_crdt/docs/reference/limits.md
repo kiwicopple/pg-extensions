@@ -1,6 +1,6 @@
 # Numeric limits
 
-The active extension supports `crdt.pn` counters and experimental `crdt.yseq` text columns. It does not install document tables, a background worker or a client SDK. See [the scope decision](../../research/scope.md).
+These limits apply to `crdt.pn` counters and experimental `crdt.yseq` text columns.
 
 ## Numbers
 
@@ -20,4 +20,4 @@ The active extension supports `crdt.pn` counters and experimental `crdt.yseq` te
 
 See [Text column functions](yseq.md#limits) for function-specific details and [Errors](errors.md) for exact conditions.
 
-For practical costs and feature limits, see [storage and limits](storage.md). Version 0.0.1 has no upgrade scripts or automatic state migration.
+For practical costs and feature limits, see [storage and limits](storage.md).

@@ -27,8 +27,6 @@ psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -1 \
 
 A direct SQL install creates ordinary database objects. Include the `crdt` schema in backups. It has no `pg_extension` entry and no in-place upgrade. Do not reinstall over an existing schema. See [backups and removal](operations.md).
 
-For an older build containing `ydoc_` tables, read the [existing-installation note](../../research/scope.md#existing-installations). There is no automatic migration to text columns.
-
 ## Extension management
 
 Use pg_tle or the server extension directory when you need a `pg_extension` entry. Choose one of these instead of a direct SQL install. Commands below run from `pg_crdt/`. Preparing pg_tle or copying server files can require an administrator.

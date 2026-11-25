@@ -12,8 +12,6 @@ Read the [five-page guide](docs/overview.md), from what a CRDT is to connecting 
 
 Counters cannot enforce a shared minimum or maximum while devices are offline. Text edits rewrite the whole state and retain deletion history; see [storage limits](docs/reference/storage.md) before choosing it. There is no packaged browser client.
 
-Earlier table-backed documents (`ydoc_`) remain [research](research/scope.md), with no automatic migration to columns.
-
 ## Development
 
 Run from this directory:

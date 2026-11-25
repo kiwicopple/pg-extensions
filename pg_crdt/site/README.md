@@ -24,7 +24,7 @@ The production URL is `https://crdt.postgres.tools`, set in one constant, `DEFAU
 
 ## Code tabs
 
-The introductory examples use SQL alone. Longer application examples can use a database driver directly. The active text column has no bundled client; the former table-backed client is research only. Application examples that use a driver are shown twice: `tab="JavaScript"` (plain node-postgres) and `tab="SQL"`. In the source, two adjacent fenced blocks (only blank lines between them) with a `tab="..."` meta are one group. GitHub and the Markdown exports show every block in source order. On the site, `scripts/code-tabs.mjs` turns each group into `<Tabs syncKey="lang">`, so the reader's choice carries across pages, and the page is written as `.mdx` instead of `.md`. The converter requires at least two blocks per group, a plain language label, JavaScript first and SQL last.
+The introductory examples use SQL alone. Longer application examples can use a database driver directly. The text column has no bundled client. Application examples that use a driver are shown twice: `tab="JavaScript"` (plain node-postgres) and `tab="SQL"`. In the source, two adjacent fenced blocks (only blank lines between them) with a `tab="..."` meta are one group. GitHub and the Markdown exports show every block in source order. On the site, `scripts/code-tabs.mjs` turns each group into `<Tabs syncKey="lang">`, so the reader's choice carries across pages, and the page is written as `.mdx` instead of `.md`. The converter requires at least two blocks per group, a plain language label, JavaScript first and SQL last.
 
 ## Generated files
 

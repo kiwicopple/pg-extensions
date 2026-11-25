@@ -89,18 +89,6 @@ export const pages = [
     "src": "docs/README.md",
     "route": "guide",
     "label": "Documentation"
-  },
-  {
-    "src": "docs/reference/ydoc.md",
-    "route": "reference/ydoc",
-    "label": "Table-backed documents: archived",
-    "legacy": true
-  },
-  {
-    "src": "docs/reference/client.md",
-    "route": "reference/client",
-    "label": "JavaScript client: archived",
-    "legacy": true
   }
 ];
 

@@ -63,4 +63,4 @@ Installation grants `usage` on `crdt` and function execution to `public`. This g
 
 Both column types store JSON with `t` for type and `v` for format version. The accepted format is `v = 1`; invalid outer structures fail with `23514`. See [counter state](pn.md#state-and-merge) and [text state](yseq.md#the-domain).
 
-The extension version, currently `0.0.1`, is separate from the format version. There is no in-place upgrade or automatic state migration.
+The extension version, currently `0.0.1`, is separate from the format version.

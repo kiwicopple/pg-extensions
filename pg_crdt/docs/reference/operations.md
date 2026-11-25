@@ -21,7 +21,6 @@ Test restores in a separate database. Check visible values, `pn_is_valid`, `yseq
 | Error `40001` | Retry the whole transaction on one connection. Reuse the same recorded updates. |
 | Small text uses lots of disk | History remains after deletion; each edit rewrites it. See [storage](storage.md#text). |
 | Text positions are wrong | Use UTF8 and convert JavaScript offsets to Unicode code points. |
-| Errors mention `ydoc_` tables | You are using an earlier build or client. See the [archive](../../research/ydoc/README.md). |
 
 The [errors reference](errors.md) gives function-specific conditions.
 
@@ -45,5 +44,3 @@ alter table posts alter column body type jsonb;
 alter table posts alter column likes type jsonb;
 drop extension pg_crdt;
 ```
-
-Earlier `ydoc_` builds owned document tables inside the extension. Use their [archived removal instructions](../../research/ydoc/docs/install.md#uninstall); this procedure is not a migration for those tables.

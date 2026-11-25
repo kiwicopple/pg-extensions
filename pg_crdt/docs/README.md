@@ -18,4 +18,4 @@ Look things up here as you build. These pages are not part of the introductory g
 - [Operations](reference/operations.md): backups, troubleshooting and removal.
 - [Installation options](reference/installation.md): versions, migrations and extension management.
 
-[Research](../research/README.md) holds benchmarks, design notes and the earlier table-backed text implementation. [Changelog](../CHANGELOG.md) and [tests](../test/README.md) cover development.
+[Research](../research/README.md) holds benchmarks and design notes. [Changelog](../CHANGELOG.md) and [tests](../test/README.md) cover development.

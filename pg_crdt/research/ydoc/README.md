@@ -1,6 +1,6 @@
 # Table-backed documents: research snapshot
 
-This directory preserves the implementation before table-backed documents were separated from the active extension on 13 November 2026. Read the [scope decision](../scope.md) for the reason and existing-installation implications.
+This directory preserves the implementation before table-backed documents were separated from the active extension on 13 November 2026. Read the [scope decision](../scope.md) for the reason.
 
 The SQL snapshot includes counters, text columns and `ydoc_`, so it can reproduce the old document and client tests. It is not installed by the active extension. Use a throwaway database; do not load it alongside the current extension or into an application database.
 
