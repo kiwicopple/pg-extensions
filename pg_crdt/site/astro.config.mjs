@@ -31,6 +31,7 @@ export default defineConfig({
 			social: [{ icon: 'github', label: 'GitHub', href: `${repo}/tree/${ref}/pg_crdt` }],
 			editLink: { baseUrl: `${repo}/edit/${ref}/pg_crdt/site/` },
 			customCss: ['./src/styles/custom.css'],
+			components: { Footer: './src/components/Footer.astro' },
 			plugins: [starlightLinksValidator({ errorOnRelativeLinks: false, errorOnInvalidHashes: true })],
 			sidebar,
 		}),

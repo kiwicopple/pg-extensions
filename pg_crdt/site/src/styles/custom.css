@@ -1,2 +1,5 @@
 /* Shared branding; keep only site-specific overrides below. */
 @import '../../../../docs-theme/theme.css';
+
+/* More room between the homepage sections. */
+[data-has-hero] .sl-markdown-content .sl-heading-wrapper.level-h2 { margin-top: 6.5rem; }

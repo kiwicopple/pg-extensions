@@ -1,0 +1,39 @@
+---
+import Default from '@astrojs/starlight/components/Footer.astro';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const repo = process.env.DOCS_REPO_URL ?? 'https://github.com/kiwicopple/pg-extensions';
+const ref = process.env.DOCS_REPO_REF ?? 'main';
+
+const links = [
+	{ label: 'Install', href: `${base}/install/` },
+	{ label: 'Documentation', href: `${base}/guide/` },
+	{ label: 'GitHub', href: `${repo}/tree/${ref}/pg_crdt` },
+	{ label: 'Supabase', href: 'https://supabase.com' },
+];
+---
+
+<Default {...Astro.props}><slot /></Default>
+
+<nav class="site-footer" aria-label="Site">
+	{links.map(({ label, href }) => <a href={href}>{label}</a>)}
+</nav>
+
+<style>
+	.site-footer {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem 1.5rem;
+		margin-top: 1.5rem;
+		padding-top: 1rem;
+		border-top: 1px solid var(--docs-border);
+		font-size: 0.8125rem;
+	}
+	a {
+		color: var(--sl-color-gray-3);
+		text-decoration: none;
+	}
+	a:hover {
+		color: var(--sl-color-white);
+	}
+</style>

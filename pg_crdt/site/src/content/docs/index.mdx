@@ -3,22 +3,28 @@ title: pg_crdt
 description: Counters and collaborative text in Postgres columns.
 template: splash
 hero:
-  tagline: Combine independent counter updates and text edits in your own Postgres tables.
+  tagline: "A Postgres extension for experimental CRDT support. Provides counters and plain-text columns that merge independent changes. Uses plain SQL, works with any database driver, and runs on Postgres 16 and above."
   actions:
-    - text: Try a counter
-      link: './#counter-demo'
+    - text: Install the extension
+      link: './install/'
       icon: right-arrow
-    - text: Try shared text
-      link: ./get-started/text/
+    - text: Read the docs
+      link: ./guide/
       variant: minimal
 ---
 
 import { CardGrid, LinkCard } from '@astrojs/starlight/components';
 import CounterDemo from '../../components/CounterDemo.astro';
 
-`pg_crdt` provides counters and experimental plain-text columns that merge independent changes. It runs on Postgres 16, 17 and 18, uses SQL and PL/pgSQL, and works with any database driver. Start by [installing the extension](./install/).
+## Try it yourself
+
+Make a few changes on each device while they’re disconnected. Then sync them and watch every copy agree.
 
 <CounterDemo />
+
+## Keep exploring
+
+Start with the guide that matches what you’re building, or check the limits and troubleshooting steps before you adopt it.
 
 <CardGrid>
   <LinkCard title="Counters" description="Create a counter, sync device totals, and accept client updates safely." href="./get-started/quickstart/" />
@@ -26,11 +32,3 @@ import CounterDemo from '../../components/CounterDemo.astro';
   <LinkCard title="Text-column limits" description="Understand whole-value rewrites, WAL, retained history and sync costs before choosing the column." href="./text/limits/" />
   <LinkCard title="Troubleshooting" description="Recover missing counts, rejected edits, permission errors and unexpected storage growth." href="./operations/troubleshooting/" />
 </CardGrid>
-
-## Choose the right workload
-
-Counters cannot enforce strict bounds across disconnected writers. Text columns rewrite their whole state on every edit and retain deletion metadata. Large documents and frequent edits may need a different design. Read [what pg_crdt does](./overview/) and the [text limitations](./text/limits/) before adopting it.
-
-Table-backed documents and their client are separate research. The active extension keeps state in your own columns and installs no document tables.
-
-Use the [documentation map](./guide/) for all guides, or the [Markdown index](./llms.txt) for plain-text exports.
