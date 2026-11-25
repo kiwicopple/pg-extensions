@@ -317,7 +317,7 @@ create aggregate crdt.pn_merge_agg(crdt.pn) (
 -- `replica`: the id itself, or <id>:<device>. Entries lower than the current
 -- ones are ignored, as by pn_merge: a retry or a replayed older delta
 -- succeeds and changes nothing. (A writer that lost its state must read its
--- entries back first, or use a new device id; see docs/guides/replicas-and-identity.md.)
+-- entries back first, or use a new device id; see docs/reference/shared.md.)
 --
 -- IMMUTABLE: the result depends on the arguments only; the default argument
 -- is evaluated by the caller. Errors: 42501 no replica (null), or an entry
@@ -385,7 +385,7 @@ $$;
 -- are never collected. Table-backed documents are preserved separately in
 -- research/ydoc; they are not installed by this extension.
 -- Design, measurements and the review history: experiments/text-column/NOTES.md.
--- User docs: docs/types/collaborative-text.md, docs/reference/yseq.md.
+-- User docs: docs/get-started/text.md, docs/reference/yseq.md.
 --
 -- State (crdt.yseq):
 --

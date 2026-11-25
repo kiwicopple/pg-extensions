@@ -1,28 +1,21 @@
-# pg_crdt documentation
+# Documentation
 
-Choose the feature you want to build. Both keep their state in your own Postgres tables; the text column is experimental and has significant storage and sync limits.
+Start with the five-page guide. Allow about 10–20 minutes to read it and try the examples; no CRDT knowledge is needed.
 
-| Journey | First steps | Build your application |
-| --- | --- | --- |
-| Counters | [Install](install.md), then [your first counter](get-started/quickstart.md) | [Sync counts](guides/sync-counts.md), [identify writers](guides/replicas-and-identity.md), [accept client updates](guides/security.md), [store and query large counters](guides/storage-and-performance.md) |
-| Collaborative text | [Read the limitations](text/limits.md), [install](install.md), then [your first shared document](get-started/text.md) | [Save forms](text/forms.md), [control access](text/access.md), [connect a live editor](text/live-editor.md), [search](text/search.md) |
+1. [What is a CRDT?](overview.md)
+2. [Install](install.md)
+3. [Try a counter](get-started/quickstart.md)
+4. [Try shared text](get-started/text.md)
+5. [Connect your app](guides/app.md)
 
-## Operate and troubleshoot
+## Reference
 
-[Back up and restore](operations/backups.md), [maintain storage](operations/maintenance.md), [handle transaction retries](guides/safe-updates.md), [troubleshoot symptoms](operations/troubleshooting.md), or [uninstall](operations/uninstall.md).
+Look things up here as you build. These pages are not part of the introductory guide.
 
-## Understand or look up behavior
+- [Application examples](reference/application.md): permissions, form saves and live editors.
+- [Counter functions](reference/pn.md), [text functions](reference/yseq.md) and [identity settings](reference/shared.md).
+- [Storage and limits](reference/storage.md), [numeric limits](reference/limits.md) and [errors](reference/errors.md).
+- [Operations](reference/operations.md): backups, troubleshooting and removal.
+- [Installation options](reference/installation.md): versions, migrations and extension management.
 
-- Explanations: [How counters merge](types/pn-counter.md), [How text merges](types/collaborative-text.md).
-- Reference: [Counter functions](reference/pn.md), [text column functions](reference/yseq.md), [identity settings](reference/shared.md), [errors](reference/errors.md), [limits](reference/limits.md).
-- Project: [Changelog](../CHANGELOG.md), [tests](../test/README.md), [writing conventions](../STYLE.md), [research](../research/README.md).
-
-## Example conventions
-
-Run a page's examples in order unless it says otherwise. Each task states its setup. SQL runs in psql; JavaScript uses a connected node-postgres `client`, as shown in the [counter quickstart](get-started/quickstart.md#before-you-start). On the website, language tabs show alternatives; GitHub and Markdown exports show both.
-
-Sample role names are placeholders for your own roles. Statements marked with an `-- ERROR:` comment intentionally fail. API reference examples include their own small setup and can be read independently.
-
-## Earlier table-backed documents
-
-The `ydoc_` implementation and its JavaScript client are [archived research](../research/ydoc/README.md). They are not part of the current extension. Read the [scope decision](../research/scope.md) before changing an existing installation.
+[Research](../research/README.md) holds benchmarks, design notes and the earlier table-backed text implementation. [Changelog](../CHANGELOG.md) and [tests](../test/README.md) cover development.

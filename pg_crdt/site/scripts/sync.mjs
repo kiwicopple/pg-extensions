@@ -249,8 +249,8 @@ function syncPlainMarkdown() {
 	const site = (process.env.DOCS_SITE ?? '').replace(/\/$/, '');
 	const index = [
 		'# pg_crdt', '',
-		'> CRDTs (conflict-free replicated data types) for Postgres, in SQL and PL/pgSQL. Version 0.0.1 has one type, the PN-Counter, a counter that several writers can change independently and merge later.', '',
-		'Use the guides and reference for implementation. Only the PN-Counter exists; the other types on the overview page are planned. Guides show JavaScript (node-postgres) examples first and the equivalent SQL. Markdown exports preserve every language example.', '',
+		'> Counters and experimental shared plain text in Postgres. Independent copies can change and merge later.', '',
+		'Start with the five-page guide: what a CRDT is, install, try a counter, try shared text, and connect your app. Use reference pages as needed. The active types are crdt.pn and crdt.yseq. The extension provides no networking or packaged browser client.', '',
 		'## Guides and reference', '',
 	];
 	const groups = { current: [], contributing: [] };

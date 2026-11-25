@@ -2,7 +2,7 @@
 
 Use the `pn_` functions to create, update, read and merge counters stored as `crdt.pn`. All functions are in the `crdt` schema.
 
-For the state format and merge rules, see [PN-Counter](../types/pn-counter.md). For naming, privileges and replica ids, see [Shared](shared.md). The [Errors](errors.md) page lists every SQLSTATE.
+For writer names and permissions, see [identity settings](shared.md). The [errors](errors.md) page lists SQLSTATE codes.
 
 Unless an entry says otherwise, a function is `IMMUTABLE PARALLEL SAFE`, is not `STRICT`, is not `security definer`, and has `EXECUTE` granted to `public`.
 
@@ -18,6 +18,15 @@ Unless an entry says otherwise, a function is `IMMUTABLE PARALLEL SAFE`, is not 
 | [`pn_apply_delta(state, delta, replica)`](#pn_apply_delta) | `crdt.pn` | Merge a delta from a writer you do not trust. |
 
 A `jsonb` value passes to any function that takes `crdt.pn` without a cast. Postgres coerces it implicitly, and the coercion runs the domain's check (SQLSTATE `23514` when the value is not an envelope).
+
+## State and merge
+
+A counter stores JSON: `{"t":"pn","v":1,"p":{"alice":3},"n":{"alice":1}}`.
+`p` records each writer's total additions; `n` records total subtractions. The visible value is `sum(p) - sum(n)`, here 2. Merge takes the larger total for each key in each map. Order and repeated delivery do not change the result.
+
+Totals only grow. You cannot reset an entry or remove a writer; use a new row to start over. Disconnected writers cannot enforce a shared minimum or maximum. Use `pn_merge`, never JSON concatenation (`||`), to combine states.
+
+`crdt.pn` is a domain over `jsonb`: it stores JSON and checks the outer shape (`t`, `v`, `p`, `n`). It does not check every entry. `pn_is_valid` checks counts too; `pn_apply_delta` also checks ownership. Use the latter for client input. A constraint using `pn_is_valid` can protect other import paths.
 
 ## Functions
 
@@ -126,7 +135,7 @@ For every entry key, takes the larger total in `p` and the larger in `n`. The re
 - Commutative, associative and idempotent. `pn_merge(x, x) = x`.
 - `pn_merge(x, null) = pn_merge(null, x) = x`, and `pn_merge(null, null)` is null.
 - It does not check keys or counts: it accepts whatever another replica sends. Entries are compared under `jsonb`'s ordering, which is consistent for any JSON value, so even invalid entries converge.
-- Use it in the `set` clause of one statement: `update t set s = crdt.pn_merge(s, $1)`. See [Update safely](../guides/safe-updates.md).
+- Use it in the `set` clause of one statement: `update t set s = crdt.pn_merge(s, $1)`. See [Update safely](application.md#updates-and-retries).
 - Cost: in the benchmarks, merging a one-entry delta into a 10,000-replica state took about 1.2 ms, and merging two 10,000-replica states about 14 ms.
 
 **Privileges.** `EXECUTE` to `public`.
@@ -208,7 +217,7 @@ crdt.pn_apply_delta(
 
 `pn_merge` for a delta from a writer you do not trust. `replica` is the identity of the writer. A delta may only contain entries that the writer owns: `replica` itself and `replica:<device>`.
 
-**Labels.** `IMMUTABLE PARALLEL SAFE`, `search_path` pinned to `pg_catalog, pg_temp`. It is not `security definer`: it needs no privileges, and the extension cannot know which table your application writes. Your own `security definer` function calls it. See [Accept writes from untrusted clients](../guides/security.md).
+**Labels.** `IMMUTABLE PARALLEL SAFE`, `search_path` pinned to `pg_catalog, pg_temp`. It is not `security definer`: it needs no privileges, and the extension cannot know which table your application writes. Your own `security definer` function calls it. See [Accept writes from untrusted clients](application.md#counters).
 
 **Checks**, in this order. The first that fails raises the error:
 
@@ -219,7 +228,7 @@ crdt.pn_apply_delta(
 5. Every key of the delta is a well-formed entry key.
 6. Every key of the delta belongs to `replica`.
 
-Then it returns `pn_merge(coalesce(state, pn_empty()), delta)`. Entries of the delta that are lower than the stored ones are ignored, so a retry or a replayed older delta succeeds and changes nothing. The same holds for a writer that restarts from 0: its new totals have no effect until they exceed the stored totals. See [A replica that lost its state](../guides/replicas-and-identity.md#a-replica-that-lost-its-state).
+Then it returns `pn_merge(coalesce(state, pn_empty()), delta)`. Entries of the delta that are lower than the stored ones are ignored, so a retry or a replayed older delta succeeds and changes nothing. The same holds for a writer that restarts from 0: its new totals have no effect until they exceed the stored totals. See [A replica that lost its state](shared.md#replica-ids-and-entry-keys).
 
 Because the arguments are `crdt.pn`, a `delta` that is not an envelope fails with `23514` before the function runs.
 

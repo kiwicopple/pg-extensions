@@ -1,10 +1,12 @@
-# Your first shared document
+# Try shared text
 
-Create a text column, edit it as two writers, and combine two independent copies. This example runs as the database owner in an empty UTF8 test database with [pg_crdt installed](../install.md). It does not expose writes to browsers.
+Store a note that two people can edit independently. Run these SQL blocks in order as the table owner in a UTF8 test database with [pg_crdt installed](../install.md).
 
-`crdt.yseq` is experimental. Every edit rewrites the whole document state, including retained deletion metadata. Start with short documents and occasional saves; [read the storage and sync limits](../text/limits.md) before choosing it for your application.
+The text type, `crdt.yseq`, is **experimental**. Each edit rewrites the entire stored value, including information about past deletions. Start with short notes saved occasionally. See [storage limits](../reference/storage.md#text) for the costs.
 
-## Create a document
+## Create a note
+
+`yseq_new()` gives each note a unique document id. `yseq_insert` adds text; `yseq_value` reads the visible result.
 
 ```sql
 create table notes (
@@ -17,32 +19,38 @@ update notes
 set body = crdt.yseq_insert(body, 0, 'Hello world', replica => 'alice')
 where id = 1;
 
-update notes
-set body = crdt.yseq_insert(body, 5, ',', replica => 'bob')
-where id = 1;
-
 select crdt.yseq_value(body) from notes where id = 1;
--- Hello, world
+-- Hello world
 ```
 
-`yseq_new()` gives the document a unique id. Each edit runs inside one `update`, so Postgres locks the row while it changes. Positions count Unicode code points, starting at zero; JavaScript string offsets need conversion.
+`replica` names the writer. Text positions start at zero and count Unicode code points. For example, an emoji can count as one position here but two JavaScript string units.
 
-## Merge independent changes
+## Combine two edits
 
-This query creates two copies from the current document: Carol adds an exclamation mark, and Dave adds a prefix. Merging keeps both changes.
+This query makes two copies of the same note. Bob adds a comma and Carol adds an exclamation mark. Merge keeps both edits:
 
 ```sql
 select crdt.yseq_value(crdt.yseq_merge(
-  crdt.yseq_insert(body, 12, '!', replica => 'carol'),
-  crdt.yseq_insert(body, 0, '> ', replica => 'dave')
+  crdt.yseq_insert(body, 5, ',', replica => 'bob'),
+  crdt.yseq_insert(body, 11, '!', replica => 'carol')
 )) as merged
 from notes
 where id = 1;
--- > Hello, world!
+-- Hello, world!
 ```
 
-The query shows the merged result without storing it. To save incoming state from a trusted peer, merge it in the `set` clause of an `update`. A browser's edits must go through a wrapper using `yseq_apply`; `yseq_merge` does not enforce writer ownership.
+This query only displays the result. To store changes, use the edit or merge function inside an `update`, as in the first example. Merge full states only from trusted servers; client edits need `yseq_apply` with [access checks](../guides/app.md).
 
-## Next
+## Save a form
 
-[Save changes from a form](../text/forms.md) builds a small application with access checks. It uses separate `articles` tables, so you can keep the `notes` table from this example.
+For a text box with a Save button, use `yseq_set`. Keep the full document state that the form opened with. This is its **base**: the saved copy that tells Postgres what the user changed.
+
+Your server reads the text and base together, then passes the edited text and that base to `yseq_set` in one update. Without the original base, saving an old form can undo someone else's changes. After saving, reload the text and base together and show the merged result.
+
+The base is the whole state, so every save sends it back. The [form example](../reference/application.md#forms) includes the SQL setup and a working save.
+
+## Before building a live editor
+
+There is no ready-made browser client, rich text, shared cursors or undo. The format is not compatible with Yjs. A live editor needs its own sync code and a separate writer key for each independent editor. Reusing a key can lose text. See [live editor integration](../reference/application.md#live-editors).
+
+Next: [connect your app](../guides/app.md).

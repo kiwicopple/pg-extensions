@@ -1,4 +1,4 @@
-# Errors and limits: capacity limits
+# Numeric limits
 
 The active extension supports `crdt.pn` counters and experimental `crdt.yseq` text columns. It does not install document tables, a background worker or a client SDK. See [the scope decision](../../research/scope.md).
 
@@ -20,18 +20,4 @@ The active extension supports `crdt.pn` counters and experimental `crdt.yseq` te
 
 See [Text column functions](yseq.md#limits) for function-specific details and [Errors](errors.md) for exact conditions.
 
-## Counters
-
-Entries are never removed, and totals cannot be reset under an existing key. State size and merge costs grow with writer count. A lost local state can silently suppress new increments until its totals exceed the stored ones. Disconnected writers cannot enforce a minimum or maximum balance. JSON concatenation is not a CRDT merge.
-
-Large state columns rewrite and log the whole value. Change feeds may carry the whole changed state too. Use [delta tables](../guides/storage-and-performance.md) when appropriate; their compaction is an application task.
-
-## Collaborative text
-
-Every edit rewrites the whole state, and retained deletion metadata grows with edit history. Merge, apply and sync scan the document; sync sends all deletion ranges. Form saves send a full base state. There is no tombstone collection, compaction API, detection of conflicting content under reused ids, Yjs wire compatibility, or packaged live-editor adapter.
-
-Read [Text-column limits and performance](../text/limits.md) for WAL amplification, TOAST bloat, indexes, network costs, Unicode, concurrency, form-save edge cases and benchmark caveats. These limitations are part of choosing the column approach, not optional tuning notes.
-
-## Installation and lifecycle
-
-The schema is fixed to `crdt`. Postgres 18 generated columns that call these functions must be `stored`. Version 0.0.1 has no upgrade scripts or automatic state migration. Dropping the extension with `cascade` can remove your columns and data: follow [Uninstall](../operations/uninstall.md).
+For practical costs and feature limits, see [storage and limits](storage.md). Version 0.0.1 has no upgrade scripts or automatic state migration.

@@ -2,7 +2,7 @@
 
 The former `pg-crdt-client` targets the table-backed `ydoc_` API and now lives in the [research snapshot](../../research/ydoc/README.md). It is not a supported client for the active text-column API.
 
-For current applications, use a Postgres driver directly for counters and [form saves](../text/forms.md). A live text editor needs an adapter implementing the column operation format and sync behavior. See [Connect a live editor](../text/live-editor.md) for that contract and its limitations.
+For current applications, use a Postgres driver directly for counters and [form saves](application.md#forms). A live text editor needs an adapter implementing the column operation format and sync behavior. See [Connect a live editor](application.md#live-editors) for that contract and its limitations.
 
 The [scope decision](../../research/scope.md) explains why table-backed documents and their client remain separate.
 

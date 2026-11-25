@@ -8,7 +8,7 @@ set role app_owner;
 create table public.articles (
   id bigint generated always as identity primary key,
   title text not null,
-  body crdt.yseq compression lz4 not null default crdt.yseq_new(),
+  body crdt.yseq not null default crdt.yseq_new(),
   body_text text generated always as (crdt.yseq_value(body)) stored
 );
 

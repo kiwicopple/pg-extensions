@@ -2,7 +2,7 @@
 
 Use the `yseq_` functions to edit a document stored in a `crdt.yseq` column. The whole document is one `jsonb` value in your table. Update it in a single statement, such as `update ... set body = crdt.yseq_insert(body, ...)`, as you would a [PN-Counter](pn.md).
 
-[Collaborative text](../types/collaborative-text.md) explains the edit format and merge behavior. For naming and replica ids, see [Shared](shared.md); for SQLSTATE codes, see [Errors](errors.md). For a complete application, follow [Collaborative text for a blog post](../guides/collaborative-text.md).
+For access checks and a working form, see [application examples](application.md). For writer names, see [identity settings](shared.md); for SQLSTATE codes, see [errors](errors.md).
 
 > **Experimental.** `yseq_` is part of the extension and tested like the rest of it, but every edit rewrites the whole value, so its cost grows with the document, and tombstones are never removed. Read [the limits](#limits) before you put large or heavily edited documents in a column.
 
@@ -47,7 +47,25 @@ select '{"t": "pn"}'::crdt.yseq;
 -- ERROR:  value for domain crdt.yseq violates check constraint "yseq_check"
 ```
 
-`crdt.yseq` belongs to the extension. `drop extension pg_crdt` fails with `2BP01` while a column uses it, and `drop extension pg_crdt cascade` drops those columns with their data. See [Uninstall](../install.md#uninstall).
+`crdt.yseq` belongs to the extension. `drop extension pg_crdt` fails with `2BP01` while a column uses it, and `drop extension pg_crdt cascade` drops those columns with their data. See [Uninstall](operations.md#uninstall).
+
+## Operations
+
+Every character has an id made from a writer key and sequence number. Inserts record their neighbouring character ids; these determine a consistent order when copies merge. Deletes name character ids. The same operation can arrive twice without duplicating text. Missing earlier edits leave operations waiting until their dependencies arrive.
+
+An operation is JSON describing inserts and deletes:
+
+```json
+{"v":{"alice":11},"i":[["bob",1,["alice",11],null,"!"]],"d":[]}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `v` | The version seen before editing: progress per writer. Required for client input to `yseq_apply`. |
+| `i` | Inserts: `[key, sequence, leftOrigin, rightOrigin, text]`. An origin is `[key, sequence]`, or null at a boundary. |
+| `d` | Deletes: `[key, sequence, length]`, naming existing character ids. |
+
+Use `yseq_diff(old, new)` to produce an operation after a local edit. `yseq_ops_since` fetches missing edits, including all deletion ranges; its output lacks `v` and is for a client's sync implementation, not direct input to `yseq_apply`.
 
 ## Functions
 
@@ -274,7 +292,7 @@ The ops that a copy at version `vv` lacks, as one op without `v`: `{"i": [...], 
 
 The state does not keep the text of deleted characters, so an insert of a character that is deleted since is sent as U+FFFD, one per code point. The delete set in the same result hides it. Peers that merge the result end with the same text.
 
-Give the result to a client's own implementation of the algorithm, as described in [Connect a live editor](../text/live-editor.md). It has no `v`, so [`yseq_apply`](#yseq_apply) refuses it. Between servers, merge states with [`yseq_merge`](#yseq_merge).
+Give the result to a client's own implementation of the algorithm, as described in [Connect a live editor](application.md#live-editors). It has no `v`, so [`yseq_apply`](#yseq_apply) refuses it. Between servers, merge states with [`yseq_merge`](#yseq_merge).
 
 **Privileges.** `EXECUTE` to `public`.
 
@@ -358,7 +376,7 @@ crdt.yseq_apply(
 ) returns crdt.yseq
 ```
 
-Applies ops from a writer you do not trust, whose identity is `replica`, and returns the new state. The writer's own `security definer` wrapper calls it in an `update` of your table, after checking your application's rule, while the writer has no `update` privilege on the column. `ops` is one [op](../types/collaborative-text.md#ops) or an array of ops. Null `ops` returns the state unchanged.
+Applies ops from a writer you do not trust, whose identity is `replica`, and returns the new state. The writer's own `security definer` wrapper calls it in an `update` of your table, after checking your application's rule, while the writer has no `update` privilege on the column. `ops` is one [op](yseq.md#operations) or an array of ops. Null `ops` returns the state unchanged.
 
 **Checks.** Each op is applied or refused as a whole:
 
@@ -424,14 +442,4 @@ select crdt.yseq_is_valid(s) from base;
 | Positions, lengths, and characters per entry key | `integer` (2,147,483,647) | `22003` or `22023` |
 | Database encoding | UTF8 | Functions that send deleted characters fail. |
 
-For practical guidance on workload sizing and mitigation limits, read [Text-column limits and performance](../text/limits.md). The main constraints are:
-
-- **Every edit rewrites the whole value.** A one-character edit writes a new copy of the state, TOAST included. In the benchmarks the WAL of one keystroke was about 3.4 kB at 1 kB of text, 7.1 kB at 5 kB, 18.5 kB at 20 kB and 78.7 kB at 100 kB, and a state crosses the 2 kB TOAST threshold at under 1 kB of text.
-- **TOAST churn at keystroke rate.** Every edit leaves a dead copy of the value, which only `VACUUM` reclaims; under default autovacuum a table of documents edited per keystroke settles at many times its live size, and at 100 kB documents autovacuum could not keep up. Use `compression lz4` on the column, and tune autovacuum for that table. If those costs remain too high, choose a different design; the extension has no table-backed option.
-- **No tombstone collection.** Deleted characters stay in the state as runs (without their text), so the state grows with the edit history, not only with the text.
-- **No equivocation detection.** A run that repeats ids already present is skipped without comparing its text, so two writers that share one entry key lose text silently. Give each editor and device its own key, and merge only states from servers you trust.
-- **Merge, apply and ops_since are O(document).** [`yseq_merge`](#yseq_merge), [`yseq_apply`](#yseq_apply) and [`yseq_ops_since`](#yseq_ops_since) read every run of the state on each call.
-- **The base of a three-way save is a whole state.** A form sends back the whole value it read, not a small token.
-- **Edits return the state, not the op.** Use [`yseq_diff`](#yseq_diff) for the op.
-
-The measurements, with their setup, are in the [text benchmarks](../../research/benchmarks/text.md) and the [vacuum, bloat and WAL benchmarks](../../research/benchmarks/vacuum-wal.md). See [Limits](limits.md) for the limits of the extension as a whole.
+For whole-value writes, retained history, sync costs and workload sizing, see [storage and limits](storage.md#text).

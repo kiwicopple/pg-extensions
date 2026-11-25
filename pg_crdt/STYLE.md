@@ -1,6 +1,6 @@
 # Documentation conventions
 
-Write for a developer who stores shared state in Postgres. Use plain English, precise technical terms, and enough context to make each example usable. Prefer natural sentences over rigid word limits or prescribed vocabulary.
+Write for a builder who has never heard of a CRDT. Use standard English, explain unfamiliar words when they first appear, and keep the five-page guide readable in 10–20 minutes. Put detailed contracts and extra recipes in Reference; benchmarks and design history belong in Research. Give each idea one home and link to it instead of repeating it.
 
 The build journal in `research/journal.md` is a raw historical record. Do not edit it during documentation cleanup. Benchmark reports keep the harness format.
 
@@ -8,7 +8,7 @@ The build journal in `research/journal.md` is a raw historical record. Do not ed
 
 The active extension contains only `crdt.pn` and `crdt.yseq` columns. Keep table-backed documents and their client in research; see [the decision](research/scope.md). Do not describe archived functions as installed features or recommend the archived client for columns.
 
-Text entry points must link to the canonical [limitations page](docs/text/limits.md). Keep a short reminder next to operations that rewrite state, send a full base, depend on writer identity or can lose edits. Include WAL amplification, TOAST churn, retained history, sync costs and missing client features in storage decisions.
+Text entry points must link to the canonical [storage limits](docs/reference/storage.md#text). Keep a short reminder next to operations that rewrite state, send a full base, depend on writer identity or can lose edits. Include WAL amplification, TOAST churn, retained history, sync costs and missing client features in storage decisions.
 
 ## Organize by the reader's task
 
@@ -16,7 +16,7 @@ Text entry points must link to the canonical [limitations page](docs/text/limits
 - Keep a complete scenario together. If it continues another page, link to that page and name the tables it needs.
 - Distinguish runnable examples, fragments, and statements that intentionally raise errors.
 - Give each concept one canonical explanation. Keep short reminders beside examples where a mistake could lose data or let a writer forge it.
-- Keep current behavior in the guides and reference. Say plainly which types exist and which are planned; the plans live on the overview page and in Research.
+- Keep current behavior in the guides and reference. Say plainly which types exist. Keep plans in Research.
 - Keep the documentation generic Postgres. It must work with any client, driver or API layer. Name a platform (PostgREST, Supabase) only as one example of a mechanism, and never as the assumed setup.
 
 ## Write plainly

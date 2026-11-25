@@ -4,7 +4,7 @@ The active extension no longer installs the `ydoc_` functions or tables. The imp
 
 This keeps the extension focused on values in application-owned columns. Read the [scope decision](../../research/scope.md), including the warning for existing installations. There is no automatic migration from table-backed documents.
 
-For the active text API, see [Text column functions](yseq.md). It has different storage and sync tradeoffs; read [Text-column limits and performance](../text/limits.md).
+For the active text API, see [Text column functions](yseq.md). It has different storage and sync tradeoffs; read [Text-column limits and performance](storage.md#text).
 
 <span id="starlight__on-this-page"></span>
 

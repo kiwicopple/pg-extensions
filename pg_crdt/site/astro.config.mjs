@@ -1,7 +1,7 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import expressiveCode from '../../docs-theme/expressive-code.mjs';
-import { sidebar } from './navigation.mjs';
+import { sidebar, redirectPages } from './navigation.mjs';
 import starlight from '@astrojs/starlight';
 import starlightLinksValidator from 'starlight-links-validator';
 import { demoApi } from './scripts/demo-api.mjs';
@@ -18,6 +18,9 @@ const DEFAULT_SITE = 'https://crdt.postgres.tools';
 export default defineConfig({
 	site: process.env.DOCS_SITE ?? DEFAULT_SITE,
 	base: process.env.DOCS_BASE,
+	redirects: Object.fromEntries(redirectPages.map(({ route, to, hash }) => [
+		`/${route}/`, `/${to}/${hash ? `#${hash}` : ''}`,
+	])),
 	vite: { plugins: [demoApi()] },
 	integrations: [
 		starlight({

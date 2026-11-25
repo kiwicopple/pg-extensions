@@ -1,183 +1,61 @@
-# Quickstart: a counter column
+# Try a counter
 
-In this guide, you will add a like counter to a table, update it as two writers, and merge a count from an offline phone. You will also retry that merge to see why it does not count the same likes twice. You can complete the guide in a few minutes without setting up database roles.
+Create a visitor counter, add counts from two devices, then retry an update. Run these SQL blocks in order in a test database with [pg_crdt installed](../install.md), as the table owner.
 
-## Before you start
+## Create and update a counter
 
-[Install the extension](../install.md) in an empty test database, as the database owner. Run the SQL examples in one psql session, or select JavaScript and run them in one Node.js module (for example `quickstart.mjs`).
-
-For JavaScript, set `DATABASE_URL` to your test database and install the driver. The examples use plain [node-postgres](https://node-postgres.com). Every JavaScript example on this page and in the other guides assumes this connected `client`:
-
-```sh
-npm install pg
-```
-
-```js
-import pg from 'pg'
-
-const client = new pg.Client({
-  connectionString: process.env.DATABASE_URL,
-})
-await client.connect()
-```
-
-## Create a table with a counter
-
-`crdt.pn` is the column type of the PN-Counter, a counter that goes up and down. A new counter is `crdt.pn_empty()`: no entries, value 0.
+`crdt.pn` is a counter that can go up or down. PN means positive-negative. It stores each writer's additions and subtractions; `pn_value` returns the total.
 
 ```sql
-create table posts (
+create table pages (
   id bigint primary key,
-  title text not null,
-  likes crdt.pn not null default crdt.pn_empty()
+  visits crdt.pn not null default crdt.pn_empty()
 );
-insert into posts (id, title) values (1, 'Hello');
-```
+insert into pages (id) values (1);
 
-## Count as two writers
-
-Give each writer a name, called its replica id. This can be a user id or a device name. `pn_increment` records how much that writer has added, and `pn_decrement` records how much it has subtracted.
-
-Keep each change in one `update` statement, as below. Postgres then locks the row while it reads and updates the counter, so simultaneous writes do not overwrite each other.
-
-```js tab="JavaScript"
-await client.query(
-  `update posts
-   set likes = crdt.pn_increment(likes, $1)
-   where id = $2`,
-  ['alice', 1],
-)
-await client.query(
-  `update posts
-   set likes = crdt.pn_increment(likes, $1, $2)
-   where id = $3`,
-  ['bob', 2, 1],
-)
-await client.query(
-  `update posts
-   set likes = crdt.pn_decrement(likes, $1)
-   where id = $2`,
-  ['alice', 1],
-)
-```
-
-```sql tab="SQL"
-update posts
-set likes = crdt.pn_increment(likes, 'alice')
+update pages
+set visits = crdt.pn_increment(visits, 'front-desk', amount => 3)
 where id = 1;
 
-update posts
-set likes = crdt.pn_increment(likes, 'bob', amount => 2)
-where id = 1;
-
-update posts
-set likes = crdt.pn_decrement(likes, 'alice')
-where id = 1;
+select crdt.pn_value(visits) from pages where id = 1;
+-- 3
 ```
 
-Alice adds 1 and then subtracts 1. Bob adds 2. The counter adds up their contributions, giving a total of 2.
+`front-desk` names the writer. Use `pn_decrement` to subtract instead. Keep changes inside the `update` statement so simultaneous writes use the latest stored value.
 
-## Read the value
+## Add an offline device's count
 
-`crdt.pn_value` returns the number as a `bigint`. node-postgres returns a `bigint` as a string.
+A phone counted 2 more visitors. Its update contains its **running total**, in this JSON format:
 
-```js tab="JavaScript"
-const { rows: [post] } = await client.query(
-  `select crdt.pn_value(likes) as likes
-   from posts
-   where id = $1`,
-  [1],
-)
-console.log(post.likes) // '2'
+```json
+{"t": "pn", "v": 1, "p": {"phone": 2}, "n": {}}
 ```
 
-```sql tab="SQL"
-select crdt.pn_value(likes) as likes
-from posts
-where id = 1;
--- 2
-```
+`t` and `v` identify the type and format. `p` holds additions by writer; `n` holds subtractions. The maps can contain just the writers that changed.
 
-The state itself is JSON. Each replica id has its total of additions (`p`) and of subtractions (`n`):
+Merge the phone's update into the stored counter:
 
-```js tab="JavaScript"
-const { rows: [row] } = await client.query(
-  'select likes from posts where id = $1',
-  [1],
-)
-console.log(row.likes)
-// { n: { alice: 1 }, p: { bob: 2, alice: 1 }, t: 'pn', v: 1 }
-```
-
-```sql tab="SQL"
-select likes from posts where id = 1;
--- {"n": {"alice": 1}, "p": {"bob": 2, "alice": 1}, "t": "pn", "v": 1}
-```
-
-The value is `sum(p) - sum(n)`, which is 3 - 1 = 2. `t` and `v` are the type and the format version. Postgres prints the keys of a `jsonb` value in its own order, not the order in which they were written.
-
-## Merge a count from another place
-
-A phone that was offline counted 5 likes under its own id, `carol`. When it syncs, it sends its state. You merge it with `pn_merge` in the `set` clause of an `update`:
-
-```js tab="JavaScript"
-const fromCarol = { t: 'pn', v: 1, p: { carol: 5 }, n: {} }
-await client.query(
-  `update posts
-   set likes = crdt.pn_merge(likes, $1)
-   where id = $2`,
-  [fromCarol, 1],
-)
-```
-
-```sql tab="SQL"
-update posts
-set likes = crdt.pn_merge(
-  likes,
-  '{"t": "pn", "v": 1, "p": {"carol": 5}, "n": {}}'
-)
-where id = 1;
-```
-
-Merge takes the larger total for every replica id, so it is safe to repeat. If the phone's message arrives twice, or the app retries after a timeout, nothing is counted twice:
-
-```js tab="JavaScript"
-const again = { t: 'pn', v: 1, p: { carol: 5 }, n: {} }
-await client.query(
-  `update posts
-   set likes = crdt.pn_merge(likes, $1)
-   where id = $2`,
-  [again, 1],
-)
-const { rows: [merged] } = await client.query(
-  'select crdt.pn_value(likes) as likes from posts where id = $1',
-  [1],
-)
-console.log(merged.likes) // '7'
-```
-
-```sql tab="SQL"
-update posts
-set likes = crdt.pn_merge(
-  likes,
-  '{"t": "pn", "v": 1, "p": {"carol": 5}, "n": {}}'
+```sql
+update pages
+set visits = crdt.pn_merge(
+  visits,
+  '{"t":"pn","v":1,"p":{"phone":2},"n":{}}'
 )
 where id = 1;
 
-select crdt.pn_value(likes) from posts where id = 1;
--- 7
+select crdt.pn_value(visits) from pages where id = 1;
+-- 5
 ```
 
-The value is 7: Alice and Bob's 2, plus Carol's 5, counted once.
+Run that block again. The result is still **5**: merge keeps the largest recorded total for each writer. If the phone counts one more visitor, it sends `3`, not `1`.
 
-## Use this in your application
+## Remember these rules
 
-- **Merge inside the `update`.** Never read the state, merge it in your application and write the result back: another writer's change in between is lost. See [Update safely](../guides/safe-updates.md).
-- Give each independent writer its own replica id. Two offline writers that send totals under the same id can lose counts. See [Replicas and identity](../guides/replicas-and-identity.md).
-- **Here the server chose the ids.** `alice`, `bob` and `carol` above came from trusted code. If clients send their own counts, a client can send an entry that claims to be someone else's, and merge keeps it forever. Give such clients a wrapper function instead of `update` access: see [Accept writes from untrusted clients](../guides/security.md).
+- Give each independent device its own stable name. If two offline devices use the same name, their counts can be lost.
+- If a device loses its saved totals, recover them from the server or start with a new device name. Restarting at zero under the old name loses counts.
+- Merging the same recorded update again is safe. Calling `pn_increment` again creates another increment.
+- This example trusts the phone's data. For input from a browser or phone you do not control, use `pn_apply_delta` through an [authorized app endpoint](../guides/app.md).
 
-## Next steps
+A counter cannot enforce a shared minimum or maximum while devices are offline. Its stored data also grows with the number of writers. See [counter functions](../reference/pn.md) when you need the details.
 
-- Count under a device suffix, and recover a lost device: [Replicas and identity](../guides/replicas-and-identity.md).
-- Index the value or keep many writers' counts as deltas: [Storage and performance](../guides/storage-and-performance.md).
-- Every function: [PN-Counter functions](../reference/pn.md).
+Next: [try shared text](text.md).
