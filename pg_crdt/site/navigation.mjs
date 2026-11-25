@@ -23,7 +23,7 @@ export const pages = [
   {
     "src": "docs/guides/app.md",
     "route": "guides/app",
-    "label": "Connect your app"
+    "label": "Application principles"
   },
   {
     "src": "docs/reference/application.md",
@@ -33,12 +33,12 @@ export const pages = [
   {
     "src": "docs/reference/pn.md",
     "route": "reference/pn",
-    "label": "Counter functions"
+    "label": "PN-Counter"
   },
   {
     "src": "docs/reference/yseq.md",
     "route": "reference/yseq",
-    "label": "Text functions"
+    "label": "yseq_"
   },
   {
     "src": "docs/reference/shared.md",
@@ -199,7 +199,7 @@ export const redirectPages = [
 
 export const sidebar = [
   {
-    "label": "Guide · 10–20 minutes",
+    "label": "Overview",
     "items": [
       {
         "label": "What is a CRDT?",
@@ -218,26 +218,18 @@ export const sidebar = [
         "slug": "get-started/text"
       },
       {
-        "label": "Connect your app",
+        "label": "Application principles",
         "slug": "guides/app"
       }
     ]
   },
   {
-    "label": "Reference",
+    "label": "Guides",
     "collapsed": true,
     "items": [
       {
         "label": "Application examples",
         "slug": "reference/application"
-      },
-      {
-        "label": "Counter functions",
-        "slug": "reference/pn"
-      },
-      {
-        "label": "Text functions",
-        "slug": "reference/yseq"
       },
       {
         "label": "Identity settings",
@@ -252,16 +244,30 @@ export const sidebar = [
         "slug": "reference/limits"
       },
       {
-        "label": "Errors",
-        "slug": "reference/errors"
-      },
-      {
         "label": "Operations",
         "slug": "reference/operations"
       },
       {
         "label": "Installation options",
         "slug": "reference/installation"
+      }
+    ]
+  },
+  {
+    "label": "Reference",
+    "collapsed": true,
+    "items": [
+      {
+        "label": "PN-Counter",
+        "slug": "reference/pn"
+      },
+      {
+        "label": "yseq_",
+        "slug": "reference/yseq"
+      },
+      {
+        "label": "Errors",
+        "slug": "reference/errors"
       }
     ]
   },

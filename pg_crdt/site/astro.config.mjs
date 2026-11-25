@@ -8,6 +8,7 @@ import { demoApi } from './scripts/demo-api.mjs';
 
 const repo = process.env.DOCS_REPO_URL ?? 'https://github.com/kiwicopple/pg-extensions';
 const ref = process.env.DOCS_REPO_REF ?? 'main';
+const base = (process.env.DOCS_BASE ?? '').replace(/\/$/, '');
 
 // The production URL. If it changes, change this constant and "userSite" in
 // ../research/navigation.json together, or set DOCS_SITE at build time.
@@ -19,7 +20,7 @@ export default defineConfig({
 	site: process.env.DOCS_SITE ?? DEFAULT_SITE,
 	base: process.env.DOCS_BASE,
 	redirects: Object.fromEntries(redirectPages.map(({ route, to, hash }) => [
-		`/${route}/`, `/${to}/${hash ? `#${hash}` : ''}`,
+		`/${route}/`, `${base}/${to}/${hash ? `#${hash}` : ''}`,
 	])),
 	vite: { plugins: [demoApi()] },
 	integrations: [

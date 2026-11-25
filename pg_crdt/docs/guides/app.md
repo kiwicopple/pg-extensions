@@ -1,8 +1,8 @@
-# Connect your app
+# Application principles
 
-Use your usual Postgres driver or API. pg_crdt stores and combines data; your app moves updates between devices and the database.
+These principles help your app preserve changes, check access and recover from interrupted requests. pg_crdt stores and combines data; your app moves updates between devices and the database.
 
-## Handle one update
+## Check every update
 
 1. Sign in the user and check that they may change this row.
 2. Identify the writer from your authenticated session.
@@ -20,7 +20,7 @@ Choose the function for the input you receive:
 
 An **apply** function checks the client's update, including which writer owns its entries. It does not sign the user in or decide which rows they may edit. Those are your app's decisions. A writer may still lie about their own count; use server-controlled updates when counts must be verified.
 
-For clients sending their own data, expose a database function that checks access and applies it. This is often called a **wrapper**. Give the client permission to call the wrapper, without permission to replace the state column directly. The [application reference](../reference/application.md) has complete counter and text examples.
+For clients sending their own data, expose a database function that checks access and applies it. This is often called a **wrapper**. Give the client permission to call the wrapper, without permission to replace the state column directly. The [application examples](../reference/application.md) show how to do this for counters and text.
 
 ## Give writers separate names
 
@@ -38,4 +38,4 @@ After a timeout, send the same recorded counter totals or text operations again.
 
 Back up the CRDT columns, not just their visible numbers or text. Devices need the stored history to merge later. For text, that history grows with editing and every save rewrites it; measure [storage costs](../reference/storage.md) for your workload.
 
-You have reached the end of the guide. Use the [reference](../README.md#reference) for function signatures, working app examples, storage and troubleshooting.
+Use the [guides](../README.md#guides) for working examples, storage and troubleshooting, and the [reference](../README.md#reference) for function signatures and errors.

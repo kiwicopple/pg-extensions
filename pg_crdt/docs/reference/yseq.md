@@ -1,4 +1,4 @@
-# Collaborative text column functions
+# `yseq_`
 
 Use the `yseq_` functions to edit a document stored in a `crdt.yseq` column. The whole document is one `jsonb` value in your table. Update it in a single statement, such as `update ... set body = crdt.yseq_insert(body, ...)`, as you would a [PN-Counter](pn.md).
 

@@ -1,21 +1,27 @@
 # Documentation
 
-Start with the five-page guide. Allow about 10–20 minutes to read it and try the examples; no CRDT knowledge is needed.
+Start with the overview. Allow about 10–20 minutes to read it and try the examples; no CRDT knowledge is needed.
 
 1. [What is a CRDT?](overview.md)
 2. [Install](install.md)
 3. [Try a counter](get-started/quickstart.md)
 4. [Try shared text](get-started/text.md)
-5. [Connect your app](guides/app.md)
+5. [Application principles](guides/app.md)
+
+## Guides
+
+Practical help as you build:
+
+- [Application examples](reference/application.md): permissions, form saves and live editors.
+- [Identity settings](reference/shared.md): writer names and authentication.
+- [Storage and limits](reference/storage.md) and [numeric limits](reference/limits.md).
+- [Operations](reference/operations.md): backups, troubleshooting and removal.
+- [Installation options](reference/installation.md): versions, migrations and extension management.
 
 ## Reference
 
-Look things up here as you build. These pages are not part of the introductory guide.
-
-- [Application examples](reference/application.md): permissions, form saves and live editors.
-- [Counter functions](reference/pn.md), [text functions](reference/yseq.md) and [identity settings](reference/shared.md).
-- [Storage and limits](reference/storage.md), [numeric limits](reference/limits.md) and [errors](reference/errors.md).
-- [Operations](reference/operations.md): backups, troubleshooting and removal.
-- [Installation options](reference/installation.md): versions, migrations and extension management.
+- [PN-Counter](reference/pn.md): counter functions and state format.
+- [`yseq_`](reference/yseq.md): text functions and operation format.
+- [Errors](reference/errors.md): SQLSTATE codes and conditions.
 
 [Research](../research/README.md) holds benchmarks and design notes. [Changelog](../CHANGELOG.md) and [tests](../test/README.md) cover development.

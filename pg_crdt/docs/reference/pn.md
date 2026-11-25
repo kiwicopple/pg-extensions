@@ -1,4 +1,4 @@
-# PN-Counter functions
+# PN-Counter
 
 Use the `pn_` functions to create, update, read and merge counters stored as `crdt.pn`. All functions are in the `crdt` schema.
 

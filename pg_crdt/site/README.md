@@ -42,6 +42,8 @@ Vercel builds the site from source with the Root Directory `pg_crdt` and the set
 
 Sync rewrites relative links between pages to site routes; links to code and other files point to GitHub. Set `DOCS_REPO_URL` and `DOCS_REPO_REF` for source and edit links (defaults: `kiwicopple/pg-extensions`, `main`), `DOCS_SITE` for the deployment origin, `DOCS_BASE` when hosting below a path, and `DOCS_RESEARCH_URL` for the origin of the research site.
 
+Keep diagrams in `site/public/diagrams/` and link to them with relative paths from the canonical Markdown. Sync publishes these as local assets in both site pages and Markdown exports, including when `DOCS_BASE` is set.
+
 ## Homepage counter demo
 
 The hand-written homepage includes a two-device counter demo. It runs a clearly labeled browser preview until Postgres is configured, then syncs through the Vercel function at `/api/counter`. See [demo setup](../demo/README.md) for database provisioning, installation, server-only environment variables, and validation. Run `npm run docs:install` from `pg_crdt/` to install both the site and API dependencies; local `docs:dev` includes the API middleware.

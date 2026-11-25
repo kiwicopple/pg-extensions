@@ -102,6 +102,15 @@ function rewriteTarget(target, srcFile, fromRoute, markdown = false) {
 		const url = markdown ? path.posix.relative(path.posix.dirname(fromRoute), route + '.md') : routeLink(fromRoute, route);
 		return { url: url + tail.replace(/^\?[^#]*/, '') };
 	}
+	// Public assets must stay local in both rendered pages and Markdown exports.
+	if (rel.startsWith('site/public/') && fs.existsSync(abs)) {
+		const asset = rel.slice('site/public/'.length);
+		const base = (process.env.DOCS_BASE ?? '').replace(/\/$/, '');
+		const url = markdown
+			? path.posix.relative(path.posix.dirname(`markdown/${fromRoute}`), asset)
+			: `${base}/${asset}`;
+		return { url: url + tail };
+	}
 	const research = researchSourceUrl(rel, tail.replace(/^\?[^#]*/, ''));
 	if (research) return { url: research };
 	const key = rel.replace(/\/$/, '');
@@ -250,7 +259,7 @@ function syncPlainMarkdown() {
 	const index = [
 		'# pg_crdt', '',
 		'> Counters and experimental shared plain text in Postgres. Independent copies can change and merge later.', '',
-		'Start with the five-page guide: what a CRDT is, install, try a counter, try shared text, and connect your app. Use reference pages as needed. The active types are crdt.pn and crdt.yseq. The extension provides no networking or packaged browser client.', '',
+		'Start with the overview: what a CRDT is, install, try a counter, try shared text, and application principles. Guides cover practical tasks; Reference documents PN-Counter, yseq_ and errors. The active types are crdt.pn and crdt.yseq. The extension provides no networking or packaged browser client.', '',
 		'## Guides and reference', '',
 	];
 	const groups = { current: [], contributing: [] };

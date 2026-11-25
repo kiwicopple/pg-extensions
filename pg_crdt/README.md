@@ -6,7 +6,7 @@ The extension is SQL and PL/pgSQL, works with any Postgres driver, and supports 
 
 ## Start here
 
-Read the [five-page guide](docs/overview.md), from what a CRDT is to connecting your app. Allow about 10–20 minutes, including examples.
+Read the [five-page guide](docs/overview.md), from what a CRDT is to application principles. Allow about 10–20 minutes, including examples.
 
 [Install](docs/install.md) · [Try a counter](docs/get-started/quickstart.md) · [Try shared text](docs/get-started/text.md) · [Reference](docs/README.md#reference)
 

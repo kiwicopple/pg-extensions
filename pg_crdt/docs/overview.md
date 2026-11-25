@@ -1,8 +1,10 @@
 # What is a CRDT?
 
-A CRDT is a way to store data so that people can change separate copies and combine them later. It stands for **conflict-free replicated data type**. You do not need to know the maths to use one.
+A CRDT is a way to store data so that people can change separate copies and combine them later. It stands for **conflict-free replicated data type**.
 
-Imagine two devices counting visitors while offline. One counts 3; the other counts 2. When they connect, the combined count is 5. Sending the same update again keeps it at 5. Each copy that receives all the updates ends up with the same result.
+Imagine two devices counting visitors while offline. When they reconnect, their counts combine without counting the same update twice.
+
+![Device A counts 3 visitors and Device B counts 2 while offline. Merging gives 5. Sending A's total again still gives 5.](../site/public/diagrams/offline-counter.svg)
 
 The trick is to store more than the final number. Each device keeps its own running total. Combining those records is called **merging**. A text CRDT does something similar: it tracks which characters were added or deleted so separate edits can be combined.
 
@@ -33,6 +35,6 @@ The five-page guide takes about 10–20 minutes, including the SQL examples:
 2. [Install pg_crdt](install.md).
 3. [Try a counter](get-started/quickstart.md).
 4. [Try shared text](get-started/text.md).
-5. [Connect your app](guides/app.md).
+5. [Application principles](guides/app.md).
 
-Keep [the reference](README.md#reference) for questions as you build. The separate [research](../research/README.md) covers design decisions and benchmarks.
+Use [guides](README.md#guides) for practical tasks and [reference](README.md#reference) for API details. The separate [research](../research/README.md) covers design decisions and benchmarks.

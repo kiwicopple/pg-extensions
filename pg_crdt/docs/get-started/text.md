@@ -53,4 +53,4 @@ The base is the whole state, so every save sends it back. The [form example](../
 
 There is no ready-made browser client, rich text, shared cursors or undo. The format is not compatible with Yjs. A live editor needs its own sync code and a separate writer key for each independent editor. Reusing a key can lose text. See [live editor integration](../reference/application.md#live-editors).
 
-Next: [connect your app](../guides/app.md).
+Next: [application principles](../guides/app.md).
