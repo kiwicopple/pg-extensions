@@ -1,6 +1,6 @@
 # Test suite
 
-Run from `pg_crdt/`. The active suite tests counters and text columns. Table-backed document tests and the client are preserved separately in [research](../research/ydoc/README.md).
+Run from `pg_crdt/`. The active suite tests counters and text columns.
 
 ```sh
 ./test/run.sh
@@ -41,9 +41,9 @@ The local runner starts a throwaway UTF8 Postgres cluster and runs each spec in 
 
 Property tests use seeded randomness. The column differential suite compares against fixtures from the reference engine in `experiments/text-ref/engine.mjs`.
 
-## The JavaScript client
+## Research tests
 
-The former client is research only. `npm run test:research` runs the archived document tests and client tests separately from the active extension. See [the archive](../research/ydoc/README.md).
+`npm run test:research` runs the [research tests](../research/README.md) separately from the active extension.
 
 ## Benchmark
 

@@ -22,13 +22,11 @@ Make a few changes on each device while they’re disconnected. Then sync them a
 
 <CounterDemo />
 
-## Keep exploring
+## Build with pg_crdt
 
-Start with the guide that matches what you’re building, or check the limits and troubleshooting steps before you adopt it.
+A CRDT stores the information needed to combine independent changes, even after a device has been offline. [Start with the plain-English guide](./overview/) — about 10–20 minutes, with SQL you can try.
 
 <CardGrid>
-  <LinkCard title="Counters" description="Create a counter, sync device totals, and accept client updates safely." href="./get-started/quickstart/" />
-  <LinkCard title="Collaborative text" description="Create a shared document, save forms, and integrate text edits." href="./get-started/text/" />
-  <LinkCard title="Text-column limits" description="Understand whole-value rewrites, WAL, retained history and sync costs before choosing the column." href="./text/limits/" />
-  <LinkCard title="Troubleshooting" description="Recover missing counts, rejected edits, permission errors and unexpected storage growth." href="./operations/troubleshooting/" />
+  <LinkCard title="Try a counter" description="Combine device counts without counting a repeated update twice." href="./get-started/quickstart/" />
+  <LinkCard title="Try shared text" description="Merge edits to a short note. Experimental; each edit rewrites the whole stored value." href="./get-started/text/" />
 </CardGrid>

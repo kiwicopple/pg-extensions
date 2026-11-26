@@ -20,11 +20,11 @@ The production URL is `https://crdt.postgres.tools`, set in one constant, `DEFAU
 
 ## Page inventory and navigation
 
-`navigation.mjs` is the source of truth for source paths, routes, labels and sidebar groups. Both `astro.config.mjs` and `scripts/sync.mjs` import it. Add new pages there and put their Markdown under `pg_crdt/docs/`. Research pages are listed in `../research/navigation.json` instead, which the research site reads.
+`navigation.mjs` is the source of truth for source paths, routes, labels and sidebar groups. Both `astro.config.mjs` and `scripts/sync.mjs` import it. The five introductory pages form the main reading path; detailed material belongs under Reference. Add pages there and put their Markdown under `pg_crdt/docs/`. `redirectPages` preserves consolidated web routes and lets the research site resolve links to their former source paths. Research pages are listed in `../research/navigation.json` instead, which the research site reads.
 
 ## Code tabs
 
-Counter examples use a database driver directly. The active text column has no bundled client; the former table-backed client is research only. Application examples that use a driver are shown twice: `tab="JavaScript"` (plain node-postgres) and `tab="SQL"`. In the source, two adjacent fenced blocks (only blank lines between them) with a `tab="..."` meta are one group. GitHub and the Markdown exports show every block in source order. On the site, `scripts/code-tabs.mjs` turns each group into `<Tabs syncKey="lang">`, so the reader's choice carries across pages, and the page is written as `.mdx` instead of `.md`. The converter requires at least two blocks per group, a plain language label, JavaScript first and SQL last.
+The introductory examples use SQL alone. Longer application examples can use a database driver directly. The text column has no bundled client. Application examples that use a driver are shown twice: `tab="JavaScript"` (plain node-postgres) and `tab="SQL"`. In the source, two adjacent fenced blocks (only blank lines between them) with a `tab="..."` meta are one group. GitHub and the Markdown exports show every block in source order. On the site, `scripts/code-tabs.mjs` turns each group into `<Tabs syncKey="lang">`, so the reader's choice carries across pages, and the page is written as `.mdx` instead of `.md`. The converter requires at least two blocks per group, a plain language label, JavaScript first and SQL last.
 
 ## Generated files
 
@@ -42,6 +42,8 @@ Vercel builds the site from source with the Root Directory `pg_crdt` and the set
 
 Sync rewrites relative links between pages to site routes; links to code and other files point to GitHub. Set `DOCS_REPO_URL` and `DOCS_REPO_REF` for source and edit links (defaults: `kiwicopple/pg-extensions`, `main`), `DOCS_SITE` for the deployment origin, `DOCS_BASE` when hosting below a path, and `DOCS_RESEARCH_URL` for the origin of the research site.
 
+Keep diagrams in `site/public/diagrams/` and link to them with relative paths from the canonical Markdown. Sync publishes these as local assets in both site pages and Markdown exports, including when `DOCS_BASE` is set.
+
 ## Homepage counter demo
 
 The hand-written homepage includes a two-device counter demo. It runs a clearly labeled browser preview until Postgres is configured, then syncs through the Vercel function at `/api/counter`. See [demo setup](../demo/README.md) for database provisioning, installation, server-only environment variables, and validation. Run `npm run docs:install` from `pg_crdt/` to install both the site and API dependencies; local `docs:dev` includes the API middleware.
@@ -55,7 +57,7 @@ The hand-written homepage includes a two-device counter demo. It runs a clearly 
 - every sidebar route exists;
 - every public function in `../pg_crdt--0.0.1.sql` has one reference entry (a `### \`name\`` heading in `docs/reference/shared.md`, `pn.md` or `yseq.md`), and every SQLSTATE the file raises is in `docs/reference/errors.md`.
 
-The SQL examples are not run by the build. Run the quickstart and the guides against a throwaway cluster after you change them: `pg_crdt/test/lib/cluster.sh` starts one.
+The SQL examples are not run by the build. Run the quickstart and the guides against a throwaway cluster after you change them: `pg_crdt/test/lib/cluster.sh` starts one. The example scripts in `docs/examples/` each state their setup; the counter and text application scripts require separate fresh databases.
 
 ## Shared theme
 

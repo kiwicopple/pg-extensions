@@ -1,48 +1,40 @@
-# What pg_crdt does
+# What is a CRDT?
 
-pg_crdt stores counters and collaborative plain text in Postgres columns. Several writers can change their own copies independently and combine them later. Copies that receive the same updates reach the same result, even when delivery is delayed, repeated or out of order.
+A CRDT is a way to store data so that people can change separate copies and combine them later. It stands for **conflict-free replicated data type**.
 
-These values are conflict-free replicated data types, or CRDTs. The extension is SQL and PL/pgSQL and works with any Postgres client or API layer. It does not provide authentication, networking or automatic replication between devices.
+Imagine two devices counting visitors while offline. When they reconnect, their counts combine without counting the same update twice.
 
-## Choose your starting point
+![Device A counts 3 visitors and Device B counts 2 while offline. Merging gives 5. Sending A's total again still gives 5.](../site/public/diagrams/offline-counter.svg)
 
-| You need | Start with |
+The trick is to store more than the final number. Each device keeps its own running total. Combining those records is called **merging**. A text CRDT does something similar: it tracks which characters were added or deleted so separate edits can be combined.
+
+## What pg_crdt adds to Postgres
+
+pg_crdt gives you two column types:
+
+| Type | Use it for |
 | --- | --- |
-| A count updated by independent devices or services | [Your first counter](get-started/quickstart.md) |
-| A short plain-text document with independent edits | [Your first shared document](get-started/text.md) |
-| A live editor | First read [the integration requirements](text/live-editor.md) and [column limitations](text/limits.md) |
+| `crdt.pn` | A count that goes up and down, such as counts collected by separate devices. |
+| `crdt.yseq` | Shared plain text, such as a short note edited by two people. Experimental. |
 
-## When not to use it
+You store these columns in your own tables and call SQL functions to change them. Your app handles sign-in, permissions, sending updates and saving offline copies. pg_crdt does not connect devices for you.
 
-Use an ordinary column when one service already coordinates every write. A CRDT adds state and processing that you may not need.
+## Do you need one?
 
-Counters cannot enforce a minimum or maximum across disconnected writers. A database constraint can reject a merge that breaks a rule, but it cannot reconcile it. Strict inventory or balance rules need coordination.
+Use a CRDT when separate copies need to change independently. If every change already goes through one server, an ordinary number or text column is usually simpler.
 
-Text columns are experimental. They rewrite the whole state on every edit, retain deletion metadata indefinitely and scan the document during merge and sync. Large documents or sustained keystroke-rate editing may exceed your latency, storage or WAL budget. There is no packaged live-editor client, rich text, cursor sharing or undo.
+A merged counter can go below zero. It cannot promise that disconnected devices will respect a shared limit, such as stock remaining.
 
-## How it fits in Postgres
+Text merging cannot decide what people meant when they replace the same sentence. Show users the merged result. Text columns also rewrite the whole stored value on each edit and retain information about deleted characters. Start with short documents saved occasionally; read the [storage limits](reference/storage.md#text) before choosing them.
 
-A `crdt.pn` or `crdt.yseq` column stores JSON with a validated outer structure. Your application owns the rows, grants, row policies, indexes and backups. All extension functions are in `crdt`; always qualify their names.
+## Start building
 
-Local edits and merges must run in the same statement that updates the column. For untrusted client input, expose authorized wrapper functions using `pn_apply_delta` or `yseq_apply`. Calling a merge function alone does not establish a writer's identity or right to change a row.
+The five-page guide takes about 10–20 minutes, including the SQL examples:
 
-## The types
+1. You are here: what a CRDT is.
+2. [Install pg_crdt](install.md).
+3. [Try a counter](get-started/quickstart.md).
+4. [Try shared text](get-started/text.md).
+5. [Application principles](guides/app.md).
 
-| Type | Status |
-| --- | --- |
-| `crdt.pn` | Counter that records additions and subtractions per writer |
-| `crdt.yseq` | Experimental plain-text column using YjsMod ordering |
-| Table-backed documents (`ydoc_`) | Preserved separately in research; not installed |
-| Sets, registers and maps | Planned; not implemented |
-
-We keep the active extension focused on column values so its responsibilities stay simple. Table-backed documents have their own storage, grants, maintenance and client lifecycle and remain [separate research](../research/scope.md). This choice does not remove the limitations of column storage.
-
-## What a CRDT gives you
-
-Merge order and grouping do not affect the final result, and applying the same update twice does not duplicate it. These properties are called commutativity, associativity and idempotence. They apply to merging recorded changes; repeating a new local increment or insert can still create an additional change.
-
-Read [How counters merge](types/pn-counter.md) or [How text merges](types/collaborative-text.md) when you need the details.
-
-## Next
-
-[Install pg_crdt](install.md), then choose the counter or text quickstart above.
+Use [guides](README.md#guides) for practical tasks and [reference](README.md#reference) for API details. The separate [research](../research/README.md) covers design decisions and benchmarks.

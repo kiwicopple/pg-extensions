@@ -70,9 +70,9 @@ const userRoutes = new Map();
 for (const e of EXTENSIONS.filter((x) => x.nav?.userSite)) {
 	const navFile = path.join(REPO_ROOT, e.name, 'site', 'navigation.mjs');
 	if (!fs.existsSync(navFile)) continue;
-	const { pages = [] } = await import(pathToFileURL(navFile).href);
+	const { pages = [], redirectPages = [] } = await import(pathToFileURL(navFile).href);
 	const site = e.nav.userSite.replace(/\/+$/, '');
-	for (const p of pages) userRoutes.set(`${e.name}/${p.src}`, `${site}/${p.route}/`);
+	for (const p of [...pages, ...redirectPages]) userRoutes.set(`${e.name}/${p.src}`, `${site}/${p.route}/`);
 	const readme = pages.find((p) => p.src === 'docs/README.md');
 	if (readme) userRoutes.set(`${e.name}/docs`, `${site}/${readme.route}/`);
 }

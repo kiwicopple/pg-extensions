@@ -1,32 +1,16 @@
 # pg_crdt
 
-Counters and collaborative plain text in Postgres columns. Writers can change independent copies, then merge their updates without counting repeated deliveries twice.
+Counters and shared plain text in Postgres columns. Devices can change separate copies, then combine them without applying the same recorded update twice. This is called a CRDT: a conflict-free replicated data type.
 
-The active extension provides `crdt.pn` counters and experimental `crdt.yseq` text columns. It is written in SQL and PL/pgSQL, supports Postgres 16, 17 and 18, and works with any driver or API layer. Your application owns the tables and permissions.
+The extension is SQL and PL/pgSQL, works with any Postgres driver, and supports Postgres 16, 17 and 18. It provides `crdt.pn` counters and experimental `crdt.yseq` text. Your app handles sign-in, permissions and sending updates.
 
 ## Start here
 
-Copy the [SQL file into your SQL editor](docs/install.md#paste-into-a-sql-editor), or install from your terminal with `curl` and `psql`. Replace the connection string:
+Read the [five-page guide](docs/overview.md), from what a CRDT is to application principles. Allow about 10–20 minutes, including examples.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/kiwicopple/pg-extensions/main/install.sh -o install-pg-extension.sh &&
-sh install-pg-extension.sh pg_crdt \
-  --database 'postgresql://postgres@localhost:5432/postgres'
-```
+[Install](docs/install.md) · [Try a counter](docs/get-started/quickstart.md) · [Try shared text](docs/get-started/text.md) · [Reference](docs/README.md#reference)
 
-[Installation options](docs/install.md) cover specific versions, owner roles, saved SQL for migrations, and extension management. The terminal installer downloads and installs the latest default version directly in your database.
-
-1. [Install the extension](docs/install.md).
-2. Try [your first counter](docs/get-started/quickstart.md) or [your first shared document](docs/get-started/text.md).
-3. Follow the [documentation map](docs/README.md) for application integration, operations and reference.
-
-## Know the limits
-
-A counter cannot enforce a minimum or maximum while writers are disconnected. Its state grows with writer count.
-
-Every text edit rewrites the whole CRDT value. WAL amplification, TOAST churn and retained deletion metadata make large or frequently edited documents expensive. Merge and sync scan the document, form saves carry the full base, and no packaged text-column client is provided. Read [Text-column limits and performance](docs/text/limits.md) before choosing this approach.
-
-Table-backed documents (`ydoc_`) and their client remain [separate research](research/ydoc/README.md). We keep them separate to keep the active extension focused on column values. See the [decision and existing-installation guidance](research/scope.md). There is no automatic migration or upgrade script.
+Counters cannot enforce a shared minimum or maximum while devices are offline. Text edits rewrite the whole state and retain deletion history; see [storage limits](docs/reference/storage.md) before choosing it. There is no packaged browser client.
 
 ## Development
 
@@ -40,6 +24,4 @@ npm run docs:build
 npm run test:research
 ```
 
-The research tests are separate from the active extension tests. See the [test guide](test/README.md) and [changelog](CHANGELOG.md).
-
-Source: [kiwicopple/pg-extensions](https://github.com/kiwicopple/pg-extensions/tree/main/pg_crdt).
+See [tests](test/README.md) and the [changelog](CHANGELOG.md). Research tests are separate from the active extension tests.

@@ -1,14 +1,14 @@
 # Documentation conventions
 
-Write for a developer who stores shared state in Postgres. Use plain English, precise technical terms, and enough context to make each example usable. Prefer natural sentences over rigid word limits or prescribed vocabulary.
+Write for a builder who has never heard of a CRDT. Use standard English, explain unfamiliar words when they first appear, and keep the five-page guide readable in 10–20 minutes. Put detailed contracts and extra recipes in Reference; benchmarks and design history belong in Research. Give each idea one home and link to it instead of repeating it.
 
 The build journal in `research/journal.md` is a raw historical record. Do not edit it during documentation cleanup. Benchmark reports keep the harness format.
 
 ## Product scope
 
-The active extension contains only `crdt.pn` and `crdt.yseq` columns. Keep table-backed documents and their client in research; see [the decision](research/scope.md). Do not describe archived functions as installed features or recommend the archived client for columns.
+Document the current `crdt.pn` and `crdt.yseq` column APIs. Keep development history in research; user guides do not need migration notes for unreleased prototypes.
 
-Text entry points must link to the canonical [limitations page](docs/text/limits.md). Keep a short reminder next to operations that rewrite state, send a full base, depend on writer identity or can lose edits. Include WAL amplification, TOAST churn, retained history, sync costs and missing client features in storage decisions.
+Text entry points must link to the canonical [storage limits](docs/reference/storage.md#text). Keep a short reminder next to operations that rewrite state, send a full base, depend on writer identity or can lose edits. Include WAL amplification, TOAST churn, retained history, sync costs and missing client features in storage decisions.
 
 ## Organize by the reader's task
 
@@ -16,7 +16,7 @@ Text entry points must link to the canonical [limitations page](docs/text/limits
 - Keep a complete scenario together. If it continues another page, link to that page and name the tables it needs.
 - Distinguish runnable examples, fragments, and statements that intentionally raise errors.
 - Give each concept one canonical explanation. Keep short reminders beside examples where a mistake could lose data or let a writer forge it.
-- Keep current behavior in the guides and reference. Say plainly which types exist and which are planned; the plans live on the overview page and in Research.
+- Keep current behavior in the guides and reference. Say plainly which types exist. Keep plans in Research.
 - Keep the documentation generic Postgres. It must work with any client, driver or API layer. Name a platform (PostgREST, Supabase) only as one example of a mechanism, and never as the assumed setup.
 
 ## Write plainly
@@ -47,7 +47,7 @@ Do not turn measurements into guarantees. Keep the environment, workload, limita
 6. Show expected results as a comment after the statement (`-- 2`), or as the rows that psql prints when a result has several columns. Keep exact result and error text unchanged.
 7. Break long shell commands with a trailing `\` and put flag groups on separate lines.
 8. Qualify every extension object with `crdt.`. Do not add `crdt` to `search_path`.
-9. The active extension has no client library. The archived table-backed client is research only. Use SQL alone for small database demonstrations. When showing both driver and SQL forms of an application operation, use two adjacent fences separated only by blank lines: `tab="JavaScript"` first and `tab="SQL"` last. JavaScript uses plain [node-postgres](https://node-postgres.com) (`pg`), calling `client.query(...)` on a connected client, with parameters (`$1`) and no string building, no semicolons, and single quotes. Use the same two labels in every guide so the site remembers the reader's choice. GitHub and the Markdown exports display every example in source order. Use a plain fence when an operation has only one form, and for pure SQL tasks such as installing, defining tables, and reference entries.
+9. The extension has no client library. Use SQL alone for small database demonstrations. When showing both driver and SQL forms of an application operation, use two adjacent fences separated only by blank lines: `tab="JavaScript"` first and `tab="SQL"` last. JavaScript uses plain [node-postgres](https://node-postgres.com) (`pg`), calling `client.query(...)` on a connected client, with parameters (`$1`) and no string building, no semicolons, and single quotes. Use the same two labels in every guide so the site remembers the reader's choice. GitHub and the Markdown exports display every example in source order. Use a plain fence when an operation has only one form, and for pure SQL tasks such as installing, defining tables, and reference entries.
 10. In JavaScript, construct a delta in a named constant before passing it to `client.query`. Show a result as a comment after the `console.log` (node-postgres returns `bigint` values as strings).
 11. The JavaScript examples of one page run in order in a single module, so give every constant a new name, and say before a fence when it depends on one from an earlier example. Apart from that, every example needs only a connected `client`. Examples on different pages are independent.
 12. Keep database definitions (tables, functions, grants) in SQL. Say who enforces a rule: a trusted backend, a database function, or row-level security. A check in a browser enforces nothing.

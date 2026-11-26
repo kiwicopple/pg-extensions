@@ -1,33 +1,20 @@
-# Identity settings and shared conventions
+# Identity settings
 
-All `pg_crdt` types share the schema, naming rules and identity settings described here. This page also explains how stored values identify their type and format version.
-
-For individual functions, see [PN-Counter functions](pn.md), [Collaborative text column functions](yseq.md) (`yseq_`).
-
-## Schema and naming
-
-- Everything is in the schema `crdt`. Call functions with the schema (`crdt.pn_merge(...)`), and do not add `crdt` to `search_path`.
-- Each type has a name prefix: `pn_` for the PN-Counter, `yseq_` for collaborative text in a column.  The same verbs apply where they fit: `<prefix>_empty`, `<prefix>_value`, `<prefix>_merge`, `<prefix>_merge_agg`, plus the verbs of the type, such as `pn_increment` or `yseq_insert`.
-- Names that start with `_` are internal (`_yseq_*`). Do not call them.
-- There is no generic `crdt.merge(a, b)`. Each type has its own merge, so a wrong type is a function-resolution error, not a run-time one, and no call pays for a dispatch.
-- Pure functions are `IMMUTABLE PARALLEL SAFE`. A function that decides on the caller's identity pins `search_path` to `pg_catalog, pg_temp`, and so does every `yseq_` function written in PL/pgSQL. Where a function differs, its entry says so.
-- None of the functions is `security definer`.
-
-### Privileges
-
-At install, every privilege on the functions in `crdt` is revoked from every role but the owner. Then `EXECUTE` is granted to `public` for the whole API (and for the `_yseq_` internals, which the `yseq_` functions call with the caller's privileges), and `USAGE` on the schema is granted to `public`. The PN-Counter functions are pure or read only the caller's own settings, so none needs privileges of its own. Decide who may write which rows with your own privileges, row-level security, or [wrapper functions](../guides/security.md).
-
-The install refuses an existing `crdt` schema that belongs to another non-superuser role, or on which another role has `CREATE`. See [Install](../install.md#the-schema-guard).
+Always qualify extension objects with `crdt.`. Names starting with `_` are internal. The extension functions return values; table permissions decide who can store them. None runs as `security definer`.
 
 ## Replica ids and entry keys
 
-| Term | Rule | Pattern |
-| --- | --- | --- |
-| Replica id | Non-empty text without `:`. | `^[^:]+$` |
-| Entry key | A replica id, or `<replica id>:<device>` with a non-empty device suffix, which may contain more `:`. | `^[^:]+(:.+)?$` |
-| Owner of a key | The part before the first `:`. | `split_part(key, ':', 1)` |
+A **replica id** identifies an owner. An **entry key** identifies a writer, optionally a device belonging to that owner.
 
-`pn_increment` and `pn_decrement` check the key they are given. `pn_merge` does not: it must accept whatever other replicas send. `pn_apply_delta` checks the replica id it is given and every key in the delta. The [guide](../guides/replicas-and-identity.md) explains how to choose ids.
+| Term | Rule | Example |
+| --- | --- | --- |
+| Replica id | Non-empty text without `:` | `alice` |
+| Entry key | Replica id, optionally followed by `:` and a non-empty suffix | `alice:phone` |
+| Owner | The part before the first `:` | `alice` |
+
+A suffix may contain more colons. Text keys are limited to 256 bytes. Give each independent writer a unique, stable key. One shared key is safe only when updates are serialized against the current database row, rather than made in independent copies.
+
+If a counter device loses its totals, recover its entries from the server or use a new key. Starting at zero under its old key loses counts. Reusing text character ids can lose edits too.
 
 ## The caller's identity
 
@@ -37,68 +24,43 @@ The install refuses an existing `crdt` schema that belongs to another non-superu
 crdt.current_replica_id() returns text
 ```
 
-The default identity of a writer, used as the default of the `replica` argument of [`pn_apply_delta`](pn.md#pn_apply_delta). Nothing in it is specific to one platform. It returns the first of these that is set, and null if none is. This is the same order that `pg_permissions` uses for its subject (JWT `sub`, then a setting):
+Returns the first available identity below, or null:
 
-1. The claim of the JSON object in the setting `request.jwt.claims`. The claim is named by the setting `crdt.replica_id_claim`, and is `sub` when that is not set. A numeric claim is returned as text.
-2. The setting `crdt.replica_id`.
+1. The claim in `request.jwt.claims` named by `crdt.replica_id_claim` (default `sub`).
+2. The `crdt.replica_id` setting.
 
-**Returns** `text`, or null. **Labels:** `STABLE`, `search_path` pinned to `pg_catalog, pg_temp`. It is not marked `PARALLEL SAFE`.
+Empty or missing claims/settings fall through. Valid JSON that is not an object has no claim. Numeric claims become text; object or array claims become JSON text and are unsuitable as ids.
 
-**Behavior**
-
-- An empty setting or claim counts as not set.
-- If `request.jwt.claims` is set but does not contain the claim, the function falls through to `crdt.replica_id`. If both are present, the claim wins.
-- A `request.jwt.claims` that is valid JSON but not an object (a string or an array) has no claim, and falls through as well. A claim that is itself an object or an array is returned as its JSON text, which is not a useful replica id.
-- The function reads settings with `current_setting(..., true)`, so an unset setting is not an error.
-
-**Privileges.** `EXECUTE` is granted to `public`.
-
-**Errors.** `22P02` (`invalid_text_representation`) when `request.jwt.claims` is set to text that is not valid JSON.
-
-**Example**
+`STABLE`, not marked `PARALLEL SAFE`; `search_path` is pinned to `pg_catalog, pg_temp`. Public execution is allowed. Invalid JSON in `request.jwt.claims` raises `22P02`.
 
 ```sql
 begin;
-set local request.jwt.claims = '{"sub": "u-7"}';
+set local crdt.replica_id = 'alice';
 select crdt.current_replica_id();
--- u-7
-set local crdt.replica_id = 'user-1842';
-select crdt.current_replica_id();
--- u-7
+-- alice
 commit;
 ```
 
-The claim wins over `crdt.replica_id`. Without the claim, `user-1842` is returned.
+This is the default owner for `pn_apply_delta` and `yseq_apply`. Their `replica` argument can instead be supplied explicitly.
 
 ### Settings
 
-| Setting | Set by | Meaning | Default |
-| --- | --- | --- | --- |
-| `request.jwt.claims` | An API layer that follows the PostgREST convention, for each request | A JSON object with the claims of the verified token | Not set |
-| `crdt.replica_id_claim` | You, per database, role or transaction | The name of the claim to read from `request.jwt.claims` | `sub` |
-| `crdt.replica_id` | An app server, per transaction | The replica id of the writer | Not set |
-
-Set a setting for one transaction with `set local name = 'value'`, or with `select set_config('name', 'value', true)` when the value is a parameter. Set `crdt.replica_id_claim` for a database with `alter database app set crdt.replica_id_claim = 'email'`.
-
-**Trust.** Any role can `set` a custom setting. The default identity is therefore as strong as whoever can set `request.jwt.claims` and `crdt.replica_id`. Use it only for writers that cannot run their own SQL, and pass `session_user` for those that can. See [Trust model](../guides/replicas-and-identity.md#trust-model).
-
-## The state envelope
-
-Every type that is a value stores its state as `jsonb` with a versioned envelope, inside a domain named after the type:
-
-| Key | Meaning |
+| Setting | Purpose |
 | --- | --- |
-| `t` | The type: `"pn"` for the PN-Counter, `"yseq"` for collaborative text in a column. Every function checks it. |
-| `v` | The format version of that type's state. `1` for `pn` and `yseq`. |
-| Other keys | Defined by the type. For `pn`: `p` and `n`. For `yseq`: internal, see [The domain](yseq.md#the-domain). |
+| `request.jwt.claims` | Claims from a token verified by your API layer. |
+| `crdt.replica_id_claim` | Claim name to read, default `sub`. |
+| `crdt.replica_id` | Identity supplied by your server for this transaction. |
 
-The envelope is closed: a state has exactly the keys of its type. The domains `crdt.pn` and `crdt.yseq` reject anything else with SQLSTATE `23514`. See [PN-Counter](../types/pn-counter.md#the-crdtpn-domain).
+Use `set local`, or `set_config(name, value, true)` for parameters. Any SQL user can change these settings. Trust them only when your server controls the SQL; for direct database users, pass `session_user::text` and check row access using that same identity. Inside a `security definer` wrapper, `current_user` is the function owner, not the caller.
 
-### Versioning
+See [application examples](application.md) for wrappers and grants.
 
-There are two version numbers, and they are independent:
+## Privileges
 
-- **The extension version**, `0.0.1`, in the file name and the control file.
-- **The format version `v`** in each state. The domain accepts only `v = 1`. A state with another `v` is rejected.
+Installation grants `usage` on `crdt` and function execution to `public`. This grants no access to your tables. The [schema guard](installation.md#the-schema-guard) rejects unsafe schema ownership or creation privileges.
 
-0.0.1 has no upgrade path: no `--` upgrade scripts, and no migration of old states. The design is that merge will upgrade a state with an older `v`, and that the upgrade must commute with merge. That is not built. Until a type has a second format version, `v` is only a guard. A direct install (psql) has no extension object and cannot be upgraded in place. See [Install](../install.md).
+## State format and versions
+
+Both column types store JSON with `t` for type and `v` for format version. The accepted format is `v = 1`; invalid outer structures fail with `23514`. See [counter state](pn.md#state-and-merge) and [text state](yseq.md#the-domain).
+
+The extension version, currently `0.0.1`, is separate from the format version.

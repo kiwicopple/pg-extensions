@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="408" viewBox="0 0 480 408" role="img" aria-labelledby="title description">
+  <title id="title">Combine offline counts without counting an update twice</title>
+  <desc id="description">Device A counts 3 visitors and Device B counts 2. After reconnecting, they merge to a total of 5. Sending Device A's total again leaves the count at 5.</desc>
+  <style>
+    svg { font-family: system-ui, sans-serif; color: #263c33; }
+    .card { fill: #f5f8f6; stroke: #bccbc2; }
+    .result { fill: #e8f7ee; stroke: #84b99a; }
+    .line { fill: none; stroke: #788a7e; stroke-width: 2; }
+    .arrow { fill: #788a7e; }
+    text { fill: currentColor; text-anchor: middle; }
+    .label { font-size: 16px; }
+    .value { font-size: 24px; font-weight: 600; }
+    .note { font-size: 14px; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e0ece4; }
+      .card { fill: #1b2620; stroke: #43594c; }
+      .result { fill: #183b29; stroke: #54896b; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path class="arrow" d="M 0 0 L 10 5 L 0 10 Z" />
+    </marker>
+  </defs>
+  <rect class="card" x="12" y="16" width="216" height="96" rx="12" />
+  <text class="label" x="120" y="48">Device A · offline</text>
+  <text class="value" x="120" y="84">3 visitors</text>
+  <rect class="card" x="252" y="16" width="216" height="96" rx="12" />
+  <text class="label" x="360" y="48">Device B · offline</text>
+  <text class="value" x="360" y="84">2 visitors</text>
+  <path class="line" d="M120 112 V145 H360 V112 M240 145 V180" marker-end="url(#arrow)" />
+  <text class="note" x="318" y="169">Reconnect</text>
+  <rect class="result" x="92" y="184" width="296" height="108" rx="12" />
+  <text class="label" x="240" y="212">Merge the recorded totals</text>
+  <text class="label" x="240" y="239">A: 3 + B: 2</text>
+  <text class="value" x="240" y="273">Total: 5</text>
+  <path class="line" d="M240 292 V330" marker-end="url(#arrow)" />
+  <text class="note" x="323" y="316">Send A's 3 again</text>
+  <rect class="card" x="92" y="334" width="296" height="62" rx="12" />
+  <text class="value" x="240" y="373">Still 5 visitors</text>
+</svg>
